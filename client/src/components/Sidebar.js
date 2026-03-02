@@ -237,6 +237,51 @@ function Sidebar({ onExpandedChange }) {
         roles: ["admin", "coe"],
       },
       {
+        name: "Mark Monitor",
+        path: "/hod/mark-entry-monitor",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 17v-6m4 6V7m4 10v-3M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z"
+            />
+          </svg>
+        ),
+        roles: ["hod", "admin", "coe"],
+      },
+      {
+        name: "Result Analysis",
+        path: "/hod/result-analysis",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M11 3a1 1 0 011 1v7.586l2.293-2.293a1 1 0 011.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L10 11.586V4a1 1 0 011-1zM5 15a2 2 0 012-2h10a2 2 0 012 2v4a2 2 0 01-2 2H7a2 2 0 01-2-2v-4z"
+            />
+          </svg>
+        ),
+        roles: ["hod", "admin", "coe"],
+      },
+      {
+        name: "Extensions",
+        path: "/mark-entry-extensions",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 7V3m8 4V3m-9 8h10m-11 9h12a2 2 0 002-2V7a2 2 0 00-2-2H6a2 2 0 00-2 2v11a2 2 0 002 2z"
+            />
+          </svg>
+        ),
+        roles: ["teacher", "hod", "admin", "coe"],
+      },
+      {
         name: "Faculty Management",
         path: "/hr/faculty",
         icon: (
