@@ -12,7 +12,7 @@ function MarkEntryPage() {
   const [loading, setLoading] = useState(false)
   const [savingMarks, setSavingMarks] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
-  const [learningMode, setLearningMode] = useState('PBL') // 'PBL' or 'UAL'
+  const [learningMode, setLearningMode] = useState(null) // Will be auto-detected: 'PBL' or 'UAL'
   const [hasActiveWindow, setHasActiveWindow] = useState(true)
 
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
@@ -36,12 +36,21 @@ function MarkEntryPage() {
   const fetchTeacherCourses = async () => {
     try {
       setLoading(true)
+      console.log('=== TEACHER ID DEBUG ===')
+      console.log('localStorage.teacher_id:', localStorage.getItem('teacher_id'))
+      console.log('localStorage.teacherId:', localStorage.getItem('teacherId'))
+      console.log('Using teacherId value:', teacherId)
+      console.log('API URL:', `${API_BASE_URL}/teachers/${teacherId}/courses`)
+      console.log('======================')
       const response = await fetch(`${API_BASE_URL}/teachers/${teacherId}/courses`)
       if (!response.ok) throw new Error('Failed to fetch courses')
       const data = await response.json()
+      console.log('Received courses data:', data)
       
       // Filter courses with enrollments
       const coursesWithStudents = data.filter((course) => course.enrollments && course.enrollments.length > 0)
+      console.log('Filtered courses with students:', coursesWithStudents)
+      console.log('Filtered out courses:', data.filter((course) => !course.enrollments || course.enrollments.length === 0))
       setCourses(coursesWithStudents)
       
       // Select first course if available
@@ -90,9 +99,34 @@ function MarkEntryPage() {
     }
   }
 
+  // Auto-detect learning mode when course is selected
+  useEffect(() => {
+    if (!selectedCourse || !selectedCourse.enrollments || selectedCourse.enrollments.length === 0) return
+    
+    // Detect which learning modes students have
+    const learningModes = selectedCourse.enrollments
+      .map(s => s.learning_mode_id)
+      .filter(mode => mode === 1 || mode === 2)
+    
+    const hasUAL = learningModes.includes(1)
+    const hasPBL = learningModes.includes(2)
+    
+    // Set default mode: prefer UAL if present, otherwise PBL
+    if (hasUAL) {
+      setLearningMode('UAL')
+      console.log('Auto-detected learning mode: UAL')
+    } else if (hasPBL) {
+      setLearningMode('PBL')
+      console.log('Auto-detected learning mode: PBL')
+    } else {
+      setLearningMode('UAL') // Default fallback
+      console.log('No learning mode detected, defaulting to: UAL')
+    }
+  }, [selectedCourse])
+
   // Fetch mark categories when course is selected or learning mode changes
   useEffect(() => {
-    if (!selectedCourse) return
+    if (!selectedCourse || !learningMode) return
     if (userRole !== 'teacher' && !hasActiveWindow) return
     fetchMarkCategories()
     loadExistingMarks()
@@ -105,10 +139,22 @@ function MarkEntryPage() {
         return
       }
 
-      // Convert learning mode to ID (UAL=1, PBL=2) and add as query parameter
-      const learningModeId = learningMode === 'UAL' ? 1 : 2
+      // Auto-detect learning modes from enrolled students
+      const enrollments = selectedCourse.enrollments || []
+      const uniqueLearningModes = [...new Set(
+        enrollments
+          .map(s => s.learning_mode_id)
+          .filter(mode => mode === 1 || mode === 2)
+      )]
+      
+      // If no learning modes detected, default to both UAL and PBL
+      const learningModesParam = uniqueLearningModes.length > 0 
+        ? uniqueLearningModes.join(',') 
+        : '1,2'
+      
+      console.log('Requesting mark categories for learning modes:', learningModesParam)
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?teacher_id=${facultyIdentifier}&learning_modes=${learningModeId}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?teacher_id=${facultyIdentifier}&learning_modes=${learningModesParam}`
       )
       if (response.status === 403) {
         setMarkCategories([])
@@ -313,9 +359,15 @@ function MarkEntryPage() {
     return ((earnedMarks / maxMarks) * conversionMarks).toFixed(2)
   }
 
+  // Filter mark categories by selected learning mode (UAL=1, PBL=2)
+  const filteredMarkCategories = markCategories.filter((category) => {
+    const learningModeId = learningMode === 'UAL' ? 1 : 2
+    return category.learning_mode_id === learningModeId
+  })
+
   const calculateStudentTotal = (studentId) => {
     let total = 0
-    markCategories.forEach((category) => {
+    filteredMarkCategories.forEach((category) => {
       const earned = studentMarks[studentId]?.[category.id]
       if (earned !== '' && earned !== null && earned !== undefined) {
         const converted = parseFloat(calculateConvertedMarks(earned, category.max_marks, category.conversion_marks))
@@ -326,7 +378,7 @@ function MarkEntryPage() {
   }
 
   const calculateTotalWeightage = () => {
-    return markCategories.reduce((sum, cat) => sum + cat.conversion_marks, 0).toFixed(2)
+    return filteredMarkCategories.reduce((sum, cat) => sum + cat.conversion_marks, 0).toFixed(2)
   }
 
   const handleSaveMarks = async () => {
@@ -339,7 +391,7 @@ function MarkEntryPage() {
     // Collect all mark entries
     const markEntries = []
     students.forEach((student) => {
-      markCategories.forEach((category) => {
+      filteredMarkCategories.forEach((category) => {
         const obtainedMarks = studentMarks[student.student_id]?.[category.id]
         if (obtainedMarks !== undefined && obtainedMarks !== null && obtainedMarks !== '') {
           markEntries.push({
@@ -461,11 +513,53 @@ function MarkEntryPage() {
           </div>
         )}
 
+        {/* Learning Mode Toggle */}
+        {selectedCourse && learningMode && (
+          <div className="bg-purple-50 rounded-lg p-4 border border-purple-100 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <h4 className="text-sm font-semibold text-gray-700 mb-1">Student Learning Mode</h4>
+                <p className="text-xs text-gray-600">
+                  Toggle to view and enter marks for {learningMode === 'PBL' ? 'PBL' : 'UAL'} students
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className={`text-sm font-semibold transition-colors ${learningMode === 'PBL' ? 'text-blue-700' : 'text-gray-400'}`}>
+                  PBL
+                </span>
+                <button
+                  onClick={() => setLearningMode(learningMode === 'PBL' ? 'UAL' : 'PBL')}
+                  className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 ${
+                    learningMode === 'PBL' ? 'bg-blue-600' : 'bg-orange-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform ${
+                      learningMode === 'PBL' ? 'translate-x-1' : 'translate-x-8'
+                    }`}
+                  />
+                </button>
+                <span className={`text-sm font-semibold transition-colors ${learningMode === 'UAL' ? 'text-orange-700' : 'text-gray-400'}`}>
+                  UAL
+                </span>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center justify-between text-xs">
+              <span className="text-gray-600">
+                Showing: <span className="font-semibold text-gray-800">{learningMode === 'PBL' ? 'Problem-Based Learning' : 'University Aided Learning'}</span> students
+              </span>
+              <span className="text-gray-600">
+                Students: <span className="font-semibold text-gray-800">{students.length}</span> / <span className="text-gray-500">{allStudents.length} total</span>
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Mark Entry Table */}
-        {selectedCourse && markCategories.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="flex justify-between items-center mb-4">
+        {selectedCourse && filteredMarkCategories.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col" style={{ height: 'calc(100vh - 400px)', minHeight: '500px' }}>
+            <div className="border-b border-gray-200 px-6 py-4 flex-shrink-0">
+              <div className="flex justify-between items-center">
                 <div>
                   <h3 className="text-sm font-semibold text-gray-700">
                     Mark Entry - {selectedCourse.course_code}
@@ -480,71 +574,32 @@ function MarkEntryPage() {
                   {savingMarks ? 'Saving...' : 'Save Marks'}
                 </button>
               </div>
-              
-              {/* Learning Mode Toggle */}
-              <div className="bg-purple-50 rounded-lg p-3 border border-purple-100">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <h4 className="text-xs font-semibold text-gray-700 mb-1">Student Learning Mode</h4>
-                    <p className="text-xs text-gray-600">
-                      Toggle to view and enter marks for {learningMode === 'PBL' ? 'PBL' : 'UAL'} students
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-xs font-semibold transition-colors ${learningMode === 'PBL' ? 'text-blue-700' : 'text-gray-400'}`}>
-                      PBL
-                    </span>
-                    <button
-                      onClick={() => setLearningMode(learningMode === 'PBL' ? 'UAL' : 'PBL')}
-                      className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 ${
-                        learningMode === 'PBL' ? 'bg-blue-600' : 'bg-orange-600'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform ${
-                          learningMode === 'PBL' ? 'translate-x-1' : 'translate-x-8'
-                        }`}
-                      />
-                    </button>
-                    <span className={`text-xs font-semibold transition-colors ${learningMode === 'UAL' ? 'text-orange-700' : 'text-gray-400'}`}>
-                      UAL
-                    </span>
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center justify-between text-xs">
-                  <span className="text-gray-600">
-                    Showing: <span className="font-semibold text-gray-800">{learningMode === 'PBL' ? 'Problem-Based Learning' : 'University Aided Learning'}</span> students
-                  </span>
-                  <span className="text-gray-600">
-                    Students: <span className="font-semibold text-gray-800">{students.length}</span> / <span className="text-gray-500">{allStudents.length} total</span>
-                  </span>
-                </div>
-              </div>
             </div>
 
-            <div className="overflow-x-auto" style={{ maxHeight: '70vh' }}>
+            <div className="overflow-auto flex-1">
               {students.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">
                   <p className="text-sm font-medium">No {learningMode} students found for this course</p>
                   <p className="text-xs mt-1">Try switching to {learningMode === 'PBL' ? 'UAL' : 'PBL'} mode to see other students</p>
                 </div>
               ) : (
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50 sticky top-0 z-10">
+                <table className="w-full divide-y divide-gray-200 relative">
+                  <thead className="bg-gray-50 sticky top-0 z-20">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-r border-gray-200 sticky left-0 bg-gray-50 min-w-[200px]">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-r border-gray-200 sticky left-0 bg-gray-50 z-30 shadow-sm" style={{ minWidth: '220px', maxWidth: '220px' }}>
                       Student
                     </th>
-                    {markCategories.map((category) => (
+                    {filteredMarkCategories.map((category) => (
                       <th
                         key={category.id}
-                        className="px-3 py-3 text-center text-xs font-semibold text-gray-700 border-r border-gray-200 min-w-[90px]"
+                        className="px-3 py-3 text-center text-xs font-semibold text-gray-700 border-r border-gray-200"
+                        style={{ minWidth: '150px', maxWidth: '200px' }}
                       >
-                        <div className="truncate">{category.name}</div>
-                        <div className="text-gray-500 font-normal mt-0.5">Max: {category.max_marks}</div>
+                        <div className="break-words leading-tight">{category.name}</div>
+                        <div className="text-gray-500 font-normal mt-1">Max: {category.max_marks}</div>
                       </th>
                     ))}
-                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider bg-blue-50 min-w-[100px] sticky right-0">
+                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider bg-blue-50 sticky right-0 z-30 shadow-sm" style={{ minWidth: '120px', maxWidth: '120px' }}>
                       <div>Total</div>
                       <div className="text-gray-500 font-normal mt-0.5">/ {calculateTotalWeightage()}</div>
                     </th>
@@ -559,20 +614,21 @@ function MarkEntryPage() {
                       } hover:bg-blue-50 transition-colors`}
                     >
                       <td
-                        className={`px-4 py-3 border-r border-gray-200 sticky left-0 z-5 ${
+                        className={`px-4 py-3 border-r border-gray-200 sticky left-0 z-10 shadow-sm ${
                           idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
-                        }`}
+                        } hover:bg-blue-50 transition-colors`}
+                        style={{ minWidth: '220px', maxWidth: '220px' }}
                       >
-                        <div className="text-sm font-semibold text-gray-800">{student.student_name}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">
+                        <div className="text-sm font-semibold text-gray-800 truncate" title={student.student_name}>{student.student_name}</div>
+                        <div className="text-xs text-gray-500 mt-0.5 truncate" title={`${student.enrollment_no || 'N/A'} / ${student.register_no || 'N/A'}`}>
                           {student.enrollment_no || 'N/A'} / {student.register_no || 'N/A'}
                         </div>
                       </td>
-                      {markCategories.map((category) => {
+                      {filteredMarkCategories.map((category) => {
                         const earned = studentMarks[student.student_id]?.[category.id]
                         const converted = calculateConvertedMarks(earned, category.max_marks, category.conversion_marks)
                         return (
-                          <td key={category.id} className="px-3 py-3 text-center border-r border-gray-200">
+                          <td key={category.id} className="px-3 py-3 text-center border-r border-gray-200" style={{ minWidth: '150px', maxWidth: '200px' }}>
                             <input
                               type="number"
                               min="0"
@@ -581,13 +637,16 @@ function MarkEntryPage() {
                               value={earned ?? ''}
                               onChange={(e) => handleMarkChange(student.student_id, category.id, e.target.value)}
                               placeholder="0"
-                              className="w-16 px-2 py-1 border border-gray-300 rounded text-center text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              className="w-20 px-2 py-1 border border-gray-300 rounded text-center text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                             />
                             <div className="text-xs text-green-600 font-semibold mt-1">{converted}</div>
                           </td>
                         )
                       })}
-                      <td className="px-4 py-3 text-center text-base font-bold text-blue-700 bg-blue-50 sticky right-0 z-5">
+                      <td 
+                        className={`px-4 py-3 text-center text-base font-bold text-blue-700 bg-blue-50 sticky right-0 z-10 shadow-sm hover:bg-blue-100 transition-colors`}
+                        style={{ minWidth: '120px', maxWidth: '120px' }}
+                      >
                         {calculateStudentTotal(student.student_id)}
                       </td>
                     </tr>
@@ -598,7 +657,7 @@ function MarkEntryPage() {
             </div>
 
             {/* Legend */}
-            <div className="border-t border-gray-200 px-6 py-4 bg-gray-50">
+            <div className="border-t border-gray-200 px-6 py-4 bg-gray-50 flex-shrink-0">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                 <div>
                   <p className="font-semibold text-gray-700 mb-1">Input Format</p>
@@ -617,9 +676,9 @@ function MarkEntryPage() {
           </div>
         )}
 
-        {selectedCourse && markCategories.length === 0 && (
+        {selectedCourse && filteredMarkCategories.length === 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-blue-800">
-            No mark categories found for this course type. Please ensure mark categories are configured.
+            No mark categories found for {learningMode} mode. Try switching to {learningMode === 'PBL' ? 'UAL' : 'PBL'} mode.
           </div>
         )}
       </div>
