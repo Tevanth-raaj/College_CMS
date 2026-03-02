@@ -29,13 +29,14 @@ func StartAllocationScheduler() {
 func checkAndRunAllocations() {
 	log.Printf("⏰ [%s] Checking for closed teacher selection windows...", time.Now().Format("2006-01-02 15:04:05"))
 	
-	// Query teacher_course_tracking for windows that closed in the last 7 days (testing)
-	// TODO: Change to 2 HOURS for production
+	// Query teacher_course_tracking for windows that closed
+	// Window closes at END OF DAY (23:59:59) on window_end date
+	// So we compare with DATE_ADD(window_end, INTERVAL 1 DAY) at midnight
 	query := `
 		SELECT academic_year, window_start, window_end
 		FROM teacher_course_tracking
-		WHERE window_end <= NOW()
-		AND window_end >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+		WHERE DATE_ADD(window_end, INTERVAL 1 DAY) <= NOW()
+		AND DATE_ADD(window_end, INTERVAL 1 DAY) >= DATE_SUB(NOW(), INTERVAL 7 DAY)
 		LIMIT 1
 	`
 
@@ -49,7 +50,7 @@ func checkAndRunAllocations() {
 	}
 
 	log.Printf("🚀 Teacher selection window CLOSED for Academic Year: %s", academicYear)
-	log.Printf("   Window period: %v to %v", windowStart.Format("2006-01-02"), windowEnd.Format("2006-01-02"))
+	log.Printf("   Window period: %v to %v (closes at 23:59:59 on end date)", windowStart.Format("2006-01-02"), windowEnd.Format("2006-01-02"))
 	log.Printf("   Triggering automatic allocation for ALL semesters...")
 
 	// Trigger allocation by calling the handler

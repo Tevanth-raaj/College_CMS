@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import MainLayout from '../../components/MainLayout';
+import { API_BASE_URL } from '../../config';
 
 const HRFacultyPage = () => {
   const [faculty, setFaculty] = useState([]);
@@ -22,7 +23,7 @@ const HRFacultyPage = () => {
   const fetchCourseTypes = async () => {
     try {
       const response = await fetch(
-        `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000/api'}/course-types`
+        `${API_BASE_URL}/course-types`
       );
       if (response.ok) {
         const data = await response.json();
@@ -41,7 +42,7 @@ const HRFacultyPage = () => {
     try {
       setLoading(true);
       const response = await fetch(
-        `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000/api'}/hr/faculty`
+        `${API_BASE_URL}/hr/faculty`
       );
 
       if (!response.ok) {
@@ -97,7 +98,7 @@ const HRFacultyPage = () => {
     try {
       setSaving(true);
       const response = await fetch(
-        `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000/api'}/hr/faculty/subject-counts`,
+        `${API_BASE_URL}/hr/faculty/subject-counts`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -176,7 +177,7 @@ const HRFacultyPage = () => {
   }
 
   return (
-    <MainLayout>
+    <MainLayout title="Faculty Directory">
       <div className="h-screen flex flex-col overflow-hidden bg-gray-50">
         {/* Header */}
         <div className="flex-none bg-white border-b border-gray-200 px-12 py-8">
@@ -186,7 +187,7 @@ const HRFacultyPage = () => {
               <p className="text-base text-gray-600">Manage faculty and subject allocations</p>
             </div>
             <div className="text-right">
-              <div className="text-3xl font-bold text-blue-600">{filteredFaculty.length}</div>
+              <div className="text-3xl font-bold text-primary">{filteredFaculty.length}</div>
               <div className="text-xs text-gray-500 uppercase tracking-wide mt-1">Total Faculty</div>
             </div>
           </div>
@@ -326,93 +327,103 @@ const HRFacultyPage = () => {
             </div>
           </div>
 
-          {/* Fixed right-side panel (no backdrop, stays open, switches content on row click) */}
+          {/* Faculty details modal popup */}
           {selectedFaculty && (
-            <div className="absolute right-0 top-0 bottom-0 w-96 bg-white shadow-2xl border-l border-gray-200 z-40 flex flex-col">
-              <div className="flex-none bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-                <h2 className="text-lg font-bold text-gray-900">Faculty Details</h2>
-                <button
-                  onClick={() => setSelectedFaculty(null)}
-                  className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
-                  aria-label="Close faculty details"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-6">
-                {/* Compact Faculty Info */}
-                <div className="mb-6">
-                  <div className="flex items-start mb-4">
-                    {selectedFaculty.profile_img?.Valid && selectedFaculty.profile_img.String ? (
-                      <img
-                        src={selectedFaculty.profile_img.String}
-                        alt={selectedFaculty.name}
-                        className="h-16 w-16 rounded-lg mr-4 object-cover border-2 border-gray-100"
-                      />
-                    ) : (
-                      <div className="h-16 w-16 rounded-lg bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center mr-4">
-                        <span className="text-white font-bold text-xl">{selectedFaculty.name.charAt(0).toUpperCase()}</span>
-                      </div>
-                    )}
-                    <div className="flex-1">
-                      <div className="text-base font-semibold text-gray-900">{selectedFaculty.name}</div>
-                      <div className="text-xs text-gray-500 mt-1">{selectedFaculty.faculty_id}</div>
-                      <div className="text-xs text-gray-600 mt-1">
-                        {selectedFaculty.department_name?.Valid ? selectedFaculty.department_name.String : '-'}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {selectedFaculty.desg?.Valid ? selectedFaculty.desg.String : '-'}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 text-sm">
-                    <div>
-                      <span className="font-medium text-gray-600">Email: </span>
-                      <span className="text-gray-900">{selectedFaculty.email}</span>
-                    </div>
-                    {selectedFaculty.phone?.Valid && (
-                      <div>
-                        <span className="font-medium text-gray-600">Phone: </span>
-                        <span className="text-gray-900">{selectedFaculty.phone.String}</span>
-                      </div>
-                    )}
-                  </div>
+            <div
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+              onClick={() => setSelectedFaculty(null)}
+            >
+              <div
+                className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex-none bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+                  <h2 className="text-lg font-bold text-gray-900">Faculty Details</h2>
+                  <button
+                    onClick={() => setSelectedFaculty(null)}
+                    className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                    aria-label="Close faculty details"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
 
-                {/* Subject counts inputs dynamic */}
-                <div className="space-y-4">
-                  {courseLimits.map((limit) => (
-                    <div key={limit.course_type_id}>
-                      <label className="block text-sm font-medium text-gray-700 mb-2 capitalize">
-                        {limit.type_name} Subject Count
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={limit.max_count}
-                        onChange={(e) => handleLimitChange(limit.course_type_id, e.target.value)}
-                        className="w-full px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                      />
+                <div className="p-6">
+                  {/* Compact Faculty Info */}
+                  <div className="mb-6">
+                    <div className="flex items-start mb-4">
+                      {selectedFaculty.profile_img?.Valid && selectedFaculty.profile_img.String ? (
+                        <img
+                          src={selectedFaculty.profile_img.String}
+                          alt={selectedFaculty.name}
+                          className="h-16 w-16 rounded-lg mr-4 object-cover border-2 border-gray-100"
+                        />
+                      ) : (
+                        <div className="h-16 w-16 rounded-lg bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center mr-4">
+                          <span className="text-white font-bold text-xl">
+                            {selectedFaculty.name.charAt(0).toUpperCase()}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex-1">
+                        <div className="text-base font-semibold text-gray-900">{selectedFaculty.name}</div>
+                        <div className="text-xs text-gray-500 mt-1">{selectedFaculty.faculty_id}</div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          {selectedFaculty.department_name?.Valid ? selectedFaculty.department_name.String : '-'}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {selectedFaculty.desg?.Valid ? selectedFaculty.desg.String : '-'}
+                        </div>
+                      </div>
                     </div>
-                  ))}
 
-                  {saveMessage.text && (
-                    <div className={`p-3 rounded-lg ${saveMessage.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
-                      <div className="text-sm font-semibold">{saveMessage.text}</div>
+                    <div className="space-y-3 text-sm">
+                      <div>
+                        <span className="font-medium text-gray-600">Email: </span>
+                        <span className="text-gray-900">{selectedFaculty.email}</span>
+                      </div>
+                      {selectedFaculty.phone?.Valid && (
+                        <div>
+                          <span className="font-medium text-gray-600">Phone: </span>
+                          <span className="text-gray-900">{selectedFaculty.phone.String}</span>
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
 
-                  <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-60 transition-colors"
-                  >
-                    {saving ? 'Saving...' : 'Save Subject Counts'}
-                  </button>
+                  {/* Subject counts inputs dynamic */}
+                  <div className="space-y-4">
+                    {courseLimits.map((limit) => (
+                      <div key={limit.course_type_id}>
+                        <label className="block text-sm font-medium text-gray-700 mb-2 capitalize">
+                          {limit.type_name} Subject Count
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={limit.max_count}
+                          onChange={(e) => handleLimitChange(limit.course_type_id, e.target.value)}
+                          className="w-full px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                        />
+                      </div>
+                    ))}
+
+                    {saveMessage.text && (
+                      <div className={`p-3 rounded-lg ${saveMessage.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+                        <div className="text-sm font-semibold">{saveMessage.text}</div>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleSave}
+                      disabled={saving}
+                      className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-60 transition-colors"
+                    >
+                      {saving ? 'Saving...' : 'Save Subject Counts'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

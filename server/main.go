@@ -8,6 +8,7 @@ import (
 	"server/db"
 	"server/middleware"
 	"server/routes"
+	"server/scheduler"
 	"github.com/joho/godotenv"
 )
 
@@ -100,6 +101,9 @@ func main() {
 	if err := db.AddUserIdToMarkEntryWindows(); err != nil {
 		log.Fatal("Failed to add user_id to mark_entry_windows:", err)
 	}
+
+	// Start the allocation scheduler (auto-runs when teacher selection window closes)
+	scheduler.StartAllocationScheduler()
 
 	// Setup routes
 	router := routes.SetupRoutes()

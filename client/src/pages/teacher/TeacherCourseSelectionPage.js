@@ -192,15 +192,10 @@ const TeacherCourseSelectionPage = () => {
       
       try {
         // Fetch teacher data from backend using email
-        console.log('Fetching teacher by email:', userEmail);
         const response = await fetch(`${API_BASE_URL}/teachers/by-email?email=${encodeURIComponent(userEmail)}`);
-        
-        console.log('Response status:', response.status);
-        console.log('Response ok:', response.ok);
         
         if (response.ok) {
           const data = await response.json();
-          console.log('Response data:', data);
           if (data.teacher && data.teacher.id) {
             console.log('Teacher found by email:', data.teacher);
             setTeacherId(data.teacher.id.toString());
@@ -211,16 +206,13 @@ const TeacherCourseSelectionPage = () => {
             localStorage.setItem('teacher_name', data.teacher.name || '');
             localStorage.setItem('teacher_dept', data.teacher.dept || '');
           } else {
-            console.error('No teacher in response data');
             setError(`No teacher record found for email: ${userEmail}\nPlease contact your administrator to add you to the teachers database.`);
             setLoading(false);
           }
         } else if (response.status === 404) {
-          console.error('404 - Teacher not found');
           setError(`No teacher record found for email: ${userEmail}\nPlease contact your administrator to add you to the teachers database.`);
           setLoading(false);
         } else {
-          console.error('API call failed with status:', response.status);
           // Fallback to stored teacher_id if API fails
           const storedTeacherId = localStorage.getItem('teacher_id');
           if (storedTeacherId) {
@@ -299,9 +291,9 @@ const TeacherCourseSelectionPage = () => {
       // Use the calculated nextSemester and its batch
       const nextBatch = getBatchForSemester(nextSemester);
       
-      // Check for preferences with next semester and its batch
-      const url = `${API_BASE_URL}/teachers/${tid}/course-preferences?next_semester=${nextSemester}&batch=${nextBatch}`;
-      console.log('Checking preferences for next semester:', nextSemester, 'batch:', nextBatch);
+      // Check for preferences with academic_year (backend expects this parameter)
+      const url = `${API_BASE_URL}/teachers/${tid}/course-preferences?academic_year=${academicYear}`;
+      console.log('Checking preferences for academic year:', academicYear, 'next semester:', nextSemester, 'batch:', nextBatch);
       console.log('Fetching from URL:', url);
       
       const response = await fetch(url);
@@ -328,18 +320,27 @@ const TeacherCourseSelectionPage = () => {
         }));
         setSelectedCourses(preSelected);
         
-        // Lock form ONLY if window is closed
-        // During window period, allow editing
+        // Lock form ONLY if window is closed or preferences are already locked
+        // During window period, allow editing only if not locked
         if (!windowStatus.isOpen) {
           setPreferencesLocked(true);
           setSuccess(`Your course preferences were submitted. Window is now closed.`);
+        } else if (data.locked) {
+          setPreferencesLocked(true);
+          setSuccess(`Your course preferences have already been submitted for this window.`);
         } else {
           setPreferencesLocked(false);
           setSuccess(`Your previously saved preferences are loaded. You can update them until ${windowStatus.endDate?.toLocaleDateString()}.`);
         }
       } else {
-        console.log('NO preferences found for next semester - form remains UNLOCKED');
-        setPreferencesLocked(false);
+        if (data.locked) {
+          console.log('Preferences locked but empty?');
+          setPreferencesLocked(true);
+          setSuccess(`Your course preferences have already been submitted for this window.`);
+        } else {
+          console.log('NO preferences found for next semester - form remains UNLOCKED');
+          setPreferencesLocked(false);
+        }
       }
       
       setLoading(false);
@@ -443,9 +444,9 @@ const TeacherCourseSelectionPage = () => {
   };
 
   const handleCourseToggle = (course) => {
-    // Don't allow changes if preferences are locked (window closed)
+    // Don't allow changes if preferences are locked (window closed or already submitted)
     if (preferencesLocked) {
-      setError('The selection window has closed. Preferences cannot be changed.');
+      setError('Preferences cannot be changed. Either the window has closed or you have already submitted your preferences.');
       setTimeout(() => setError(''), 3000);
       return;
     }
@@ -491,10 +492,9 @@ const TeacherCourseSelectionPage = () => {
       return;
     }
     
-    // preferencesLocked will only be true if window is closed (handled above)
-    // So this check is redundant, but keeping for safety
+    // preferencesLocked will be true if window is closed or already submitted
     if (preferencesLocked) {
-      setError('The selection window has closed. Preferences cannot be changed.');
+      setError('Preferences cannot be changed. Either the window has closed or you have already submitted your preferences.');
       return;
     }
     
@@ -570,9 +570,11 @@ const TeacherCourseSelectionPage = () => {
 
       if (response.ok) {
         setSuccess('Course preferences saved successfully! ✓');
+        setPreferencesLocked(true);
         // Clear localStorage draft after successful save
         localStorage.removeItem(`course_draft_${teacherId}`);
-        fetchCurrentPreferences(teacherId);
+        // Don't fetch preferences again - we just saved them and locked the form
+        // fetchCurrentPreferences(teacherId);
         setTimeout(() => setSuccess(''), 3000);
       } else {
         setError(data.error || 'Failed to save preferences');
@@ -656,8 +658,33 @@ const TeacherCourseSelectionPage = () => {
   }
 
   return (
-    <MainLayout>
-      <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
+    <MainLayout title="Teacher Course Selection">
+      {error && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-4xl">
+          <div className="bg-red-50 border border-red-200 p-4 rounded-lg shadow-md flex items-start justify-between">
+            <div className="flex items-start">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-red-800 whitespace-pre-line">{error}</p>
+              </div>
+            </div>
+            <div className="ml-4 flex items-start">
+              <button
+                onClick={() => setError('')}
+                className="text-sm font-medium text-red-600 hover:text-red-800 ml-4"
+                aria-label="Dismiss error"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="min-h-screen card-custom bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           {/* Header */}
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -669,11 +696,11 @@ const TeacherCourseSelectionPage = () => {
                 </h1>
                 <span className={`px-3 py-1 text-sm font-semibold rounded-full ${
                   nextSemesterType === 'odd' 
-                    ? 'bg-purple-100 text-purple-800' 
+                    ? 'bg-purple-100 text-primary' 
                     : 'bg-green-100 text-green-800'
                 }`}>
                   {nextSemesterType === 'odd' ? '🟣 Odd Semester' : '🟢 Even Semester'}
-                  <span className="ml-2 text-xs opacity-75">(Semester {nextSemester})</span>
+                  <span className="ml-2 text-xs opacity-90">(Semester {nextSemester})</span>
                 </span>
               </div>
               <p className="text-gray-600">
@@ -765,12 +792,12 @@ const TeacherCourseSelectionPage = () => {
                     'border-gray-200 bg-white'
                   }`}>
                     <div className="flex items-center justify-between mb-2">
-                      <div className="text-xs font-medium text-gray-600 uppercase tracking-wide">{ts.type_name.replace('_', ' ')}</div>
-                      {isComplete && <span className="text-gray-900">✓</span>}
+                      <div className="text-xs font-medium text-primary uppercase tracking-wide">{ts.type_name.replace('_', ' ')}</div>
+                      {isComplete && <span className="text-primary">✓</span>}
                       {isOver && <span className="text-red-600">⚠</span>}
                     </div>
-                    <div className="text-2xl font-bold text-gray-900">
-                      {selectedCount} <span className="text-gray-400">/ {ts.allocated}</span>
+                    <div className="text-2xl font-bold text-primary">
+                      {selectedCount} <span className="text-primary">/ {ts.allocated}</span>
                     </div>
                     <div className="text-xs mt-1 text-gray-500">
                       {isComplete ? 'Complete' : 
@@ -784,8 +811,8 @@ const TeacherCourseSelectionPage = () => {
               <div className={`border rounded-lg p-4 ${
                 isAllocationComplete() ? 'border-gray-900 bg-gray-50' : 'border-gray-200 bg-white'
               }`}>
-                <div className="text-xs font-medium text-gray-600 uppercase tracking-wide mb-2">Status</div>
-                <div className="text-lg font-semibold text-gray-900 mt-2">
+                <div className="text-xs font-medium text-primary uppercase tracking-wide mb-2">Status</div>
+                <div className="text-lg font-semibold text-primary mt-2">
                   {isAllocationComplete() ? '✓ Complete' : 'Incomplete'}
                 </div>
               </div>
@@ -847,12 +874,12 @@ const TeacherCourseSelectionPage = () => {
                 placeholder="Search by Course Code or Name..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary sm:text-sm"
               />
             </div>
             <button
               onClick={() => setShowSelectedPanel(!showSelectedPanel)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg transition-colors"
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
@@ -864,24 +891,24 @@ const TeacherCourseSelectionPage = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Course List (Left Side - 2/3 width) */}
-          <div className="lg:col-span-2 transition-all duration-300">
+          <div className="lg:col-span-2 transition-all duration-300 flex flex-col h-[calc(100vh-200px)] sticky top-6 bg-white border border-gray-200 rounded-lg shadow-sm">
             
             {/* Tab Headers */}
             <div className="bg-white rounded-t-lg shadow-sm overflow-hidden border border-gray-200 mb-0">
-              <nav className="flex flex-wrap">
+              <nav className="flex flex-wrap sticky top-0 bg-white z-10">
                 {allocationSummary?.type_summaries?.map((ts) => (
                   <button
                     key={ts.course_type_id}
                     onClick={() => setActiveTab(ts.type_name)}
                     className={`flex-1 min-w-[120px] py-3 px-4 text-center font-medium text-sm capitalize transition-all ${
                       activeTab === ts.type_name
-                        ? 'border-b-2 border-gray-900 text-gray-900 bg-gray-50'
+                        ? 'border-b-2 border-primary text-primary bg-gray-50'
                         : 'border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
                     }`}
                   >
                     {ts.type_name.replace('_', ' ')}
                     <span className={`ml-2 px-2 py-0.5 text-xs rounded-md ${
-                      activeTab === ts.type_name ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-600'
+                      activeTab === ts.type_name ? 'bg-primary text-white' : 'bg-gray-200 text-gray-600'
                     }`}>
                       {getSelectedCount(ts.type_name)} / {ts.allocated}
                     </span>
@@ -890,9 +917,9 @@ const TeacherCourseSelectionPage = () => {
               </nav>
             </div>
 
-            <div className="bg-white rounded-b-lg shadow-sm overflow-hidden border-l border-r border-b border-gray-200">
+            <div className="bg-white rounded-b-lg shadow-sm overflow-auto border-l border-r border-b border-gray-200 flex-1">
               <div className="px-4 py-3 border-b border-gray-200 flex justify-between items-center">
-                <span className="font-medium text-gray-900 capitalize text-sm">{activeTab.replace('_', ' ')} Courses</span>
+                <span className="font-medium text-primary capitalize text-sm">{activeTab.replace('_', ' ')} Courses</span>
                 <span className="text-xs text-gray-500 px-2 py-1 bg-gray-100 rounded-md">{getFilteredCourses().length} courses</span>
               </div>
               
@@ -908,8 +935,8 @@ const TeacherCourseSelectionPage = () => {
                   <div className="space-y-4">
                     {/* Group courses by semester */}
                     {Object.entries(getCoursesGroupedBySemester()).map(([semester, courses]) => (
-                      <div key={semester} className="border-l-2 border-gray-300 pl-4">
-                        <h3 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                      <div key={semester} className="border-l-2 border-background pl-4">
+                        <h3 className="text-base font-semibold text-primary mb-3 flex items-center gap-2">
                           Semester {semester}
                           <span className="text-xs font-normal text-gray-500 px-2 py-0.5 bg-gray-100 rounded-md">
                             {courses.length}
@@ -930,7 +957,7 @@ const TeacherCourseSelectionPage = () => {
                           : 'cursor-pointer hover:border-gray-400'
                       } ${
                         isSelected
-                          ? 'border-gray-900 bg-gray-50'
+                          ? 'border-primary bg-gray-50'
                           : 'border-gray-200 bg-white'
                       }`}
                     >
@@ -938,7 +965,7 @@ const TeacherCourseSelectionPage = () => {
                         <div className="flex items-start space-x-3 flex-1">
                           <div className="flex-shrink-0 mt-0.5">
                             <div className={`w-4 h-4 rounded border flex items-center justify-center ${
-                              isSelected ? 'bg-gray-900 border-gray-900' : 'border-gray-300'
+                              isSelected ? 'bg-primary border-primary' : 'border-gray-300'
                             }`}>
                               {isSelected && (
                                 <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -966,7 +993,7 @@ const TeacherCourseSelectionPage = () => {
                         
                         <div className="flex-shrink-0 ml-2">
                           <span className={`px-2 py-1 text-xs font-medium rounded ${
-                            isSelected ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600'
+                            isSelected ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600'
                           }`}>
                             {isSelected ? '✓' : ''}
                           </span>
@@ -985,7 +1012,7 @@ const TeacherCourseSelectionPage = () => {
           </div>
 
       {/* Right Side Panel - Selected Courses */}
-      <div className="lg:col-span-1 bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col h-[calc(100vh-200px)] sticky top-6">
+      <div className="lg:col-span-1 bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col justify-center h-[calc(100vh-200px)] sticky top-6">
         <div className="p-4 border-b border-gray-200 flex justify-between items-center rounded-t-lg">
            <h3 className="font-semibold text-gray-900 text-sm">Selected ({selectedCourses.length})</h3>
            {/* Show allocation summary in panel header */}
@@ -1063,16 +1090,21 @@ const TeacherCourseSelectionPage = () => {
         <div className="mt-6 flex justify-end space-x-4">
           <button
             onClick={() => setSelectedCourses([])}
-            className="px-6 py-3 border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+            disabled={preferencesLocked || !windowStatus.isOpen}
+            className={`px-6 py-3 border border-gray-200 text-gray-700 font-medium rounded-lg transition-colors ${
+              preferencesLocked || !windowStatus.isOpen
+                ? 'opacity-50 cursor-not-allowed'
+                : 'hover:bg-gray-50'
+            }`}
           >
             Clear All
           </button>
           
           <button
             onClick={handleSavePreferences}
-            disabled={saving || selectedCourses.length === 0}
+            disabled={saving || !isAllocationComplete() || preferencesLocked || !windowStatus.isOpen}
             className={`px-8 py-3 rounded-lg font-medium transition-colors ${
-              saving || selectedCourses.length === 0
+              saving || !isAllocationComplete() || preferencesLocked || !windowStatus.isOpen
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                 : 'bg-blue-600 text-white hover:bg-blue-700'
             }`}
@@ -1086,7 +1118,15 @@ const TeacherCourseSelectionPage = () => {
                 Saving...
               </span>
             ) : (
-              `Save Preferences (${selectedCourses.length})`
+              !windowStatus.isOpen 
+                ? '🔒 Window Closed' 
+                : (preferencesLocked 
+                    ? '✓ Submitted' 
+                    : (isAllocationComplete() 
+                        ? `Save Preferences (${selectedCourses.length})`
+                        : 'Complete Allocations'
+                      )
+                  )
             )}
           </button>
         </div>

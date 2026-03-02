@@ -31,10 +31,12 @@ func GetTeacherCourseWindow(w http.ResponseWriter, r *http.Request) {
 	if err == sql.ErrNoRows {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"academic_year": academicYear,
-			"window_start":  nil,
-			"window_end":    nil,
-			"configured":    false,
+			"academic_year":       academicYear,
+			"window_start":        nil,
+			"window_end":          nil,
+			"configured":          false,
+			"current_semester_type": nil,
+			"next_semester_type":  nil,
 		})
 		return
 	}
@@ -45,9 +47,33 @@ func GetTeacherCourseWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get current semester type - default to "even" or fetch from teacher_course_preferences if it exists
+	var currentSemesterType string
+	err2 := db.DB.QueryRow(`
+		SELECT COALESCE(current_semester_type, 'even')
+		FROM teacher_course_preferences
+		WHERE academic_year = ?
+		LIMIT 1
+	`, academicYear).Scan(&currentSemesterType)
+
+	if err2 != nil {
+		log.Printf("Warning: Could not fetch current semester type, defaulting to 'even': %v", err2)
+		currentSemesterType = "even"
+	}
+
+	// Calculate next semester type
+	var nextSemesterType string
+	if currentSemesterType == "even" {
+		nextSemesterType = "odd"
+	} else {
+		nextSemesterType = "even"
+	}
+
 	response := map[string]interface{}{
-		"academic_year": academicYear,
-		"configured":    windowStart.Valid && windowEnd.Valid,
+		"academic_year":         academicYear,
+		"configured":            windowStart.Valid && windowEnd.Valid,
+		"current_semester_type": currentSemesterType,
+		"next_semester_type":    nextSemesterType,
 	}
 
 	if windowStart.Valid {

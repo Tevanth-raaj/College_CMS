@@ -262,7 +262,7 @@ function CurriculumMainPage() {
         </div>
       }
     >
-      <div className="space-y-6">
+      <div className="space-y-0">
         {/* Messages */}
         {error && (
           <div className="flex items-start space-x-3 p-4 bg-red-50 border border-red-200 rounded-lg">

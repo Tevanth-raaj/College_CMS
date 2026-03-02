@@ -23,8 +23,6 @@ const ElectiveSelectionPage = () => {
     try {
       setLoading(true);
       const url = `${API_BASE_URL}/students/electives/available?email=${userEmail}`;
-      console.log('Fetching from URL:', url);
-
       const response = await fetch(url);
 
       if (response.ok) {
@@ -32,59 +30,82 @@ const ElectiveSelectionPage = () => {
         console.log('Elective Data:', data);
         setElectiveData(data);
 
-        // Group electives by slot (new structure with slots)
         const grouped = {};
         if (data.slots && data.slots.length > 0) {
           data.slots.forEach(slot => {
-            // Use slot_name as the category key
-            const category = slot.slot_name || 'Unassigned';
-            grouped[category] = {
+            grouped[slot.slot_name || 'Unassigned'] = {
               slot_id: slot.slot_id,
               slot_name: slot.slot_name,
               slot_type: slot.slot_type,
               is_active: slot.is_active,
               courses: slot.courses || []
             };
-            console.log(`Slot: ${slot.slot_name}, Type: ${slot.slot_type}`);
           });
         }
         setGroupedElectives(grouped);
-        console.log('Grouped Electives:', grouped);
 
-        // Load existing selections from backend response (PRIMARY SOURCE OF TRUTH)
+        // Load existing selections from backend (PRIMARY SOURCE OF TRUTH)
+        let finalSelections = {};
+        
         if (data.existing_selections && Object.keys(data.existing_selections).length > 0) {
           console.log('Loading existing selections from backend:', data.existing_selections);
-          setSelections(data.existing_selections);
-          calculateTotalCredits(data.existing_selections);
+          finalSelections = { ...data.existing_selections };
+        }
+        
+        // Also check localStorage for any "NOT_OPTED" selections to restore
+        const savedSelections = localStorage.getItem(`elective_selections_${userEmail}_sem${data.next_semester}`);
+        if (savedSelections) {
+          try {
+            const parsed = JSON.parse(savedSelections);
+            // Merge any "NOT_OPTED" from localStorage (only for slots without backend selections)
+            Object.entries(parsed).forEach(([slotName, value]) => {
+              if (value === 'NOT_OPTED' && !finalSelections[slotName]) {
+                finalSelections[slotName] = 'NOT_OPTED';
+                console.log(`Restored NOT_OPTED for slot: ${slotName}`);
+              }
+            });
+          } catch (e) {
+            console.error('Error parsing localStorage selections:', e);
+          }
+        }
+        
+        if (Object.keys(finalSelections).length > 0) {
+          setSelections(finalSelections);
 
-          // Check if already submitted (has selections for all REQUIRED slots only)
+          // Calculate credits using data directly (avoid stale closure on electiveData)
+          let total = 0;
+          Object.entries(finalSelections).forEach(([slotName, courseId]) => {
+            if (courseId === 'NOT_OPTED') return; // NOT_OPTED doesn't count towards credits
+            const slot = data.slots.find(s => s.slot_name === slotName);
+            if (slot && ['HONOR', 'MINOR', 'ADDON'].includes(slot.slot_type)) {
+              const course = slot.courses.find(c => c.course_id === courseId);
+              if (course) total += course.credits;
+            }
+          });
+          setTotalCreditUsed(total);
+
+          // Check submitted: all REQUIRED slots are filled
           const requiredSlots = data.slots.filter(slot =>
             ['PROFESSIONAL', 'OPEN', 'MIXED'].includes(slot.slot_type)
           );
-          const selectedRequiredSlots = Object.keys(data.existing_selections).filter(slotName => {
+          const selectedRequiredSlots = Object.keys(finalSelections).filter(slotName => {
             const slot = data.slots.find(s => s.slot_name === slotName);
             return slot && ['PROFESSIONAL', 'OPEN', 'MIXED'].includes(slot.slot_type);
           });
 
-          if (selectedRequiredSlots.length === requiredSlots.length && requiredSlots.length > 0) {
-            setIsSubmitted(true);
-          } else {
-            setIsSubmitted(false);
-          }
+          setIsSubmitted(
+            requiredSlots.length > 0 &&
+            selectedRequiredSlots.length === requiredSlots.length
+          );
         } else {
-          // No existing selections in database - clear any old localStorage data
-          console.log('No existing selections found in backend - clearing localStorage');
           setSelections({});
           setIsSubmitted(false);
           setTotalCreditUsed(0);
-          // Clear old localStorage data for this semester
-          localStorage.removeItem(`elective_selections_${userEmail}_sem${data.next_semester}`);
           localStorage.removeItem(`elective_submitted_${userEmail}_sem${data.next_semester}`);
           localStorage.removeItem(`elective_submission_${userEmail}_sem${data.next_semester}`);
         }
       } else {
         const errorText = await response.text();
-        console.error('Error response:', errorText);
         setMessage({ type: 'error', text: errorText || 'Failed to fetch electives' });
       }
     } catch (error) {
@@ -117,6 +138,12 @@ const ElectiveSelectionPage = () => {
     let total = 0;
     console.log('Calculating credits for selections:', currentSelections);
     Object.entries(currentSelections).forEach(([slotName, courseId]) => {
+      // Skip "NOT_OPTED" selections
+      if (courseId === 'NOT_OPTED') {
+        console.log(`Skipping NOT_OPTED for slot: ${slotName}`);
+        return;
+      }
+
       // Check if this slot is HONOR/MINOR/ADDON by slot type
       const slot = electiveData.slots.find(s => s.slot_name === slotName);
       console.log(`Slot: ${slotName}, Type: ${slot?.slot_type}, Course ID: ${courseId}`);
@@ -139,12 +166,27 @@ const ElectiveSelectionPage = () => {
     // Find the slot to check its type
     const slot = electiveData.slots.find(s => s.slot_name === slotName);
 
+    // Special handling for "NOT_OPTED" - it doesn't count towards credits
+    if (courseId === 'NOT_OPTED') {
+      const newSelections = {
+        ...selections,
+        [slotName]: courseId
+      };
+      setSelections(newSelections);
+      calculateTotalCredits(newSelections);
+      localStorage.setItem(
+        `elective_selections_${userEmail}_sem${electiveData.next_semester}`,
+        JSON.stringify(newSelections)
+      );
+      return;
+    }
+
     // Check COMMON credit limit for honour/minor/addon (total 6 credits shared)
     if (slot && ['HONOR', 'MINOR', 'ADDON'].includes(slot.slot_type)) {
       let adjustedCredit = totalCreditUsed;
 
       // If changing selection, subtract old credits first
-      if (selections[slotName]) {
+      if (selections[slotName] && selections[slotName] !== 'NOT_OPTED') {
         // Find the old course in this slot
         const oldCourse = slot.courses.find(c => c.course_id === selections[slotName]);
         if (oldCourse) {
@@ -198,28 +240,58 @@ const ElectiveSelectionPage = () => {
       return;
     }
 
-    // Validate: if ANY HONOR slot is selected, ALL HONOR slots must be filled
+    // Validate: if ANY HONOR slot is selected (and not "NOT_OPTED"), ALL HONOR slots must be filled
+    // Only validate if HONOR slots are present in groupedElectives (eligible student)
     const allHonorSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === 'HONOR');
-    const selectedHonorSlots = allHonorSlots.filter(s => selections[s]);
-    if (selectedHonorSlots.length > 0 && selectedHonorSlots.length < allHonorSlots.length) {
-      setMessage({
-        type: 'error',
-        text: `If you choose an Honour course, you must fill all ${allHonorSlots.length} Honour slots. Please select ${allHonorSlots.length - selectedHonorSlots.length} more.`
-      });
-      setTimeout(() => setMessage({ type: '', text: '' }), 4000);
-      return;
+    if (allHonorSlots.length > 0) {
+      const selectedHonorSlots = allHonorSlots.filter(s => selections[s] && selections[s] !== 'NOT_OPTED');
+      const hasNotOptedHonor = allHonorSlots.some(s => selections[s] === 'NOT_OPTED');
+      
+      if (selectedHonorSlots.length > 0 && selectedHonorSlots.length < allHonorSlots.length && !hasNotOptedHonor) {
+        setMessage({
+          type: 'error',
+          text: `If you choose an Honour course, you must fill all ${allHonorSlots.length} Honour slots or select "Not Opted". Please select ${allHonorSlots.length - selectedHonorSlots.length} more.`
+        });
+        setTimeout(() => setMessage({ type: '', text: '' }), 4000);
+        return;
+      }
+
+      // If any Honor slot has "Not Opted", all must have "Not Opted" or be empty
+      if (hasNotOptedHonor && selectedHonorSlots.length > 0) {
+        setMessage({
+          type: 'error',
+          text: `You cannot mix "Not Opted" with course selections for Honour. Either select all Honour courses or choose "Not Opted" for all.`
+        });
+        setTimeout(() => setMessage({ type: '', text: '' }), 4000);
+        return;
+      }
     }
 
-    // Validate: if ANY MINOR slot is selected, ALL MINOR slots must be filled
+    // Validate: if ANY MINOR slot is selected (and not "NOT_OPTED"), ALL MINOR slots must be filled
+    // Only validate if MINOR slots are present in groupedElectives (eligible student)
     const allMinorSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === 'MINOR');
-    const selectedMinorSlots = allMinorSlots.filter(s => selections[s]);
-    if (selectedMinorSlots.length > 0 && selectedMinorSlots.length < allMinorSlots.length) {
-      setMessage({
-        type: 'error',
-        text: `If you choose a Minor course, you must fill all ${allMinorSlots.length} Minor slots. Please select ${allMinorSlots.length - selectedMinorSlots.length} more.`
-      });
-      setTimeout(() => setMessage({ type: '', text: '' }), 4000);
-      return;
+    if (allMinorSlots.length > 0) {
+      const selectedMinorSlots = allMinorSlots.filter(s => selections[s] && selections[s] !== 'NOT_OPTED');
+      const hasNotOptedMinor = allMinorSlots.some(s => selections[s] === 'NOT_OPTED');
+      
+      if (selectedMinorSlots.length > 0 && selectedMinorSlots.length < allMinorSlots.length && !hasNotOptedMinor) {
+        setMessage({
+          type: 'error',
+          text: `If you choose a Minor course, you must fill all ${allMinorSlots.length} Minor slots or select "Not Opted". Please select ${allMinorSlots.length - selectedMinorSlots.length} more.`
+        });
+        setTimeout(() => setMessage({ type: '', text: '' }), 4000);
+        return;
+      }
+
+      // If any Minor slot has "Not Opted", all must have "Not Opted" or be empty
+      if (hasNotOptedMinor && selectedMinorSlots.length > 0) {
+        setMessage({
+          type: 'error',
+          text: `You cannot mix "Not Opted" with course selections for Minor. Either select all Minor courses or choose "Not Opted" for all.`
+        });
+        setTimeout(() => setMessage({ type: '', text: '' }), 4000);
+        return;
+      }
     }
 
     console.log('Submitting selections:', selections);
@@ -324,7 +396,7 @@ const ElectiveSelectionPage = () => {
 
   return (
     <MainLayout>
-      <div className="max-w-4xl mx-auto py-6">
+      <div className="p-12 mx-auto py-6 card-custom">
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Elective Selection</h1>
@@ -359,13 +431,14 @@ const ElectiveSelectionPage = () => {
 
         {/* Rules Note */}
         <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <h3 className="text-sm font-bold text-blue-800 mb-2">📋 Selection Rules</h3>
-          <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
+          <h3 className="text-sm font-bold text-primary mb-2">📋 Selection Rules</h3>
+          <ul className="text-sm text-primary space-y-1 list-disc list-inside">
             <li><span className="font-semibold">Professional / Open / Mixed</span> slots are <span className="font-semibold">required</span> — you must select one course from each.</li>
-            <li><span className="font-semibold">Honour</span> slots are <span className="font-semibold">optional</span>, but if you choose one Honour course, you must fill <span className="font-semibold">all</span> Honour slots.</li>
-            <li><span className="font-semibold">Minor</span> slots are <span className="font-semibold">optional</span>, but if you choose one Minor course, you must fill <span className="font-semibold">all</span> Minor slots.</li>
+            <li><span className="font-semibold">Honour</span> slots are <span className="font-semibold">optional</span>: Select all Honour courses, choose "Not Opted" for all, or leave blank. You cannot mix courses with "Not Opted".</li>
+            <li><span className="font-semibold">Minor</span> slots are <span className="font-semibold">optional</span>: Select all Minor courses, choose "Not Opted" for all, or leave blank. You cannot mix courses with "Not Opted".</li>
             <li><span className="font-semibold">Add-On</span> slots are fully optional and independent.</li>
             <li>Total credits for Honour / Minor / Add-On combined must not exceed <span className="font-semibold">8 credits</span>.</li>
+            <li><span className="font-semibold">Note:</span> Honour/Minor sections are only visible to eligible students.</li>
           </ul>
         </div>
 
@@ -374,25 +447,27 @@ const ElectiveSelectionPage = () => {
           {Object.entries(groupedElectives).map(([slotName, slotData]) => {
             // Check if this optional slot type is "partially filled" (some but not all slots of same type selected)
             const sameTypeSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === slotData.slot_type);
-            const selectedSameType = sameTypeSlots.filter(s => selections[s]);
+            const selectedSameType = sameTypeSlots.filter(s => selections[s] && selections[s] !== 'NOT_OPTED');
+            const hasNotOptedForType = sameTypeSlots.some(s => selections[s] === 'NOT_OPTED');
             const isPartiallyFilled = ['HONOR', 'MINOR'].includes(slotData.slot_type)
               && selectedSameType.length > 0
               && selectedSameType.length < sameTypeSlots.length
-              && !selections[slotName];
+              && !selections[slotName]
+              && !hasNotOptedForType;
 
             return (
             <div
               key={slotName}
               className={`bg-white border-2 rounded p-4 ${
-                isSubmitted ? 'opacity-60 pointer-events-none' : ''
+                isSubmitted ? 'pointer-events-none' : ''
               } ${isPartiallyFilled ? 'border-orange-400' : 'border-gray-300'}`}
             >
               <div className="mb-3 flex justify-between items-start">
                 <div>
-                  <h2 className="text-xl font-bold text-gray-900">
+                  <h2 className="text-xl font-bold opacity-100 text-gray-900">
                     {slotName}
                   </h2>
-                  <span className="text-sm text-gray-600 font-medium">
+                  <span className="text-sm text-gray-600 opacity-100 font-medium">
                     {slotData.slot_type === 'PROFESSIONAL' && '📚 Professional Elective'}
                     {slotData.slot_type === 'OPEN' && '🌐 Open Elective'}
                     {slotData.slot_type === 'MIXED' && '📚🌐 Professional + Open Elective'}
@@ -426,14 +501,50 @@ const ElectiveSelectionPage = () => {
               </div>
 
               <div className="space-y-2">
+                {/* Add "Not Opted" option for HONOR and MINOR slots */}
+                {['HONOR', 'MINOR'].includes(slotData.slot_type) && (
+                  <label
+                    className={`flex items-center p-3 border-2 rounded cursor-pointer transition ${
+                      selections[slotName] === 'NOT_OPTED'
+                        ? 'border-gray-900 bg-gray-100'
+                        : 'border-gray-200 hover:border-gray-400 hover:bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name={slotName}
+                      value="NOT_OPTED"
+                      checked={selections[slotName] === 'NOT_OPTED'}
+                      onChange={() => handleSelection(slotName, 'NOT_OPTED', 0)}
+                      disabled={isSubmitted}
+                      className="w-4 h-4 text-gray-900"
+                    />
+                    <div className="ml-3 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-lg font-bold text-gray-700">
+                          Not Opted
+                        </span>
+                        <span className="text-base text-gray-600">
+                          I do not wish to take {slotData.slot_type === 'HONOR' ? 'Honour' : 'Minor'} courses
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm text-gray-600">
+                          0 Credits
+                        </span>
+                      </div>
+                    </div>
+                  </label>
+                )}
+
                 {slotData.courses.map(course => (
                   <label
                     key={course.course_id}
                     className={`flex items-center p-3 border-2 rounded cursor-pointer transition ${
                       selections[slotName] === course.course_id
-                        ? 'border-gray-900 bg-gray-100'
-                        : 'border-gray-200 hover:border-gray-400 hover:bg-gray-50'
-                    }`}
+                        ? 'border-primary bg-gray-100'
+                        : 'border-background hover:border-gray-400 hover:bg-gray-50'
+                    } ${isSubmitted || isPartiallyFilled ? 'opacity-70 pointer-events-none' : ''}`}
                   >
                     <input
                       type="radio"
@@ -442,7 +553,7 @@ const ElectiveSelectionPage = () => {
                       checked={selections[slotName] === course.course_id}
                       onChange={() => handleSelection(slotName, course.course_id, course.credits)}
                       disabled={isSubmitted}
-                      className="w-4 h-4 text-gray-900"
+                      className={`w-4 h-4 text-gray-900`}
                     />
                     <div className="ml-3 flex-1">
                       <div className="flex items-baseline gap-2">

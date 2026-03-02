@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
+	"math/rand"
 	"net/http"
 	"server/db"
+	"sort"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type CourseEnrollment struct {
 
 // TeacherPreference represents a teacher's course preference
 type TeacherPreference struct {
+	PreferenceID     int    // ID from teacher_course_preferences table
 	FacultyID        string
 	TeacherName      string
 	CourseInternalID int
@@ -37,6 +39,7 @@ type TeacherPreference struct {
 
 // AllocationResult represents the outcome of an allocation
 type AllocationResult struct {
+	PreferenceID int       `json:"preference_id"` // Link to teacher_course_preferences
 	FacultyID    string    `json:"faculty_id"`
 	TeacherName  string    `json:"teacher_name"`
 	CourseID     int       `json:"course_id"`
@@ -48,20 +51,21 @@ type AllocationResult struct {
 	ErrorMessage string    `json:"error_message,omitempty"`
 }
 
-// calculateSections implements the 60-student rule with smart rounding
-func calculateSections(studentCount int) int {
+// calculateTeachersNeeded calculates required teacher count based on 60-student rule
+// remainder <= 30: round down | remainder > 30: round up
+func calculateTeachersNeeded(studentCount int) int {
 	if studentCount == 0 {
 		return 0
 	}
 
-	quotient := float64(studentCount) / 60.0
+	quotient := studentCount / 60
 	remainder := studentCount % 60
 
-	// If remainder < 30, round down; if >= 30, round up
-	if remainder < 30 {
-		return int(math.Floor(quotient))
+	// If remainder <= 30, round down; if > 30, round up
+	if remainder <= 30 {
+		return quotient
 	}
-	return int(math.Ceil(quotient))
+	return quotient + 1
 }
 
 // RunAutoAllocation - Main endpoint to trigger automatic allocation
@@ -191,27 +195,29 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// calculateCourseEnrollments gets course info from teacher preferences (not student enrollments)
-// For now, assume each course needs 1 section (can be enhanced later with actual student counts)
+// calculateCourseEnrollments gets all curriculum courses with student enrollment data
 func calculateCourseEnrollments(academicYear string, semester int) (map[string]*CourseEnrollment, error) {
-	// Get unique courses from teacher preferences for this semester
+	// Get ALL courses from curriculum (not just from preferences)
+	// Join with student_courses to get actual student counts
 	query := `
-		SELECT DISTINCT
+		SELECT 
 			c.id,
-			tcp.course_id as course_code,
+			c.course_code,
 			c.course_name,
-			tcp.semester,
-			tcp.batch,
-			60 as total_students
-		FROM teacher_course_preferences tcp
-		JOIN courses c ON tcp.course_id = c.course_code
-		WHERE tcp.academic_year = ?
-		AND tcp.semester = ?
-		AND tcp.status IN ('approved', 'pending')
-		GROUP BY c.id, tcp.course_id, c.course_name, tcp.semester, tcp.batch
+			nc.semester_number,
+			'' as batch,
+			COALESCE(NULLIF(COUNT(DISTINCT sc.student_id), 0), 60) as total_students
+		FROM curriculum_courses cc
+		JOIN normal_cards nc ON cc.semester_id = nc.id
+		JOIN courses c ON cc.course_id = c.id
+		LEFT JOIN student_courses sc ON c.id = sc.course_id
+		WHERE nc.semester_number = ?
+		AND nc.card_type = 'semester'
+		GROUP BY c.id, c.course_code, c.course_name, nc.semester_number
+		ORDER BY c.course_code
 	`
 
-	rows, err := db.DB.Query(query, academicYear, semester)
+	rows, err := db.DB.Query(query, semester)
 	if err != nil {
 		return nil, fmt.Errorf("query error: %v", err)
 	}
@@ -234,8 +240,11 @@ func calculateCourseEnrollments(academicYear string, semester int) (map[string]*
 			continue
 		}
 
-		// Calculate required sections using the 60-student rule
-		enrollment.RequiredSections = calculateSections(enrollment.TotalStudents)
+		// Calculate required teachers using the 60-student rule
+		enrollment.RequiredSections = calculateTeachersNeeded(enrollment.TotalStudents)
+
+		log.Printf("  Course %s (%s): %d students → %d teachers needed", 
+			enrollment.CourseCode, enrollment.CourseName, enrollment.TotalStudents, enrollment.RequiredSections)
 
 		enrollments[enrollment.CourseCode] = &enrollment
 	}
@@ -247,6 +256,7 @@ func calculateCourseEnrollments(academicYear string, semester int) (map[string]*
 func getTeacherPreferences(academicYear string, semester int) (map[string][]TeacherPreference, error) {
 	query := `
 		SELECT 
+			tcp.id,
 			t.faculty_id,
 			t.name as teacher_name,
 			c.id as course_internal_id,
@@ -267,6 +277,7 @@ func getTeacherPreferences(academicYear string, semester int) (map[string][]Teac
 		WHERE tcp.academic_year = ? 
 		AND tcp.semester = ?
 		AND tcp.status IN ('approved', 'pending')
+		AND tcp.is_active = 1
 		ORDER BY t.faculty_id, tcp.priority
 	`
 
@@ -281,6 +292,7 @@ func getTeacherPreferences(academicYear string, semester int) (map[string][]Teac
 	for rows.Next() {
 		var pref TeacherPreference
 		err := rows.Scan(
+			&pref.PreferenceID,
 			&pref.FacultyID,
 			&pref.TeacherName,
 			&pref.CourseInternalID,
@@ -303,161 +315,261 @@ func getTeacherPreferences(academicYear string, semester int) (map[string][]Teac
 	return preferences, nil
 }
 
-// performAllocation runs the two-pass allocation algorithm
+// performAllocation allocates teachers to courses based on curriculum demand and preferences
 func performAllocation(enrollments map[string]*CourseEnrollment, preferences map[string][]TeacherPreference) []AllocationResult {
 	var results []AllocationResult
 
-	// Debug: Show what we're working with
-	log.Printf("DEBUG: Enrollments map has %d courses:", len(enrollments))
-	for code := range enrollments {
-		log.Printf("  - Course code in enrollments: '%s'", code)
-	}
-	
-	log.Printf("DEBUG: Preferences for %d teachers:", len(preferences))
+	log.Printf("📊 Total courses to allocate: %d", len(enrollments))
+	log.Printf("📊 Total teachers with preferences: %d", len(preferences))
+
+	// Build reverse map: course_code -> list of teachers who prefer it
+	courseToTeachers := make(map[string][]string) // course_code -> []faculty_id
 	for facultyID, prefs := range preferences {
-		log.Printf("  - Teacher %s has %d preferences", facultyID, len(prefs))
-		for _, p := range prefs {
-			log.Printf("    * Course code in pref: '%s' (priority %d)", p.CourseCode, p.Priority)
+		for _, pref := range prefs {
+			courseToTeachers[pref.CourseCode] = append(courseToTeachers[pref.CourseCode], facultyID)
 		}
 	}
 
-	// Track how many sections still needed per course
-	courseNeedMap := make(map[string]int)
-	for code, enrollment := range enrollments {
-		courseNeedMap[code] = enrollment.RequiredSections
+	// Build list of all faculty IDs for random selection
+	var allTeachers []string
+	for facultyID := range preferences {
+		allTeachers = append(allTeachers, facultyID)
 	}
+	sort.Strings(allTeachers)
 
 	// Track allocations per teacher per course type
-	teacherAllocationCount := make(map[string]map[string]int) // faculty_id -> course_type -> count
+	teacherAllocationCount := make(map[string]map[string]int)
 	for facultyID := range preferences {
 		teacherAllocationCount[facultyID] = make(map[string]int)
 	}
 
-	// Track which teachers have gotten at least 1 course
-	teacherHasAllocation := make(map[string]bool)
+	// Track which courses each teacher has been allocated
+	teacherAllocatedCourses := make(map[string]map[string]bool)
+	for facultyID := range preferences {
+		teacherAllocatedCourses[facultyID] = make(map[string]bool)
+	}
 
-	// FIRST PASS: Guarantee each teacher gets at least 1 course from their preferences
-	log.Println("🔄 Phase 1: Guaranteeing minimum allocation per teacher")
+	// Initialize max counts per teacher from preferences
+	teacherMaxCounts := make(map[string]map[string]int) // faculty_id -> course_type -> max
 	for facultyID, prefs := range preferences {
-		if teacherHasAllocation[facultyID] {
-			continue // Already got one
+		if teacherMaxCounts[facultyID] == nil {
+			teacherMaxCounts[facultyID] = make(map[string]int)
 		}
-
 		for _, pref := range prefs {
-			log.Printf("    Checking: %s wants %s (need=%d, allocated=%d, max=%d)", 
-				facultyID, pref.CourseCode, courseNeedMap[pref.CourseCode], 
-				teacherAllocationCount[facultyID][pref.CourseType], pref.MaxCount)
-			
-			// Check if course still needs teachers
-			if courseNeedMap[pref.CourseCode] <= 0 {
-				log.Printf("      ❌ Course %s needs no more teachers (need=%d)", pref.CourseCode, courseNeedMap[pref.CourseCode])
-				continue
+			if teacherMaxCounts[facultyID][pref.CourseType] == 0 {
+				teacherMaxCounts[facultyID][pref.CourseType] = pref.MaxCount
 			}
-
-			// Check if teacher hasn't exceeded their limit for this course type
-			if teacherAllocationCount[facultyID][pref.CourseType] >= pref.MaxCount {
-				log.Printf("      ❌ Teacher %s exceeded limit for type %s (%d >= %d)", 
-					facultyID, pref.CourseType, teacherAllocationCount[facultyID][pref.CourseType], pref.MaxCount)
-				continue
-			}
-
-			// Allocate!
-			section := getSectionLetter(enrollments[pref.CourseCode].RequiredSections - courseNeedMap[pref.CourseCode])
-			results = append(results, AllocationResult{
-				FacultyID:   facultyID,
-				TeacherName: pref.TeacherName,
-				CourseID:    pref.CourseInternalID,
-				CourseCode:  pref.CourseCode,
-				CourseName:  pref.CourseName,
-				Section:     section,
-				AllocatedAt: time.Now(),
-				Success:     true,
-			})
-
-			courseNeedMap[pref.CourseCode]--
-			teacherAllocationCount[facultyID][pref.CourseType]++
-			teacherHasAllocation[facultyID] = true
-
-			log.Printf("  ✓ Guaranteed: %s (%s) → %s (Section %s, Priority %d)",
-				facultyID, pref.TeacherName, pref.CourseCode, section, pref.Priority)
-			break // Only one course per teacher in first pass
 		}
 	}
 
-	// SECOND PASS: Fill remaining allocations up to teacher limits
-	log.Println("🔄 Phase 2: Filling remaining allocations")
-	for facultyID, prefs := range preferences {
-		for _, pref := range prefs {
-			// Check if course still needs teachers
-			if courseNeedMap[pref.CourseCode] <= 0 {
+	log.Println("🔄 Starting curriculum-based allocation with random teacher assignment...")
+
+	// For each course that needs allocation
+	allocatedCount := 0
+	for courseCode, enrollment := range enrollments {
+		if enrollment.RequiredSections == 0 {
+			continue
+		}
+
+		log.Printf("\n📚 Allocating %s: needs %d teachers (%d students)", 
+			courseCode, enrollment.RequiredSections, enrollment.TotalStudents)
+
+		// Step 1: Collect teachers who prefer this course
+		preferringTeachers := courseToTeachers[courseCode]
+		log.Printf("   Teachers who prefer %s: %d", courseCode, len(preferringTeachers))
+
+		// Shuffle preferring teachers for randomness
+		rand.Shuffle(len(preferringTeachers), func(i, j int) {
+			preferringTeachers[i], preferringTeachers[j] = preferringTeachers[j], preferringTeachers[i]
+		})
+
+		// Step 2: Try to allocate from teachers who prefer this course
+		needCount := enrollment.RequiredSections
+		allocatedThisCourse := 0
+
+		for _, facultyID := range preferringTeachers {
+			if needCount == 0 {
+				break
+			}
+
+			// Skip if teacher already has this course
+			if teacherAllocatedCourses[facultyID][courseCode] {
 				continue
 			}
 
-			// Check if teacher hasn't exceeded their limit for this course type
-			if teacherAllocationCount[facultyID][pref.CourseType] >= pref.MaxCount {
-				continue
-			}
-
-			// Check if this teacher already has this exact course assigned
-			alreadyAssigned := false
-			for _, result := range results {
-				if result.FacultyID == facultyID && result.CourseCode == pref.CourseCode {
-					alreadyAssigned = true
+			// Find the course type for this teacher's preference for this course
+			var courseType string
+			var prefID int
+			for _, pref := range preferences[facultyID] {
+				if pref.CourseCode == courseCode {
+					courseType = pref.CourseType
+					prefID = pref.PreferenceID
 					break
 				}
 			}
 
-			if alreadyAssigned {
+			// Check if teacher has capacity for this course type
+			maxForType := teacherMaxCounts[facultyID][courseType]
+			currentForType := teacherAllocationCount[facultyID][courseType]
+
+			if currentForType >= maxForType {
+				log.Printf("     ⚠️ %s at limit for %s (%d/%d)", facultyID, courseType, currentForType, maxForType)
 				continue
 			}
 
-			// Allocate additional section
-			section := getSectionLetter(enrollments[pref.CourseCode].RequiredSections - courseNeedMap[pref.CourseCode])
+			// Allocate!
 			results = append(results, AllocationResult{
+				PreferenceID: prefID,
 				FacultyID:   facultyID,
-				TeacherName: pref.TeacherName,
-				CourseID:    pref.CourseInternalID,
-				CourseCode:  pref.CourseCode,
-				CourseName:  pref.CourseName,
-				Section:     section,
+				TeacherName: "", // Will be filled from preference
+				CourseID:    enrollment.CourseID,
+				CourseCode:  courseCode,
+				CourseName:  enrollment.CourseName,
+				Section:     "A", // Placeholder
 				AllocatedAt: time.Now(),
 				Success:     true,
 			})
 
-			courseNeedMap[pref.CourseCode]--
-			teacherAllocationCount[facultyID][pref.CourseType]++
+			teacherAllocationCount[facultyID][courseType]++
+			teacherAllocatedCourses[facultyID][courseCode] = true
+			needCount--
+			allocatedThisCourse++
 
-			log.Printf("  ✓ Additional: %s (%s) → %s (Section %s)",
-				facultyID, pref.TeacherName, pref.CourseCode, section)
+			log.Printf("     ✓ Allocated %s (prefers: YES)", facultyID)
 		}
+
+		// Step 3: If still need more teachers, randomly select from those who don't prefer it
+		if needCount > 0 {
+			log.Printf("   ⚠️ Need %d more teachers for %s - randomly assigning from others", needCount, courseCode)
+
+			// Get teachers not yet allocated to this course
+			unallocatedTeachers := []string{}
+			for _, facultyID := range allTeachers {
+				if !teacherAllocatedCourses[facultyID][courseCode] {
+					unallocatedTeachers = append(unallocatedTeachers, facultyID)
+				}
+			}
+
+			// Shuffle for randomness
+			rand.Shuffle(len(unallocatedTeachers), func(i, j int) {
+				unallocatedTeachers[i], unallocatedTeachers[j] = unallocatedTeachers[j], unallocatedTeachers[i]
+			})
+
+			for _, facultyID := range unallocatedTeachers {
+				if needCount == 0 {
+					break
+				}
+
+				// Get any preference from this teacher to use their data (or use default values)
+				var courseType string
+				var maxCourses int
+				if len(preferences[facultyID]) > 0 {
+					courseType = preferences[facultyID][0].CourseType
+					maxCourses = preferences[facultyID][0].MaxCount
+				} else {
+					courseType = "theory"
+					maxCourses = 2
+				}
+
+				// Check capacity
+				currentForType := teacherAllocationCount[facultyID][courseType]
+				if currentForType >= maxCourses {
+					continue
+				}
+
+				// Allocate!
+				var prefID int
+				// Try to find preference for this course, if exists
+				for _, pref := range preferences[facultyID] {
+					if pref.CourseCode == courseCode {
+						prefID = pref.PreferenceID
+						break
+					}
+				}
+
+				results = append(results, AllocationResult{
+					PreferenceID: prefID,
+					FacultyID:   facultyID,
+					TeacherName: "",
+					CourseID:    enrollment.CourseID,
+					CourseCode:  courseCode,
+					CourseName:  enrollment.CourseName,
+					Section:     "A",
+					AllocatedAt: time.Now(),
+					Success:     true,
+				})
+
+				teacherAllocationCount[facultyID][courseType]++
+				teacherAllocatedCourses[facultyID][courseCode] = true
+				needCount--
+				allocatedThisCourse++
+
+				log.Printf("     ✓ Assigned %s (prefers: NO - randomly selected)", facultyID)
+			}
+
+			if needCount > 0 {
+				log.Printf("     ❌ Could not allocate %d teachers for %s (not enough available capacity)", needCount, courseCode)
+			}
+		}
+
+		allocatedCount += allocatedThisCourse
+		log.Printf("   ✓ %s: Successfully allocated %d/%d teachers needed", courseCode, allocatedThisCourse, enrollment.RequiredSections)
 	}
 
+	log.Printf("\n✅ Allocation complete: %d total allocations made", allocatedCount)
 	return results
 }
 
-// getSectionLetter converts section number to letter (0=A, 1=B, etc.)
-func getSectionLetter(sectionNum int) string {
-	if sectionNum < 0 {
-		return "A"
-	}
-	return string(rune('A' + sectionNum))
-}
-
-// saveAllocations inserts allocations into teacher_course_allocation table
+// saveAllocations inserts allocations into teacher_course_allocation table with upsert logic
 func saveAllocations(allocations []AllocationResult, academicYear string, semester int) (int, int) {
 	successCount := 0
 	failCount := 0
 
-	// First, clear existing allocations for this semester (optional, comment out if you want to keep old data)
-	// db.DB.Exec("DELETE FROM teacher_course_allocation")
+	// Begin transaction for atomic updates
+	tx, err := db.DB.Begin()
+	if err != nil {
+		log.Printf("❌ Failed to start transaction: %v", err)
+		return 0, len(allocations)
+	}
+	defer tx.Rollback()
+
+	// Step 1: Deactivate all existing allocations for this academic year and semester type
+	semesterType := "odd"
+	if semester%2 == 0 {
+		semesterType = "even"
+	}
+
+	log.Printf("🔄 Deactivating existing allocations for academic year %s, semester type %s", academicYear, semesterType)
+
+	// Deactivate previous allocations by setting is_active = 0
+	updateQuery := `
+		UPDATE teacher_course_allocation tca
+		JOIN teacher_course_preferences tcp ON tca.teacher_course_preferences_id = tcp.id
+		SET tca.is_active = 0
+		WHERE tcp.academic_year = ? AND tcp.current_semester_type = ?
+	`
+	result, err := tx.Exec(updateQuery, academicYear, semesterType)
+	if err != nil {
+		log.Printf("⚠️ Warning: Failed to deactivate existing allocations: %v", err)
+	} else {
+		rowsAffected, _ := result.RowsAffected()
+		log.Printf("✓ Deactivated %d existing allocations", rowsAffected)
+	}
+
+	// Step 2: Insert or Update allocations using UPSERT
+	log.Printf("📝 Processing %d allocations (insert or update)", len(allocations))
 
 	for i := range allocations {
-		// Insert into teacher_course_allocation
-		// Note: teacher_id field stores faculty_id (e.g., 'AD10953')
-		_, err := db.DB.Exec(`
-			INSERT INTO teacher_course_allocation (course_id, teacher_id)
-			VALUES (?, ?)
-		`, allocations[i].CourseID, allocations[i].FacultyID)
+		// Use INSERT ... ON DUPLICATE KEY UPDATE to handle unique constraint on (course_id, teacher_id)
+		// If record exists, update it; otherwise insert new
+		_, err := tx.Exec(`
+			INSERT INTO teacher_course_allocation 
+			(course_id, teacher_id, teacher_course_preferences_id, is_active)
+			VALUES (?, ?, ?, 1)
+			ON DUPLICATE KEY UPDATE
+				teacher_course_preferences_id = VALUES(teacher_course_preferences_id),
+				is_active = 1
+		`, allocations[i].CourseID, allocations[i].FacultyID, allocations[i].PreferenceID)
 
 		if err != nil {
 			log.Printf("❌ Failed to save allocation for %s → %s: %v",
@@ -466,9 +578,18 @@ func saveAllocations(allocations []AllocationResult, academicYear string, semest
 			allocations[i].ErrorMessage = err.Error()
 			failCount++
 		} else {
+			log.Printf("  ✓ Saved: %s → %s (pref_id=%d)", 
+				allocations[i].FacultyID, allocations[i].CourseCode, allocations[i].PreferenceID)
 			successCount++
 		}
 	}
 
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.Printf("❌ Failed to commit transaction: %v", err)
+		return 0, len(allocations)
+	}
+
+	log.Printf("✓ Transaction committed: %d successful, %d failed", successCount, failCount)
 	return successCount, failCount
 }

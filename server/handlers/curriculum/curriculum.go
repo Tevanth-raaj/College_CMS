@@ -194,11 +194,11 @@ func CreateSemester(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, vertical_name) VALUES (?, ?, ?, ?)"
-	var verticalName interface{} = nil
-	if card.CardType == "vertical" {
-		if strings.TrimSpace(card.VerticalName) != "" {
-			verticalName = strings.TrimSpace(card.VerticalName)
-		}
+	var verticalName interface{}
+	if card.CardType == "vertical" && strings.TrimSpace(card.VerticalName) != "" {
+		verticalName = strings.TrimSpace(card.VerticalName)
+	} else {
+		verticalName = nil
 	}
 	result, err := db.DB.Exec(query, card.CurriculumID, card.SemesterNumber, card.CardType, verticalName)
 	if err != nil {
