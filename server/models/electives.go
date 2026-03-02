@@ -98,12 +98,28 @@ type ElectiveCourse struct {
 	AssignedSlot     *string `json:"assigned_slot,omitempty"`
 }
 
+// MinorEligibleCourse - Course from another department's PE selections, available for minor
+type MinorEligibleCourse struct {
+	ID             int    `json:"id"`
+	CourseCode     string `json:"course_code"`
+	CourseName     string `json:"course_name"`
+	CourseType     string `json:"course_type"`
+	Category       string `json:"category"`
+	Credit         int    `json:"credit"`
+	DepartmentID   int    `json:"department_id"`
+	DepartmentName string `json:"department_name"`
+	DepartmentCode string `json:"department_code"`
+	SlotName       string `json:"slot_name"`
+	Semester       int    `json:"semester"`
+}
+
 // AvailableElectivesResponse - Response for available electives API
 type AvailableElectivesResponse struct {
-	Semester           int              `json:"semester"`
-	Batch              string           `json:"batch,omitempty"`
-	AcademicYear       string           `json:"academic_year"`
-	AvailableElectives []ElectiveCourse `json:"available_electives"`
+	Semester              int                   `json:"semester"`
+	Batch                 string                `json:"batch,omitempty"`
+	AcademicYear          string                `json:"academic_year"`
+	AvailableElectives    []ElectiveCourse      `json:"available_electives"`
+	MinorEligibleCourses  []MinorEligibleCourse `json:"minor_eligible_courses"`
 }
 
 // SaveElectivesRequest - Request to save HOD selections
@@ -256,6 +272,74 @@ type MinorSelectionResponse struct {
 
 // MinorAssignmentInfo - Info about a minor course assignment
 type MinorAssignmentInfo struct {
+	Semester       int    `json:"semester"`
+	CourseID       int    `json:"course_id"`
+	CourseCode     string `json:"course_code"`
+	CourseName     string `json:"course_name"`
+	Credit         int    `json:"credit"`
+	AllowedDeptIDs []int  `json:"allowed_dept_ids"`
+}
+
+// ==================== Open Elective Offering Models ====================
+
+// HODOEOffering represents HOD's open elective course offering to other departments
+type HODOEOffering struct {
+	ID               int       `json:"id"`
+	DepartmentID     int       `json:"department_id"`
+	CurriculumID     int       `json:"curriculum_id"`
+	OECardID         int       `json:"oe_card_id"`
+	Semester         int       `json:"semester"`
+	CourseID         int       `json:"course_id"`
+	AllowedDeptIDs   []int     `json:"allowed_dept_ids"`
+	AcademicYear     string    `json:"academic_year"`
+	Batch            *string   `json:"batch,omitempty"`
+	ApprovedByUserID int       `json:"approved_by_user_id"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// OECardInfo - OE card information for open elective offering
+type OECardInfo struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Semester    *int   `json:"semester,omitempty"`
+	CourseCount int    `json:"course_count"`
+}
+
+// SaveOEOfferingRequest - Request to save HOD OE offerings
+type SaveOEOfferingRequest struct {
+	OECardID            int                    `json:"oe_card_id"`
+	AllowedDeptIDs      []int                  `json:"allowed_dept_ids"`
+	AcademicYear        string                 `json:"academic_year"`
+	Batch               string                 `json:"batch,omitempty"`
+	SemesterAssignments []OESemesterAssignment `json:"semester_assignments"`
+	Status              string                 `json:"status"`
+}
+
+// OESemesterAssignment - Maps OE course to semester
+type OESemesterAssignment struct {
+	Semester int `json:"semester"`
+	CourseID int `json:"course_id"`
+}
+
+// SaveOEOfferingResponse - Response after saving OE offerings
+type SaveOEOfferingResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// OEOfferingResponse - Response for getting HOD's OE offerings
+type OEOfferingResponse struct {
+	OECardID     int                `json:"oe_card_id"`
+	OECardName   string             `json:"oe_card_name"`
+	AcademicYear string             `json:"academic_year"`
+	Batch        string             `json:"batch,omitempty"`
+	Assignments  []OEAssignmentInfo `json:"assignments"`
+}
+
+// OEAssignmentInfo - Info about an OE course offering assignment
+type OEAssignmentInfo struct {
 	Semester       int    `json:"semester"`
 	CourseID       int    `json:"course_id"`
 	CourseCode     string `json:"course_code"`

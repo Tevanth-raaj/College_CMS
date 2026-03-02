@@ -188,6 +188,11 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/minor-selections", curriculum.GetHODMinorSelections).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/minor-selections", curriculum.SaveHODMinorSelections).Methods("POST", "OPTIONS")
 
+	// Open Elective Offering routes
+	router.HandleFunc("/api/hod/oe-cards", curriculum.GetOECards).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings", curriculum.GetHODOEOfferings).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings", curriculum.SaveHODOEOfferings).Methods("POST", "OPTIONS")
+
 	// User Management routes
 	router.HandleFunc("/api/users", curriculum.GetUsers).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/users", curriculum.CreateUser).Methods("POST", "OPTIONS")
