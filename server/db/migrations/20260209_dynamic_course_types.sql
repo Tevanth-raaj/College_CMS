@@ -21,11 +21,39 @@ CREATE TABLE IF NOT EXISTS teacher_course_limits (
     FOREIGN KEY (course_type_id) REFERENCES course_type(id)
 );
 
--- Migrate existing data if possible (best effort)
-INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count)
-SELECT id, 1, theory_subject_count FROM teachers WHERE theory_subject_count > 0
-ON DUPLICATE KEY UPDATE max_count = VALUES(max_count);
+-- Migrate existing data if possible (best effort) - only if old columns exist
+-- Check if theory_subject_count column exists
+SET @col_theory_exists := (
+    SELECT COUNT(*) 
+    FROM information_schema.columns 
+    WHERE table_schema = DATABASE() 
+    AND table_name = 'teachers' 
+    AND column_name = 'theory_subject_count'
+);
 
-INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count)
-SELECT id, 3, theory_with_lab_subject_count FROM teachers WHERE theory_with_lab_subject_count > 0
-ON DUPLICATE KEY UPDATE max_count = VALUES(max_count);
+SET @sql_migrate_theory := IF(@col_theory_exists > 0,
+    'INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count) SELECT faculty_id, 1, theory_subject_count FROM teachers WHERE theory_subject_count > 0 ON DUPLICATE KEY UPDATE max_count = VALUES(max_count)',
+    'SELECT "Column theory_subject_count does not exist, skipping data migration"'
+);
+
+PREPARE stmt FROM @sql_migrate_theory;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- Check if theory_with_lab_subject_count column exists
+SET @col_lab_exists := (
+    SELECT COUNT(*) 
+    FROM information_schema.columns 
+    WHERE table_schema = DATABASE() 
+    AND table_name = 'teachers' 
+    AND column_name = 'theory_with_lab_subject_count'
+);
+
+SET @sql_migrate_lab := IF(@col_lab_exists > 0,
+    'INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count) SELECT faculty_id, 3, theory_with_lab_subject_count FROM teachers WHERE theory_with_lab_subject_count > 0 ON DUPLICATE KEY UPDATE max_count = VALUES(max_count)',
+    'SELECT "Column theory_with_lab_subject_count does not exist, skipping data migration"'
+);
+
+PREPARE stmt FROM @sql_migrate_lab;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

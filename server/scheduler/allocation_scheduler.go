@@ -1,6 +1,9 @@
 package scheduler
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -11,12 +14,12 @@ import (
 
 // StartAllocationScheduler starts the background scheduler
 func StartAllocationScheduler() {
-	log.Println("📅 Allocation scheduler started - checking every 1 MINUTE for testing")
+	log.Println("📅 Allocation scheduler started - checking every 1 MINUTE for closed teacher selection windows")
 
 	// Run immediately on startup
 	go checkAndRunAllocations()
 
-	// Then run every minute for testing
+	// Then run every minute to detect closed windows
 	ticker := time.NewTicker(1 * time.Minute)
 	go func() {
 		for range ticker.C {
@@ -25,44 +28,100 @@ func StartAllocationScheduler() {
 	}()
 }
 
-// checkAndRunAllocations checks if any teacher selection windows have closed
+// checkAndRunAllocations checks if any teacher selection windows have closed and triggers auto-allocation
 func checkAndRunAllocations() {
 	log.Printf("⏰ [%s] Checking for closed teacher selection windows...", time.Now().Format("2006-01-02 15:04:05"))
-	
-	// Query teacher_course_tracking for windows that closed
-	// Window closes at END OF DAY (23:59:59) on window_end date
-	// So we compare with DATE_ADD(window_end, INTERVAL 1 DAY) at midnight
-	query := `
-		SELECT academic_year, window_start, window_end
+
+	// Skip if any window is currently active
+	var activeCount int
+	err := db.DB.QueryRow(`
+		SELECT COUNT(*)
 		FROM teacher_course_tracking
-		WHERE DATE_ADD(window_end, INTERVAL 1 DAY) <= NOW()
-		AND DATE_ADD(window_end, INTERVAL 1 DAY) >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-		LIMIT 1
-	`
-
-	var academicYear string
-	var windowStart, windowEnd time.Time
-
-	err := db.DB.QueryRow(query).Scan(&academicYear, &windowStart, &windowEnd)
+		WHERE is_active = 1
+		AND window_start IS NOT NULL
+		AND window_end IS NOT NULL
+		AND window_start <= DATE(NOW())
+		AND window_end >= DATE(NOW())
+	`).Scan(&activeCount)
 	if err != nil {
-		log.Printf("   ℹ️  No closed windows found (all windows are either still open or closed more than 7 days ago)")
+		log.Printf("⚠️  Failed to check active windows: %v", err)
+		return
+	}
+	if activeCount > 0 {
+		log.Printf("ℹ️  Active window found - skipping allocation run")
 		return
 	}
 
-	log.Printf("🚀 Teacher selection window CLOSED for Academic Year: %s", academicYear)
-	log.Printf("   Window period: %v to %v (closes at 23:59:59 on end date)", windowStart.Format("2006-01-02"), windowEnd.Format("2006-01-02"))
-	log.Printf("   Triggering automatic allocation for ALL semesters...")
+	// Find the most recent closed window (that is still active)
+	query := `
+		SELECT academic_year, current_semester_type, window_start, window_end
+		FROM teacher_course_tracking
+		WHERE is_active = 1
+		AND window_end IS NOT NULL
+		AND window_end < DATE(NOW())
+		ORDER BY window_end DESC
+		LIMIT 1
+	`
 
-	// Trigger allocation by calling the handler
+	var academicYear, semesterType string
+	var windowStart, windowEnd time.Time
+
+	err = db.DB.QueryRow(query).Scan(&academicYear, &semesterType, &windowStart, &windowEnd)
+	if err != nil {
+		log.Printf("ℹ️  No closed windows to process")
+		return // No closed windows found to process
+	}
+
+	log.Printf("🚀 Found closed window: Academic Year %s (%s)", academicYear, semesterType)
+	log.Printf("   Window closed at: %v\n", windowEnd)
+
+	// 1. Create a proper JSON payload so the handler knows WHAT to save
+	payload := map[string]interface{}{
+		"academic_year": academicYear,
+		"semester_type": semesterType,
+	}
+	body, _ := json.Marshal(payload)
+
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("POST", "/api/allocations/run", nil)
+	r := httptest.NewRequest("POST", "/api/allocations/run", bytes.NewBuffer(body))
+	r.Header.Set("Content-Type", "application/json")
 
-	allocation.RunAutoAllocation(w, r)
+	// 2. Inject a dummy User ID into the Context 
+	// (Prevents the DB save from crashing if it tries to fetch the logged-in user)
+	// Change "user_id" to whatever context key your auth middleware uses if needed.
+	ctx := context.WithValue(r.Context(), "user_id", 1)
+	r = r.WithContext(ctx)
 
+	// 3. Catch silent database crashes and print them!
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("🔥 CRITICAL DB CRASH during allocation save: %v", rec)
+			}
+		}()
+		
+		// Run the allocation
+		allocation.RunAutoAllocation(w, r)
+	}()
+
+	// 4. Check result and mark window as inactive so it doesn't run again
 	if w.Code == http.StatusOK {
-		log.Println("✅ Automatic allocation completed successfully for all semesters")
+		log.Printf("✅ Automatic allocation completed AND saved for Academic Year %s\n", academicYear)
+		
+		// IMPORTANT: Set is_active to 0 so the scheduler doesn't process this same window again!
+		_, dbErr := db.DB.Exec(`
+			UPDATE teacher_course_tracking 
+			SET is_active = 0
+			WHERE academic_year = ? AND current_semester_type = ?
+		`, academicYear, semesterType)
+		
+		if dbErr != nil {
+			log.Printf("⚠️ Failed to mark window as inactive: %v", dbErr)
+		} else {
+			log.Printf("🧹 Window marked as inactive for Academic Year %s", academicYear)
+		}
 	} else {
-		log.Printf("❌ Automatic allocation failed with status: %d", w.Code)
-		log.Printf("   Response: %s", w.Body.String())
+		log.Printf("❌ Automatic allocation failed with status: %d for Academic Year %s", w.Code, academicYear)
+		log.Printf("   Response: %s\n", w.Body.String())
 	}
 }

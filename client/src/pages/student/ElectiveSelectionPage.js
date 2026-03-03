@@ -10,6 +10,9 @@ const ElectiveSelectionPage = () => {
   const [loading, setLoading] = useState(true);
   const [electiveData, setElectiveData] = useState(null);
   const [groupedElectives, setGroupedElectives] = useState({});
+  // null = no optional track chosen, or one of 'HONOR' | 'MINOR'
+  const [optionalType, setOptionalType] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const userEmail = localStorage.getItem('userEmail'); // Get email from login
   const userName = localStorage.getItem('userName');
@@ -44,29 +47,24 @@ const ElectiveSelectionPage = () => {
         }
         setGroupedElectives(grouped);
 
-        // Load existing selections from backend (PRIMARY SOURCE OF TRUTH)
         let finalSelections = {};
-        
+
         if (data.existing_selections && Object.keys(data.existing_selections).length > 0) {
           console.log('Loading existing selections from backend:', data.existing_selections);
-          finalSelections = { ...data.existing_selections };
+          // Only keep selections whose slot_name still exists in the current slot list
+          // — filters out ghost/stale entries from old UI iterations
+          const validSlotNames = new Set((data.slots || []).map(s => s.slot_name));
+          finalSelections = Object.fromEntries(
+            Object.entries(data.existing_selections).filter(([k]) => validSlotNames.has(k))
+          );
         }
         
-        // Also check localStorage for any "NOT_OPTED" selections to restore
-        const savedSelections = localStorage.getItem(`elective_selections_${userEmail}_sem${data.next_semester}`);
-        if (savedSelections) {
-          try {
-            const parsed = JSON.parse(savedSelections);
-            // Merge any "NOT_OPTED" from localStorage (only for slots without backend selections)
-            Object.entries(parsed).forEach(([slotName, value]) => {
-              if (value === 'NOT_OPTED' && !finalSelections[slotName]) {
-                finalSelections[slotName] = 'NOT_OPTED';
-                console.log(`Restored NOT_OPTED for slot: ${slotName}`);
-              }
-            });
-          } catch (e) {
-            console.error('Error parsing localStorage selections:', e);
-          }
+        // Detect which optional track (HONOR/MINOR only) the student previously selected
+        if (Object.keys(finalSelections).length > 0 && data.slots) {
+          const hasHonor = data.slots.some(s => s.slot_type === 'HONOR' && finalSelections[s.slot_name]);
+          const hasMinor = data.slots.some(s => s.slot_type === 'MINOR' && finalSelections[s.slot_name]);
+          if (hasHonor) setOptionalType('HONOR');
+          else if (hasMinor) setOptionalType('MINOR');
         }
         
         if (Object.keys(finalSelections).length > 0) {
@@ -75,10 +73,10 @@ const ElectiveSelectionPage = () => {
           // Calculate credits using data directly (avoid stale closure on electiveData)
           let total = 0;
           Object.entries(finalSelections).forEach(([slotName, courseId]) => {
-            if (courseId === 'NOT_OPTED') return; // NOT_OPTED doesn't count towards credits
+            if (courseId === 'NOT_OPTED') return; // keep for any legacy data safety
             const slot = data.slots.find(s => s.slot_name === slotName);
             if (slot && ['HONOR', 'MINOR', 'ADDON'].includes(slot.slot_type)) {
-              const course = slot.courses.find(c => c.course_id === courseId);
+              const course = slot.courses.find(c => c.hod_selection_id === courseId);
               if (course) total += course.credits;
             }
           });
@@ -138,40 +136,23 @@ const ElectiveSelectionPage = () => {
     let total = 0;
     console.log('Calculating credits for selections:', currentSelections);
     Object.entries(currentSelections).forEach(([slotName, courseId]) => {
-      // Skip "NOT_OPTED" selections
-      if (courseId === 'NOT_OPTED') {
-        console.log(`Skipping NOT_OPTED for slot: ${slotName}`);
-        return;
-      }
-
       // Check if this slot is HONOR/MINOR/ADDON by slot type
       const slot = electiveData.slots.find(s => s.slot_name === slotName);
-      console.log(`Slot: ${slotName}, Type: ${slot?.slot_type}, Course ID: ${courseId}`);
       if (slot && ['HONOR', 'MINOR', 'ADDON'].includes(slot.slot_type)) {
-        // Find the course in this slot and add its credits
-        const course = slot.courses.find(c => c.course_id === courseId);
-        if (course) {
-          console.log(`  Adding ${course.credits} credits from ${course.course_name}`);
-          total += course.credits;
-        }
+        const course = slot.courses.find(c => c.hod_selection_id === courseId);
+        if (course) total += course.credits;
       }
     });
-    console.log(`Total credits calculated: ${total}`);
     setTotalCreditUsed(total);
   };
 
   const handleSelection = (slotName, courseId, credits) => {
     if (isSubmitted) return;
 
-    // Find the slot to check its type
-    const slot = electiveData.slots.find(s => s.slot_name === slotName);
-
-    // Special handling for "NOT_OPTED" - it doesn't count towards credits
-    if (courseId === 'NOT_OPTED') {
-      const newSelections = {
-        ...selections,
-        [slotName]: courseId
-      };
+    // null courseId = unenroll (remove from selections)
+    if (courseId === null) {
+      const newSelections = { ...selections };
+      delete newSelections[slotName];
       setSelections(newSelections);
       calculateTotalCredits(newSelections);
       localStorage.setItem(
@@ -181,14 +162,16 @@ const ElectiveSelectionPage = () => {
       return;
     }
 
-    // Check COMMON credit limit for honour/minor/addon (total 6 credits shared)
+    // Find the slot to check its type
+    const slot = electiveData.slots.find(s => s.slot_name === slotName);
+
+    // Check COMMON credit limit for honour/minor/addon (total 8 credits shared)
     if (slot && ['HONOR', 'MINOR', 'ADDON'].includes(slot.slot_type)) {
       let adjustedCredit = totalCreditUsed;
 
       // If changing selection, subtract old credits first
-      if (selections[slotName] && selections[slotName] !== 'NOT_OPTED') {
-        // Find the old course in this slot
-        const oldCourse = slot.courses.find(c => c.course_id === selections[slotName]);
+      if (selections[slotName]) {
+        const oldCourse = slot.courses.find(c => c.hod_selection_id === selections[slotName]);
         if (oldCourse) {
           adjustedCredit -= oldCourse.credits;
         }
@@ -221,6 +204,7 @@ const ElectiveSelectionPage = () => {
   };
 
   const handleSubmit = async () => {
+    if (isSubmitting) return; // Prevent double-submit
     const requiredSlots = Object.keys(groupedElectives).filter(slotName => {
       const slotType = groupedElectives[slotName].slot_type;
       return slotType === 'PROFESSIONAL' || slotType === 'MIXED' || slotType === 'OPEN';
@@ -240,55 +224,22 @@ const ElectiveSelectionPage = () => {
       return;
     }
 
-    // Validate: if ANY HONOR slot is selected (and not "NOT_OPTED"), ALL HONOR slots must be filled
-    // Only validate if HONOR slots are present in groupedElectives (eligible student)
-    const allHonorSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === 'HONOR');
-    if (allHonorSlots.length > 0) {
-      const selectedHonorSlots = allHonorSlots.filter(s => selections[s] && selections[s] !== 'NOT_OPTED');
-      const hasNotOptedHonor = allHonorSlots.some(s => selections[s] === 'NOT_OPTED');
-      
-      if (selectedHonorSlots.length > 0 && selectedHonorSlots.length < allHonorSlots.length && !hasNotOptedHonor) {
-        setMessage({
-          type: 'error',
-          text: `If you choose an Honour course, you must fill all ${allHonorSlots.length} Honour slots or select "Not Opted". Please select ${allHonorSlots.length - selectedHonorSlots.length} more.`
-        });
-        setTimeout(() => setMessage({ type: '', text: '' }), 4000);
-        return;
-      }
-
-      // If any Honor slot has "Not Opted", all must have "Not Opted" or be empty
-      if (hasNotOptedHonor && selectedHonorSlots.length > 0) {
-        setMessage({
-          type: 'error',
-          text: `You cannot mix "Not Opted" with course selections for Honour. Either select all Honour courses or choose "Not Opted" for all.`
-        });
+    // If student chose HONOUR track, all HONOR slots must be filled
+    if (optionalType === 'HONOR') {
+      const allHonorSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === 'HONOR');
+      const selectedHonorSlots = allHonorSlots.filter(s => selections[s]);
+      if (selectedHonorSlots.length < allHonorSlots.length) {
+        setMessage({ type: 'error', text: `Please select a course for all ${allHonorSlots.length} Honour slots (${selectedHonorSlots.length}/${allHonorSlots.length} filled).` });
         setTimeout(() => setMessage({ type: '', text: '' }), 4000);
         return;
       }
     }
-
-    // Validate: if ANY MINOR slot is selected (and not "NOT_OPTED"), ALL MINOR slots must be filled
-    // Only validate if MINOR slots are present in groupedElectives (eligible student)
-    const allMinorSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === 'MINOR');
-    if (allMinorSlots.length > 0) {
-      const selectedMinorSlots = allMinorSlots.filter(s => selections[s] && selections[s] !== 'NOT_OPTED');
-      const hasNotOptedMinor = allMinorSlots.some(s => selections[s] === 'NOT_OPTED');
-      
-      if (selectedMinorSlots.length > 0 && selectedMinorSlots.length < allMinorSlots.length && !hasNotOptedMinor) {
-        setMessage({
-          type: 'error',
-          text: `If you choose a Minor course, you must fill all ${allMinorSlots.length} Minor slots or select "Not Opted". Please select ${allMinorSlots.length - selectedMinorSlots.length} more.`
-        });
-        setTimeout(() => setMessage({ type: '', text: '' }), 4000);
-        return;
-      }
-
-      // If any Minor slot has "Not Opted", all must have "Not Opted" or be empty
-      if (hasNotOptedMinor && selectedMinorSlots.length > 0) {
-        setMessage({
-          type: 'error',
-          text: `You cannot mix "Not Opted" with course selections for Minor. Either select all Minor courses or choose "Not Opted" for all.`
-        });
+    // If student chose MINOR track, all MINOR slots must be filled
+    if (optionalType === 'MINOR') {
+      const allMinorSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === 'MINOR');
+      const selectedMinorSlots = allMinorSlots.filter(s => selections[s]);
+      if (selectedMinorSlots.length < allMinorSlots.length) {
+        setMessage({ type: 'error', text: `Please select a course for all ${allMinorSlots.length} Minor slots (${selectedMinorSlots.length}/${allMinorSlots.length} filled).` });
         setTimeout(() => setMessage({ type: '', text: '' }), 4000);
         return;
       }
@@ -298,6 +249,7 @@ const ElectiveSelectionPage = () => {
     console.log('Email:', userEmail);
     console.log('Semester:', electiveData.next_semester);
 
+    setIsSubmitting(true);
     try {
       const response = await fetch(
         `${API_BASE_URL}/students/electives/selections?email=${userEmail}`,
@@ -352,7 +304,43 @@ const ElectiveSelectionPage = () => {
       console.error('Error saving selections:', error);
       setMessage({ type: 'error', text: 'Network error. Please try again.' });
       setTimeout(() => setMessage({ type: '', text: '' }), 5000);
+    } finally {
+      setIsSubmitting(false);
     }
+  };
+
+  // Clear all optional slots and switch track
+  // For HONOR/MINOR: auto-enroll the single course in each slot
+  const handleOptionalTypeChange = (type) => {
+    if (isSubmitted) return;
+
+    // Clear only HONOR/MINOR optional selections (ADDON stays — always auto-enrolled)
+    const newSelections = { ...selections };
+    Object.keys(groupedElectives).forEach(slotName => {
+      if (['HONOR', 'MINOR'].includes(groupedElectives[slotName].slot_type)) {
+        delete newSelections[slotName];
+      }
+    });
+
+    // For HONOR/MINOR: auto-select the single course in each slot
+    if (type === 'HONOR' || type === 'MINOR') {
+      let creditTotal = 0;
+      Object.entries(groupedElectives).forEach(([slotName, slotData]) => {
+        if (slotData.slot_type === type && slotData.courses.length > 0) {
+          const course = slotData.courses[0]; // only 1 course per slot
+          newSelections[slotName] = course.hod_selection_id;
+          creditTotal += course.credits;
+        }
+      });
+      setTotalCreditUsed(creditTotal);
+    } else {
+      setTotalCreditUsed(0);
+    }
+
+    setOptionalType(type);
+    setSelections(newSelections);
+    if (type !== 'HONOR' && type !== 'MINOR') calculateTotalCredits(newSelections);
+    localStorage.setItem(`elective_selections_${userEmail}_sem${electiveData?.next_semester}`, JSON.stringify(newSelections));
   };
 
   const getCategoryTitle = (category) => {
@@ -366,11 +354,24 @@ const ElectiveSelectionPage = () => {
     return titles[category] || category.toUpperCase();
   };
 
+  // Slot type config — label, icon, colour accent
+  const slotTypeConfig = {
+    PROFESSIONAL: { label: 'Professional Elective', icon: '📚', badge: 'bg-blue-100 text-blue-800', border: 'border-blue-300', required: true },
+    OPEN:         { label: 'Open Elective',          icon: '🌐', badge: 'bg-green-100 text-green-800', border: 'border-green-300', required: true },
+    MIXED:        { label: 'Professional + Open',    icon: '📚', badge: 'bg-purple-100 text-purple-800', border: 'border-purple-300', required: true },
+    HONOR:        { label: 'Honour Course',          icon: '🏆', badge: 'bg-yellow-100 text-yellow-800', border: 'border-yellow-300', required: false },
+    MINOR:        { label: 'Minor Course',           icon: '📖', badge: 'bg-orange-100 text-orange-800', border: 'border-orange-300', required: false },
+    ADDON:        { label: 'Add-On Course',          icon: '➕', badge: 'bg-gray-100 text-gray-700',   border: 'border-gray-300',   required: false },
+  };
+
   if (loading) {
     return (
       <MainLayout>
         <div className="flex items-center justify-center min-h-screen">
-          <div className="text-2xl text-gray-700">Loading electives...</div>
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-10 h-10 border-4 border-gray-300 border-t-gray-800 rounded-full animate-spin" />
+            <p className="text-gray-600 text-lg font-medium">Loading your electives…</p>
+          </div>
         </div>
       </MainLayout>
     );
@@ -379,238 +380,400 @@ const ElectiveSelectionPage = () => {
   if (!electiveData || !electiveData.slots || electiveData.slots.length === 0) {
     return (
       <MainLayout>
-        <div className="max-w-4xl mx-auto py-12">
-          <div className="text-center">
-            <h1 className="text-3xl font-bold text-gray-900 mb-4">No Electives Available</h1>
-            <p className="text-xl text-gray-600">
-              There are no electives available for the next semester at this time.
-            </p>
-            <p className="text-lg text-gray-500 mt-2">
-              Please contact your HOD if you believe this is an error.
-            </p>
-          </div>
+        <div className="max-w-2xl mx-auto py-20 text-center">
+          <div className="text-5xl mb-4">📭</div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">No Electives Available</h1>
+          <p className="text-gray-500">There are no electives available for the next semester at this time.</p>
+          <p className="text-gray-400 text-sm mt-1">Please contact your HOD if you believe this is an error.</p>
         </div>
       </MainLayout>
     );
   }
 
-  return (
-    <MainLayout>
-      <div className="p-12 mx-auto py-6 card-custom">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Elective Selection</h1>
-          <p className="text-lg text-gray-600">Semester {electiveData.next_semester}</p>
-          <div className="mt-3 p-3 bg-gray-100 border border-gray-300 rounded">
-            <p className="text-base text-gray-800">
-              <span className="font-semibold">Total Credits (Honour/Minor/Add-On):</span> {totalCreditUsed}/8
-              <span className="ml-3 text-gray-600">(Remaining: {8 - totalCreditUsed})</span>
-            </p>
+  const requiredSlots = Object.keys(groupedElectives).filter(s =>
+    ['PROFESSIONAL', 'MIXED', 'OPEN'].includes(groupedElectives[s].slot_type)
+  );
+  const filledRequired = requiredSlots.filter(s => selections[s]);
+  const progressPct = requiredSlots.length > 0 ? Math.round((filledRequired.length / requiredSlots.length) * 100) : 100;
+
+  // Derive which optional track types are available (HONOR/MINOR only — ADDON is always auto-enrolled)
+  const availableOptionalTypes = [...new Set(
+    Object.values(groupedElectives)
+      .filter(s => ['HONOR','MINOR'].includes(s.slot_type))
+      .map(s => s.slot_type)
+  )];
+
+  const addonSlotEntries = Object.entries(groupedElectives).filter(([, s]) => s.slot_type === 'ADDON');
+
+  const requiredSlotEntries = Object.entries(groupedElectives).filter(([, s]) =>
+    ['PROFESSIONAL', 'OPEN', 'MIXED'].includes(s.slot_type)
+  );
+  const optionalSlotEntries = optionalType
+    ? Object.entries(groupedElectives).filter(([, s]) => s.slot_type === optionalType)
+    : [];
+
+  // Track-specific fill counts (HONOR/MINOR only)
+  const optionalSlotsForTrack = optionalType
+    ? Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === optionalType)
+    : [];
+  const filledOptional = optionalSlotsForTrack.filter(s => selections[s]);
+
+  // HONOR/MINOR are auto-filled on track pick, so always complete
+  const optionalTrackComplete =
+    !optionalType || optionalType === 'HONOR' || optionalType === 'MINOR' ||
+    optionalType === 'ADDON'; // ADDON is always optional per-slot, never blocks submit
+
+  const canSubmit = filledRequired.length === requiredSlots.length && (electiveData?.window_open ?? true);
+
+  // Shared required slot card renderer
+  const renderRequiredCard = (slotName, slotData) => {
+    const cfg = slotTypeConfig[slotData.slot_type];
+    const selectedValue = selections[slotName] || '';
+    const selectedCourse = slotData.courses.find(c => c.hod_selection_id === selectedValue);
+
+    const handleDropdownChange = (e) => {
+      const val = e.target.value;
+      if (!val) {
+        const newSel = { ...selections };
+        delete newSel[slotName];
+        setSelections(newSel);
+        calculateTotalCredits(newSel);
+        localStorage.setItem(`elective_selections_${userEmail}_sem${electiveData.next_semester}`, JSON.stringify(newSel));
+        return;
+      }
+      const course = slotData.courses.find(c => String(c.hod_selection_id) === String(val));
+      handleSelection(slotName, course.hod_selection_id, course.credits);
+    };
+
+    return (
+      <div
+        key={slotName}
+        className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${
+          isSubmitted ? 'opacity-60 pointer-events-none' : ''
+        } ${selectedValue ? 'border-gray-300' : 'border-gray-200 hover:border-gray-300'}`}
+      >
+        <div className="px-4 pt-4 pb-3 bg-gray-50 border-b border-gray-100">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-sm">{cfg.icon}</span>
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${cfg.badge}`}>{cfg.label}</span>
+            <span className="text-xs text-red-500 font-semibold">Required</span>
           </div>
+          <h2 className="text-sm font-bold text-gray-900">{slotName}</h2>
         </div>
-
-        {/* Message */}
-        {message.text && (
-          <div className={`mb-4 p-3 rounded text-base font-medium ${
-            message.type === 'success' 
-              ? 'bg-green-50 text-green-800 border border-green-200' 
-              : 'bg-red-50 text-red-800 border border-red-200'
-          }`}>
-            {message.text}
-          </div>
-        )}
-
-        {/* Submission Status */}
-        {isSubmitted && (
-          <div className="mb-4 p-3 bg-gray-100 border border-gray-300 rounded">
-            <p className="text-base font-medium text-gray-800">
-              ✓ Your selections have been submitted and locked.
-            </p>
-          </div>
-        )}
-
-        {/* Rules Note */}
-        <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <h3 className="text-sm font-bold text-primary mb-2">📋 Selection Rules</h3>
-          <ul className="text-sm text-primary space-y-1 list-disc list-inside">
-            <li><span className="font-semibold">Professional / Open / Mixed</span> slots are <span className="font-semibold">required</span> — you must select one course from each.</li>
-            <li><span className="font-semibold">Honour</span> slots are <span className="font-semibold">optional</span>: Select all Honour courses, choose "Not Opted" for all, or leave blank. You cannot mix courses with "Not Opted".</li>
-            <li><span className="font-semibold">Minor</span> slots are <span className="font-semibold">optional</span>: Select all Minor courses, choose "Not Opted" for all, or leave blank. You cannot mix courses with "Not Opted".</li>
-            <li><span className="font-semibold">Add-On</span> slots are fully optional and independent.</li>
-            <li>Total credits for Honour / Minor / Add-On combined must not exceed <span className="font-semibold">8 credits</span>.</li>
-            <li><span className="font-semibold">Note:</span> Honour/Minor sections are only visible to eligible students.</li>
-          </ul>
-        </div>
-
-        {/* Electives List */}
-        <div className="space-y-5">
-          {Object.entries(groupedElectives).map(([slotName, slotData]) => {
-            // Check if this optional slot type is "partially filled" (some but not all slots of same type selected)
-            const sameTypeSlots = Object.keys(groupedElectives).filter(s => groupedElectives[s].slot_type === slotData.slot_type);
-            const selectedSameType = sameTypeSlots.filter(s => selections[s] && selections[s] !== 'NOT_OPTED');
-            const hasNotOptedForType = sameTypeSlots.some(s => selections[s] === 'NOT_OPTED');
-            const isPartiallyFilled = ['HONOR', 'MINOR'].includes(slotData.slot_type)
-              && selectedSameType.length > 0
-              && selectedSameType.length < sameTypeSlots.length
-              && !selections[slotName]
-              && !hasNotOptedForType;
-
-            return (
-            <div
-              key={slotName}
-              className={`bg-white border-2 rounded p-4 ${
-                isSubmitted ? 'pointer-events-none' : ''
-              } ${isPartiallyFilled ? 'border-orange-400' : 'border-gray-300'}`}
+        <div className="px-4 py-4">
+          <div className="relative">
+            <select
+              value={selectedValue}
+              onChange={handleDropdownChange}
+              disabled={isSubmitted || electiveData?.window_open === false}
+              className={`w-full appearance-none bg-white border-2 rounded-xl px-4 py-3 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 transition cursor-pointer ${
+                selectedValue ? 'border-gray-900 text-gray-800 focus:ring-gray-400' : 'border-gray-200 text-gray-400 focus:ring-blue-300'
+              } disabled:opacity-60 disabled:cursor-not-allowed`}
             >
-              <div className="mb-3 flex justify-between items-start">
-                <div>
-                  <h2 className="text-xl font-bold opacity-100 text-gray-900">
-                    {slotName}
-                  </h2>
-                  <span className="text-sm text-gray-600 opacity-100 font-medium">
-                    {slotData.slot_type === 'PROFESSIONAL' && '📚 Professional Elective'}
-                    {slotData.slot_type === 'OPEN' && '🌐 Open Elective'}
-                    {slotData.slot_type === 'MIXED' && '📚🌐 Professional + Open Elective'}
-                    {slotData.slot_type === 'HONOR' && '🏆 Honour Course (Optional — must fill all Honour slots if choosing)'}
-                    {slotData.slot_type === 'MINOR' && '📖 Minor Course (Optional — must fill all Minor slots if choosing)'}
-                    {slotData.slot_type === 'ADDON' && '➕ Add-On Course (Optional)'}
-                  </span>
-                  {isPartiallyFilled && (
-                    <p className="text-xs text-orange-600 font-semibold mt-1">
-                      ⚠ You must fill all {slotData.slot_type === 'HONOR' ? 'Honour' : 'Minor'} slots or clear your selections.
-                    </p>
-                  )}
-                </div>
-
-                {/* Clear button for optional slots */}
-                {['HONOR', 'MINOR', 'ADDON'].includes(slotData.slot_type) && selections[slotName] && !isSubmitted && (
-                  <button
-                    onClick={() => {
-                      const newSelections = { ...selections };
-                      delete newSelections[slotName];
-                      setSelections(newSelections);
-                      calculateTotalCredits(newSelections);
-                      const storageKey = `elective_selections_${userEmail}_sem${electiveData.next_semester}`;
-                      localStorage.setItem(storageKey, JSON.stringify(newSelections));
-                    }}
-                    className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600 transition"
-                  >
-                    Clear Selection
-                  </button>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                {/* Add "Not Opted" option for HONOR and MINOR slots */}
-                {['HONOR', 'MINOR'].includes(slotData.slot_type) && (
-                  <label
-                    className={`flex items-center p-3 border-2 rounded cursor-pointer transition ${
-                      selections[slotName] === 'NOT_OPTED'
-                        ? 'border-gray-900 bg-gray-100'
-                        : 'border-gray-200 hover:border-gray-400 hover:bg-gray-50'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name={slotName}
-                      value="NOT_OPTED"
-                      checked={selections[slotName] === 'NOT_OPTED'}
-                      onChange={() => handleSelection(slotName, 'NOT_OPTED', 0)}
-                      disabled={isSubmitted}
-                      className="w-4 h-4 text-gray-900"
-                    />
-                    <div className="ml-3 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-lg font-bold text-gray-700">
-                          Not Opted
-                        </span>
-                        <span className="text-base text-gray-600">
-                          I do not wish to take {slotData.slot_type === 'HONOR' ? 'Honour' : 'Minor'} courses
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm text-gray-600">
-                          0 Credits
-                        </span>
-                      </div>
-                    </div>
-                  </label>
-                )}
-
-                {slotData.courses.map(course => (
-                  <label
-                    key={course.course_id}
-                    className={`flex items-center p-3 border-2 rounded cursor-pointer transition ${
-                      selections[slotName] === course.course_id
-                        ? 'border-primary bg-gray-100'
-                        : 'border-background hover:border-gray-400 hover:bg-gray-50'
-                    } ${isSubmitted || isPartiallyFilled ? 'opacity-70 pointer-events-none' : ''}`}
-                  >
-                    <input
-                      type="radio"
-                      name={slotName}
-                      value={course.course_id}
-                      checked={selections[slotName] === course.course_id}
-                      onChange={() => handleSelection(slotName, course.course_id, course.credits)}
-                      disabled={isSubmitted}
-                      className={`w-4 h-4 text-gray-900`}
-                    />
-                    <div className="ml-3 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-lg font-bold text-gray-900">
-                          {course.course_code}
-                        </span>
-                        <span className="text-base text-gray-700">
-                          {course.course_name}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm text-gray-600">
-                          {course.credits} {course.credits === 1 ? 'Credit' : 'Credits'}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          {course.category}
-                        </span>
-                      </div>
-                    </div>
-                  </label>
-                ))}
+              <option value="">— Choose a course —</option>
+              {slotData.courses.map(course => (
+                <option key={course.hod_selection_id} value={course.hod_selection_id}>
+                  {course.course_code} — {course.course_name} ({course.credits} cr)
+                </option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-400">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+          {selectedValue && selectedCourse && (
+            <div className="mt-3 flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl">
+              <svg className="w-4 h-4 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              </svg>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-gray-900 truncate">{selectedCourse.course_name}</p>
+                <p className="text-xs text-gray-500">{selectedCourse.course_code} · {selectedCourse.credits} cr</p>
               </div>
             </div>
-            );
-          })}
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <MainLayout>
+      <div className="py-8 px-6">
+
+        {/* ── Page header ── */}
+        <div className="mb-8">
+          <p className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-1">Academic Registration</p>
+          <h1 className="text-3xl font-bold text-gray-900">Elective Selection</h1>
+          <p className="text-gray-500 mt-1">Semester {electiveData.next_semester}</p>
         </div>
 
-        {/* Submit Button */}
-        {!isSubmitted && (
-          <div className="mt-6 flex flex-col items-center gap-3">
-            <button
-              onClick={handleSubmit}
-              disabled={Object.keys(selections).length < Object.keys(groupedElectives).length}
-              className={`px-8 py-3 text-white text-lg font-bold rounded transition ${
-                Object.keys(selections).length < Object.keys(groupedElectives).length
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-gray-900 hover:bg-gray-800'
-              }`}
-            >
-              Submit Selections
-            </button>
-            <p className="text-sm text-gray-600">
-              {(() => {
-                const requiredSlots = Object.keys(groupedElectives).filter(slotName => {
-                  const slotType = groupedElectives[slotName].slot_type;
-                  return slotType === 'PROFESSIONAL' || slotType === 'MIXED' || slotType === 'OPEN';
-                });
-                const requiredSelections = Object.keys(selections).filter(slotName => {
-                  const slotType = groupedElectives[slotName]?.slot_type;
-                  return slotType === 'PROFESSIONAL' || slotType === 'MIXED' || slotType === 'OPEN';
-                });
-                const optionalSelections = Object.keys(selections).length - requiredSelections.length;
-                return `Selected: ${requiredSelections.length} / ${requiredSlots.length} required slots${optionalSelections > 0 ? ` (${optionalSelections} optional)` : ''}`;
-              })()}
-            </p>
+        {/* ── Toast message ── */}
+        {message.text && (
+          <div className={`mb-5 flex items-start gap-3 p-4 rounded-xl text-sm font-medium shadow-sm ${
+            message.type === 'success'
+              ? 'bg-green-50 text-green-800 border border-green-200'
+              : 'bg-red-50 text-red-800 border border-red-200'
+          }`}>
+            <span className="text-base mt-0.5">{message.type === 'success' ? '✅' : '❌'}</span>
+            <span>{message.text}</span>
           </div>
         )}
+
+        {/* —— Window closed banner —— */}
+        {!isSubmitted && electiveData?.window_open === false && (
+          <div className="mb-5 flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-sm font-semibold shadow-sm">
+            <span className="text-lg">🔒</span>
+            <span>
+              Elective selection window is closed.
+              {electiveData.window_start && electiveData.window_end
+                ? ` Open from ${electiveData.window_start} to ${electiveData.window_end}.`
+                : ' Contact your HOD for the selection schedule.'}
+            </span>
+          </div>
+        )}
+
+        {/* ── Submitted banner ── */}
+        {isSubmitted && (
+          <div className="mb-5 flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-sm font-semibold shadow-sm">
+            <span className="text-lg">🔒</span>
+            Your selections have been submitted and are now locked.
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════ */}
+        {/* SECTION 1 — Required Electives                      */}
+        {/* ════════════════════════════════════════ */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Required Electives</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Select one course for each slot below</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-sm font-bold ${
+                filledRequired.length === requiredSlots.length ? 'text-green-600' : 'text-gray-500'
+              }`}>{filledRequired.length}/{requiredSlots.length}</span>
+              {filledRequired.length === requiredSlots.length && (
+                <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              )}
+            </div>
+          </div>
+
+          {/* Required progress bar */}
+          <div className="w-full bg-gray-100 rounded-full h-1.5 mb-5">
+            <div
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                progressPct === 100 ? 'bg-green-500' : 'bg-blue-500'
+              }`}
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {requiredSlotEntries.map(([slotName, slotData]) => renderRequiredCard(slotName, slotData))}
+          </div>
+        </div>
+
+        {/* ════════════════════════════════════════ */}
+        {/* SECTION 2 — Optional Track                           */}
+        {/* ════════════════════════════════════════ */}
+        {availableOptionalTypes.length > 0 && (
+          <div className="mb-8">
+            <div className="border-t border-gray-200 pt-8 mb-5">
+              <h2 className="text-lg font-bold text-gray-900">Optional Track</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Choose one additional track to enroll in, or skip</p>
+            </div>
+
+            {/* Track picker pills */}
+            <div className={`grid gap-3 mb-6 ${
+              availableOptionalTypes.length === 1 ? 'grid-cols-2' :
+              availableOptionalTypes.length === 2 ? 'grid-cols-3' : 'grid-cols-4'
+            }`}>
+              {[
+                { type: null,    label: 'None',   sub: 'Skip optional track', icon: '—',  activeBg: 'bg-gray-800 text-white', activeBorder: 'border-gray-800' },
+                availableOptionalTypes.includes('HONOR') && {
+                  type: 'HONOR', label: 'Honour', sub: 'Auto-enrolled in all', icon: '🏆', activeBg: 'bg-amber-500 text-white',  activeBorder: 'border-amber-500' },
+                availableOptionalTypes.includes('MINOR') && {
+                  type: 'MINOR', label: 'Minor',  sub: 'Auto-enrolled in all', icon: '📖', activeBg: 'bg-orange-500 text-white', activeBorder: 'border-orange-500' },
+              ].filter(Boolean).map(({ type, label, sub, icon, activeBg, activeBorder }) => {
+                const isActive = optionalType === type;
+                return (
+                  <button
+                    key={String(type)}
+                    disabled={isSubmitted}
+                    onClick={() => handleOptionalTypeChange(type)}
+                    className={`flex flex-col items-center gap-1.5 px-3 py-5 rounded-2xl border-2 transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed select-none ${
+                      isActive
+                        ? `${activeBg} ${activeBorder} shadow-lg scale-[1.03]`
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:bg-gray-50'
+                    }`}
+                  >
+                    <span className="text-2xl leading-none">{icon}</span>
+                    <span className="text-sm font-bold mt-0.5">{label}</span>
+                    <span className={`text-xs leading-tight text-center ${
+                      isActive ? 'opacity-80' : 'text-gray-400'
+                    }`}>{sub}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* HONOR / MINOR / ADDON: auto-enrolled cards (read-only, no interaction) */}
+            {optionalType && optionalType !== null && (
+              <div>
+                <div className="flex items-center gap-2 mb-3 px-1">
+                  <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-sm font-semibold text-green-700">
+                    You are enrolled in all {optionalType === 'MINOR' ? 'Minor' : 'Honour'} courses below
+                    {totalCreditUsed > 0 && <span className="ml-2 text-green-600 font-bold">({totalCreditUsed} credits)</span>}
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {optionalSlotEntries.map(([slotName, slotData]) => {
+                    const course = slotData.courses[0];
+                    const cfg = slotTypeConfig[slotData.slot_type];
+                    const colors = {
+                      HONOR: { border: 'border-amber-300', bg: 'bg-amber-50', divider: '#fcd34d', badge: 'bg-amber-200 text-amber-800' },
+                      MINOR: { border: 'border-orange-300', bg: 'bg-orange-50', divider: '#fdba74', badge: 'bg-orange-200 text-orange-800' },
+                      ADDON: { border: 'border-teal-300',   bg: 'bg-teal-50',   divider: '#99f6e4', badge: 'bg-teal-200 text-teal-800' },
+                    };
+                    const c = colors[optionalType] || colors.ADDON;
+                    return (
+                      <div key={slotName} className={`rounded-2xl border-2 overflow-hidden ${c.border} ${c.bg}`}>
+                        <div className="px-4 py-3 border-b border-opacity-40 flex items-center justify-between"
+                          style={{ borderColor: c.divider }}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">{cfg.icon}</span>
+                            <span className="text-xs font-bold text-gray-700">{slotName}</span>
+                          </div>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${c.badge}`}>Enrolled</span>
+                        </div>
+                        {course ? (
+                          <div className="px-4 py-4">
+                            <p className="text-sm font-bold text-gray-900">{course.course_name}</p>
+                            <p className="text-xs text-gray-500 mt-1">{course.course_code} · {course.credits} {course.credits === 1 ? 'credit' : 'credits'}</p>
+                            {course.category && <p className="text-xs text-gray-400 mt-0.5">{course.category}</p>}
+                          </div>
+                        ) : (
+                          <div className="px-4 py-4">
+                            <p className="text-sm text-gray-400 italic">No course assigned to this slot yet.</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════ */}
+        {/* SECTION 3 — Add-On Courses (optional, student opts in) */}
+        {/* ════════════════════════════════════════ */}
+        {addonSlotEntries.length > 0 && (
+          <div className="mb-8">
+            <div className="border-t border-gray-200 pt-8 mb-4">
+              <div className="flex items-center gap-2 mb-0.5">
+                <h2 className="text-lg font-bold text-gray-900">Add-On Courses</h2>
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Optional</span>
+              </div>
+              <p className="text-xs text-gray-400">Add-On courses are optional — enroll in any you'd like to take</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {addonSlotEntries.map(([slotName, slotData]) => {
+                const course = slotData.courses[0];
+                const isEnrolled = !!selections[slotName];
+                return (
+                  <div key={slotName} className={`rounded-2xl border-2 overflow-hidden transition-all ${
+                    isEnrolled ? 'border-teal-300 bg-teal-50' : 'border-gray-200 bg-white'
+                  }`}>
+                    <div className={`px-4 py-3 border-b flex items-center justify-between ${
+                      isEnrolled ? 'border-teal-200' : 'border-gray-100'
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm">➕</span>
+                        <span className="text-xs font-bold text-gray-700">{slotName}</span>
+                      </div>
+                      {isEnrolled
+                        ? <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-teal-200 text-teal-800">Enrolled</span>
+                        : <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Not enrolled</span>
+                      }
+                    </div>
+                    {course ? (
+                      <div className="px-4 py-4">
+                        <p className="text-sm font-bold text-gray-900">{course.course_name}</p>
+                        <p className="text-xs text-gray-500 mt-1">{course.course_code} · {course.credits} {course.credits === 1 ? 'credit' : 'credits'}</p>
+                        {course.category && <p className="text-xs text-gray-400 mt-0.5">{course.category}</p>}
+                        {!isSubmitted && (
+                          <button
+                            onClick={() => handleSelection(slotName, isEnrolled ? null : course.hod_selection_id, course.credits)}
+                            className={`mt-3 w-full py-2 rounded-xl text-xs font-bold transition-all ${
+                              isEnrolled
+                                ? 'bg-teal-100 text-teal-700 hover:bg-teal-200'
+                                : 'bg-gray-900 text-white hover:bg-gray-700'
+                            }`}
+                          >
+                            {isEnrolled ? 'Remove' : 'Enroll'}
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="px-4 py-4">
+                        <p className="text-sm text-gray-400 italic">No course assigned yet.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Submit / Submitted footer ── */}
+        <div className="border-t border-gray-200 pt-6 mt-4 pb-6">
+          {isSubmitted ? (
+            <div className="flex items-center justify-center gap-2 py-4 px-6 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-700 font-semibold">
+              <span>🔒</span> Selections submitted and locked
+            </div>
+          ) : (
+            <div className="flex flex-col items-stretch gap-3">
+              <button
+                onClick={handleSubmit}
+                disabled={!canSubmit || isSubmitting}
+                className={`w-full py-4 rounded-2xl text-white font-bold text-base tracking-wide transition-all shadow-sm ${
+                  !canSubmit || isSubmitting
+                    ? 'bg-gray-200 cursor-not-allowed text-gray-400 shadow-none'
+                    : 'bg-gray-900 hover:bg-gray-700 active:scale-[0.98] shadow-md'
+                }`}
+              >
+                {isSubmitting
+                  ? 'Submitting…'
+                  : filledRequired.length < requiredSlots.length
+                    ? `Select ${requiredSlots.length - filledRequired.length} more required course${requiredSlots.length - filledRequired.length !== 1 ? 's' : ''} to continue`
+                    : 'Submit Selections'}
+              </button>
+              <div className="flex items-center justify-center gap-4 text-xs text-gray-400">
+                <span className={filledRequired.length === requiredSlots.length ? 'text-green-600 font-semibold' : ''}>
+                  {filledRequired.length}/{requiredSlots.length} required
+                </span>
+                {optionalType && (
+                  <><span>·</span><span className="text-green-600 font-semibold">All {optionalType === 'HONOR' ? 'Honour' : 'Minor'} slots enrolled</span></>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
       </div>
     </MainLayout>
   );
