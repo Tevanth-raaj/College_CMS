@@ -107,7 +107,7 @@ func runMigrations() error {
 	// Skip course_type table migrations - use existing table structure
 	// The course_type table already exists with column 'course_type', not 'name'
 	log.Println("Skipping course_type migrations - using existing table structure")
-	
+
 	// Just ensure the table exists with basic structure
 	var tableExists int
 	err := DB.QueryRow("SELECT count(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'course_type'").Scan(&tableExists)
@@ -122,7 +122,7 @@ func runMigrations() error {
 		if err != nil {
 			return err
 		}
-		
+
 		// Insert initial values
 		_, err = DB.Exec(`
 			INSERT IGNORE INTO course_type (id, course_type) VALUES 
@@ -293,6 +293,57 @@ func runMigrations() error {
 	// Run SQL migration files from db/migrations directory
 	if err := runSQLMigrations(); err != nil {
 		log.Printf("Warning: SQL migrations failed: %v", err)
+	}
+	// Create exam_absentees table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS exam_absentees (
+			id               INT AUTO_INCREMENT PRIMARY KEY,
+			window_id        INT NOT NULL,
+			course_id        INT NOT NULL,
+			student_id       INT NOT NULL,
+			mark_category_id INT NOT NULL,
+			learning_mode_id INT NOT NULL,
+			created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uq_absentee (window_id, course_id, student_id, mark_category_id),
+			KEY idx_course_window (course_id, window_id),
+			KEY idx_student (student_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to create exam_absentees table: %v", err)
+	} else {
+		log.Println("exam_absentees table created/verified successfully")
+	}
+
+	// Ensure UNIQUE constraint exists on exam_absentees (in case table was created without it)
+	DB.Exec(`ALTER TABLE exam_absentees ADD UNIQUE KEY uq_absentee (window_id, course_id, student_id, mark_category_id)`)
+	// ^ silently ignored if the key already exists
+
+	// Remove any existing duplicate rows (keep only the lowest id per unique combination)
+	DB.Exec(`
+		DELETE ea FROM exam_absentees ea
+		INNER JOIN (
+			SELECT MIN(id) AS keep_id, window_id, course_id, student_id, mark_category_id
+			FROM exam_absentees
+			GROUP BY window_id, course_id, student_id, mark_category_id
+			HAVING COUNT(*) > 1
+		) dupes ON ea.window_id        = dupes.window_id
+			  AND ea.course_id         = dupes.course_id
+			  AND ea.student_id        = dupes.student_id
+			  AND ea.mark_category_id  = dupes.mark_category_id
+			  AND ea.id               != dupes.keep_id
+	`)
+
+	// Add is_active column to teacher_course_tracking if it doesn't exist
+	var isActiveExists int
+	err = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='teacher_course_tracking' AND COLUMN_NAME='is_active'").Scan(&isActiveExists)
+	if err == nil && isActiveExists == 0 {
+		_, err = DB.Exec(`ALTER TABLE teacher_course_tracking ADD COLUMN is_active INT DEFAULT 1`)
+		if err != nil {
+			log.Printf("Warning: Failed to add is_active column to teacher_course_tracking: %v", err)
+		} else {
+			log.Println("is_active column added to teacher_course_tracking")
+		}
 	}
 
 	return nil

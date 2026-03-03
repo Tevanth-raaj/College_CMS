@@ -175,7 +175,7 @@ func UpdateFacultySubjectCounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Successfully updated subject counts for faculty ID %d", req.FacultyID)
+	log.Printf("Successfully updated subject counts for faculty ID %s", req.FacultyID)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Subject counts updated successfully",

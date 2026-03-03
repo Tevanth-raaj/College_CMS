@@ -7,7 +7,7 @@ import reportWebVitals from './reportWebVitals';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
-  <BrowserRouter basename='/cms'>
+  <BrowserRouter basename='/academics'>
     <React.StrictMode>
       <App />
     </React.StrictMode>

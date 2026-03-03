@@ -171,6 +171,19 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	teacherID := vars["id"]
 
+	log.Printf("=== GetTeacherCourses called with teacherID='%s' ===", teacherID)
+
+	// Convert numeric ID to faculty_id if it's a number
+	var facultyID string
+	err := db.DB.QueryRow("SELECT faculty_id FROM teachers WHERE id = ? OR faculty_id = ?", teacherID, teacherID).Scan(&facultyID)
+	if err != nil {
+		log.Printf("Error fetching teacher faculty_id: %v", err)
+		http.Error(w, "Teacher not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("Resolved teacherID '%s' to faculty_id '%s'", teacherID, facultyID)
+
 	query := `
 		SELECT 
 			ca.id, ca.course_id, c.course_code, c.course_name, ct.course_type, 
@@ -182,7 +195,8 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		ORDER BY c.course_code
 	`
 
-	rows, err := db.DB.Query(query, teacherID)
+	log.Printf("Executing query with faculty_id='%s'", facultyID)
+	rows, err := db.DB.Query(query, facultyID)
 	if err != nil {
 		log.Printf("Error fetching teacher courses: %v", err)
 		http.Error(w, "Failed to fetch courses", http.StatusInternalServerError)
@@ -208,6 +222,8 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var courses []TeacherCourse
+	log.Printf("Starting to iterate courses...")
+	courseCount := 0
 	for rows.Next() {
 		var course TeacherCourse
 		err := rows.Scan(&course.ID, &course.CourseID, &course.CourseCode, &course.CourseName,
@@ -216,6 +232,8 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Error scanning course row: %v", err)
 			continue
 		}
+		courseCount++
+		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s", courseCount, course.CourseID, course.CourseCode, course.CourseName)
 
 		// Fetch allocated students for this course and teacher
 		studentQuery := `
@@ -225,13 +243,16 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			WHERE csta.course_id = ? AND csta.teacher_id = ?
 			ORDER BY s.student_name
 		`
-		sRows, err := db.DB.Query(studentQuery, course.CourseID, teacherID)
+		log.Printf("Querying students for courseID=%d, faculty_id='%s'", course.CourseID, facultyID)
+		sRows, err := db.DB.Query(studentQuery, course.CourseID, facultyID)
 		if err != nil {
 			log.Printf("Error fetching students for course %d: %v", course.CourseID, err)
 		} else {
 			defer sRows.Close()
 			course.Enrollments = []StudentEnrollment{}
+			studentCount := 0
 			for sRows.Next() {
+				studentCount++
 				var enrollment StudentEnrollment
 				if err := sRows.Scan(&enrollment.StudentID, &enrollment.StudentName, &enrollment.LearningModeID); err != nil {
 					log.Printf("Error scanning student row: %v", err)
@@ -239,20 +260,24 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 				}
 				course.Enrollments = append(course.Enrollments, enrollment)
 			}
+			log.Printf("Found %d students for course %s (ID=%d)", studentCount, course.CourseCode, course.CourseID)
 			sRows.Close()
 		}
 
 		if course.Enrollments == nil {
 			course.Enrollments = []StudentEnrollment{}
+			log.Printf("No students found for course %s, setting empty array", course.CourseCode)
 		}
 
 		courses = append(courses, course)
 	}
 
+	log.Printf("Total courses found: %d", len(courses))
 	if courses == nil {
 		courses = []TeacherCourse{}
 	}
 
+	log.Printf("Returning %d courses to client", len(courses))
 	json.NewEncoder(w).Encode(courses)
 }
 

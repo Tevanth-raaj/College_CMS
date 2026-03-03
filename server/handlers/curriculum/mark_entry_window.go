@@ -347,18 +347,33 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Mark entry window saved"})
 }
 
-func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, error) {
+func resolveMarkEntryWindow(courseID int, teacherID string) (bool, int, []int, error) {
 	database := db.DB
 	if database == nil {
-		return false, nil, sql.ErrConnDone
+		return false, 0, nil, sql.ErrConnDone
+	}
+
+	// Convert numeric teacher ID to faculty_id if needed
+	// All allocation tables (teacher_course_allocation, department_teachers, mark_entry_windows) use faculty_id
+	var facultyID string
+	err := database.QueryRow(`SELECT faculty_id FROM teachers WHERE id = ? OR faculty_id = ?`, teacherID, teacherID).Scan(&facultyID)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Error looking up faculty_id for teacher %s: %v", teacherID, err)
+		// Not a teacher, might be a user - continue
+		facultyID = teacherID
+	} else if err == nil {
+		log.Printf("Resolved teacherID '%s' to faculty_id '%s' for mark entry window resolution", teacherID, facultyID)
+	} else {
+		// No teacher found, use original ID (might be username)
+		facultyID = teacherID
 	}
 
 	// Try to lookup numeric user ID from username (for users)
 	var numericUserID sql.NullInt64
-	err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, teacherID).Scan(&numericUserID)
+	err = database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, facultyID).Scan(&numericUserID)
 	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Error looking up user ID for %s: %v", teacherID, err)
-		return false, nil, err
+		log.Printf("Error looking up user ID for %s: %v", facultyID, err)
+		return false, 0, nil, err
 	}
 
 	var departmentID sql.NullInt64
@@ -368,26 +383,34 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, error)
 		WHERE teacher_id = ? AND status = 1
 		ORDER BY id DESC
 		LIMIT 1
-	`, teacherID).Scan(&departmentID)
+	`, facultyID).Scan(&departmentID)
 	if err != nil && err != sql.ErrNoRows {
-		return false, nil, err
+		return false, 0, nil, err
 	}
 
 	var semester sql.NullInt64
+	var cardType string
 	err = database.QueryRow(`
-		SELECT nc.semester_number
+		SELECT nc.semester_number, COALESCE(nc.card_type, 'semester')
 		FROM curriculum_courses cc
 		JOIN normal_cards nc ON cc.semester_id = nc.id
 		WHERE cc.course_id = ?
 		LIMIT 1
-	`, courseID).Scan(&semester)
+	`, courseID).Scan(&semester, &cardType)
 	if err != nil && err != sql.ErrNoRows {
-		return false, nil, err
+		return false, 0, nil, err
+	}
+
+	// For non-semester cards (vertical, elective, open_elective, etc.),
+	// skip semester matching since these courses aren't tied to a fixed semester
+	if cardType != "semester" {
+		log.Printf("Course %d is on a '%s' card — skipping semester check for window matching", courseID, cardType)
+		semester = sql.NullInt64{Valid: false}
 	}
 
 	// DEBUG: Log what we're matching against
-	log.Printf("Resolving window for courseID=%d, teacherID=%s, numericUserID=%v, departmentID=%v, semester=%v",
-		courseID, teacherID, numericUserID, departmentID, semester)
+	log.Printf("Resolving window for courseID=%d, original teacherID=%s, facultyID=%s, numericUserID=%v, departmentID=%v, semester=%v",
+		courseID, teacherID, facultyID, numericUserID, departmentID, semester)
 
 	query := `
 		SELECT id, start_at, end_at, enabled
@@ -421,13 +444,13 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, error)
 		userIDValue = numericUserID.Int64
 	}
 
-	rows, rowErr := database.Query(query, teacherID, userIDValue, courseID, deptValue, deptValue, semValue, semValue)
+	rows, rowErr := database.Query(query, facultyID, userIDValue, courseID, deptValue, deptValue, semValue, semValue)
 	if rowErr != nil {
 		if rowErr == sql.ErrNoRows {
 			log.Printf("No matching window rule found")
-			return false, nil, nil
+			return false, 0, nil, nil
 		}
-		return false, nil, rowErr
+		return false, 0, nil, rowErr
 	}
 	defer rows.Close()
 
@@ -441,7 +464,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, error)
 	found := false
 	for rows.Next() {
 		if err := rows.Scan(&windowID, &startAt, &endAt, &enabledInt); err != nil {
-			return false, nil, err
+			return false, 0, nil, err
 		}
 
 		if enabledInt != 1 {
@@ -458,7 +481,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, error)
 
 	if !found {
 		log.Printf("No matching window rule found")
-		return false, nil, nil
+		return false, 0, nil, nil
 	}
 
 	log.Printf("Found active window: id=%d, start=%s, end=%s, now=%s",
@@ -482,7 +505,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, error)
 	}
 
 	log.Printf("Window allows components: %v (empty = all allowed)", allowedComponents)
-	return true, allowedComponents, nil
+	return true, windowID, allowedComponents, nil
 }
 
 // validateStudentPermission checks if a user has permission to enter marks for a specific student

@@ -191,7 +191,7 @@ func GetMarkCategoriesForCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	windowOpen, allowedComponents, err := resolveMarkEntryWindow(courseID, teacherID)
+	windowOpen, _, allowedComponents, err := resolveMarkEntryWindow(courseID, teacherID)
 	if err != nil {
 		log.Printf("Error resolving mark entry window: %v", err)
 		http.Error(w, "Failed to validate mark entry window", http.StatusInternalServerError)
@@ -349,7 +349,7 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	windowOpen, allowedComponents, err := resolveMarkEntryWindow(saveRequest.CourseID, saveRequest.FacultyID)
+	windowOpen, windowID, allowedComponents, err := resolveMarkEntryWindow(saveRequest.CourseID, saveRequest.FacultyID)
 	if err != nil {
 		log.Printf("Error resolving mark entry window: %v", err)
 		http.Error(w, "Failed to validate mark entry window", http.StatusInternalServerError)
@@ -400,6 +400,19 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		if len(allowedByWindow) > 0 && !allowedByWindow[entry.AssessmentComponentID] {
 			errors = append(errors, fmt.Sprintf("Student %d: component %d not allowed by window", entry.StudentID, entry.AssessmentComponentID))
 			continue
+		}
+
+		// Check absentee status — block mark entry if student is absent for this component in this window
+		log.Printf("[ABSENTEE CHECK] Checking: windowID=%d, courseID=%d, studentID=%d, componentID=%d", windowID, entry.CourseID, entry.StudentID, entry.AssessmentComponentID)
+		isAbsent, absentErr := IsStudentAbsentForComponent(windowID, entry.CourseID, entry.StudentID, entry.AssessmentComponentID)
+		if absentErr != nil {
+			log.Printf("[ABSENTEE CHECK] Error checking absentee status: %v", absentErr)
+		} else if isAbsent {
+			log.Printf("[ABSENTEE CHECK] ✗ BLOCKED - Student %d is absent for component %d in window %d", entry.StudentID, entry.AssessmentComponentID, windowID)
+			errors = append(errors, fmt.Sprintf("Student %d: marked absent for component %d — mark entry is blocked", entry.StudentID, entry.AssessmentComponentID))
+			continue
+		} else {
+			log.Printf("[ABSENTEE CHECK] ✓ PASSED - Student %d is NOT absent for component %d in window %d", entry.StudentID, entry.AssessmentComponentID, windowID)
 		}
 
 		// Validate student enrollment in course
@@ -525,7 +538,7 @@ func GetStudentMarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	windowOpen, _, err := resolveMarkEntryWindow(courseID, teacherID)
+	windowOpen, _, _, err := resolveMarkEntryWindow(courseID, teacherID)
 	if err != nil {
 		log.Printf("Error resolving mark entry window: %v", err)
 		http.Error(w, "Failed to validate mark entry window", http.StatusInternalServerError)
