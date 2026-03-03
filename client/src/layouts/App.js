@@ -34,6 +34,7 @@ import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import HODMarkEntryDashboardPage from "../pages/curriculum/HODMarkEntryDashboardPage";
 import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
 import MarkEntryExtensionsPage from "../pages/curriculum/MarkEntryExtensionsPage";
+import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
 import PrivateRoute from "../components/PrivateRoute";
 import AppShell from "../components/AppShell";
 import NotFoundPage from "../components/NotFoundPage";
@@ -70,6 +71,7 @@ function App() {
           <Route path="/hod/mark-entry-monitor" element={<HODMarkEntryDashboardPage />} />
           <Route path="/hod/result-analysis" element={<ResultAnalysisPage />} />
           <Route path="/mark-entry-extensions" element={<MarkEntryExtensionsPage />} />
+          <Route path="/exam-absentees" element={<AbsenteesPage />} />
 
           <Route path="/hr/faculty" element={<HRFacultyPage />} />
 
