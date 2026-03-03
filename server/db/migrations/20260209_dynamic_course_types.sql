@@ -32,7 +32,7 @@ SET @col_theory_exists := (
 );
 
 SET @sql_migrate_theory := IF(@col_theory_exists > 0,
-    'INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count) SELECT id, 1, theory_subject_count FROM teachers WHERE theory_subject_count > 0 ON DUPLICATE KEY UPDATE max_count = VALUES(max_count)',
+    'INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count) SELECT faculty_id, 1, theory_subject_count FROM teachers WHERE theory_subject_count > 0 ON DUPLICATE KEY UPDATE max_count = VALUES(max_count)',
     'SELECT "Column theory_subject_count does not exist, skipping data migration"'
 );
 
@@ -50,7 +50,7 @@ SET @col_lab_exists := (
 );
 
 SET @sql_migrate_lab := IF(@col_lab_exists > 0,
-    'INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count) SELECT id, 3, theory_with_lab_subject_count FROM teachers WHERE theory_with_lab_subject_count > 0 ON DUPLICATE KEY UPDATE max_count = VALUES(max_count)',
+    'INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count) SELECT faculty_id, 3, theory_with_lab_subject_count FROM teachers WHERE theory_with_lab_subject_count > 0 ON DUPLICATE KEY UPDATE max_count = VALUES(max_count)',
     'SELECT "Column theory_with_lab_subject_count does not exist, skipping data migration"'
 );
 

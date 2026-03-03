@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"server/db"
+	"github.com/gorilla/mux"
 )
 
 // CreateCourseAppeal creates a new appeal for teacher workload
@@ -197,7 +198,8 @@ func GetAllAppeals(w http.ResponseWriter, r *http.Request) {
 			a.updated_at,
 			a.resolved_at,
 			t.name AS teacher_name,
-			t.email AS teacher_email
+			t.email AS teacher_email,
+			t.faculty_id AS teacher_faculty_id
 		FROM teacher_course_appeal a
 		LEFT JOIN teachers t ON a.faculty_id = t.id
 	`
@@ -221,17 +223,18 @@ func GetAllAppeals(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type Appeal struct {
-		ID            int            `json:"id"`
-		FacultyID     int            `json:"faculty_id"`
-		AppealMessage string         `json:"appeal_message"`
-		AppealStatus  int            `json:"appeal_status"`
-		HRAction      sql.NullString `json:"hr_action"`
-		HRMessage     sql.NullString `json:"hr_message"`
-		CreatedAt     time.Time      `json:"created_at"`
-		UpdatedAt     time.Time      `json:"updated_at"`
-		ResolvedAt    sql.NullTime   `json:"resolved_at"`
-		TeacherName   string         `json:"teacher_name"`
-		TeacherEmail  string         `json:"teacher_email"`
+		ID               int            `json:"id"`
+		FacultyID        int            `json:"faculty_id"`
+		AppealMessage    string         `json:"appeal_message"`
+		AppealStatus     int            `json:"appeal_status"`
+		HRAction         sql.NullString `json:"hr_action"`
+		HRMessage        sql.NullString `json:"hr_message"`
+		CreatedAt        time.Time      `json:"created_at"`
+		UpdatedAt        time.Time      `json:"updated_at"`
+		ResolvedAt       sql.NullTime   `json:"resolved_at"`
+		TeacherName      string         `json:"teacher_name"`
+		TeacherEmail     string         `json:"teacher_email"`
+		TeacherFacultyID string         `json:"teacher_faculty_id"`
 	}
 
 	var appeals []Appeal
@@ -249,6 +252,7 @@ func GetAllAppeals(w http.ResponseWriter, r *http.Request) {
 			&appeal.ResolvedAt,
 			&appeal.TeacherName,
 			&appeal.TeacherEmail,
+			&appeal.TeacherFacultyID,
 		)
 		if err != nil {
 			log.Printf("Error scanning appeal row: %v", err)
@@ -261,9 +265,10 @@ func GetAllAppeals(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(appeals)
 }
 
-// UpdateAppealStatus updates appeal with HR decision
+// UpdateAppealStatus updates appeal with HR decision and optionally updates course limits
 func UpdateAppealStatus(w http.ResponseWriter, r *http.Request) {
-	appealIDStr := r.URL.Query().Get("appeal_id")
+	vars := mux.Vars(r)
+	appealIDStr := vars["appeal_id"]
 	if appealIDStr == "" {
 		http.Error(w, "appeal_id is required", http.StatusBadRequest)
 		return
@@ -275,9 +280,15 @@ func UpdateAppealStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	type CourseTypeCount struct {
+		CourseTypeID int `json:"course_type_id"`
+		MaxCount     int `json:"max_count"`
+	}
+
 	var requestData struct {
-		HRAction  string `json:"hr_action"`
-		HRMessage string `json:"hr_message"`
+		HRAction   string            `json:"hr_action"`
+		HRMessage  string            `json:"hr_message"`
+		NewCounts  []CourseTypeCount `json:"new_counts"` // Array of course type updates
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
@@ -302,16 +313,90 @@ func UpdateAppealStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get teacher alphanumeric ID for history tracking
+	var teacherAlphanumericID string
+	teacherQuery := `SELECT faculty_id FROM teachers WHERE id = ?`
+	err = db.DB.QueryRow(teacherQuery, facultyID).Scan(&teacherAlphanumericID)
+	if err != nil {
+		log.Printf("Warning: Could not fetch teacher alphanumeric ID: %v", err)
+		// Continue with numeric ID as fallback
+		teacherAlphanumericID = fmt.Sprintf("%d", facultyID)
+	}
+
+	// Start transaction
+	tx, err := db.DB.Begin()
+	if err != nil {
+		log.Printf("Error starting transaction: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
 	// Update appeal status
 	updateQuery := `
 		UPDATE teacher_course_appeal 
 		SET appeal_status = 1, hr_action = ?, hr_message = ?, resolved_at = NOW(), updated_at = NOW()
 		WHERE id = ?
 	`
-	_, err = db.DB.Exec(updateQuery, requestData.HRAction, requestData.HRMessage, appealID)
+	_, err = tx.Exec(updateQuery, requestData.HRAction, requestData.HRMessage, appealID)
 	if err != nil {
 		log.Printf("Error updating appeal: %v", err)
 		http.Error(w, "Failed to update appeal", http.StatusInternalServerError)
+		return
+	}
+
+	// If approved and new counts provided, update teacher_course_limits
+	if requestData.HRAction == "APPROVED" && len(requestData.NewCounts) > 0 {
+		// Get current window tracking information for history
+		var windowStart, windowEnd time.Time
+		var semesterType, academicYear string
+		windowQuery := `
+			SELECT window_start, window_end, semester_type, academic_year
+			FROM teacher_course_tracking
+			WHERE window_start <= NOW() AND window_end >= NOW()
+			LIMIT 1
+		`
+		err = tx.QueryRow(windowQuery).Scan(&windowStart, &windowEnd, &semesterType, &academicYear)
+		if err != nil {
+			log.Printf("Warning: Could not fetch current window information: %v", err)
+			// Allow continuing with NULL values
+			academicYear = ""
+			semesterType = ""
+		}
+
+		for _, ct := range requestData.NewCounts {
+			// Update current limits - use alphanumeric faculty_id
+			updateLimitQuery := `
+				INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count)
+				VALUES (?, ?, ?)
+				ON DUPLICATE KEY UPDATE max_count = VALUES(max_count)
+			`
+			_, err = tx.Exec(updateLimitQuery, teacherAlphanumericID, ct.CourseTypeID, ct.MaxCount)
+			if err != nil {
+				log.Printf("Error updating course limit: %v", err)
+				http.Error(w, "Failed to update course limits", http.StatusInternalServerError)
+				return
+			}
+
+			// Create history record of this allocation
+			historyQuery := `
+				INSERT INTO teacher_course_history 
+				(teacher_id, course_type_id, max_count, allocated_count, window_start, window_end, semester_type, academic_year, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+			`
+			_, err = tx.Exec(historyQuery, teacherAlphanumericID, ct.CourseTypeID, ct.MaxCount, ct.MaxCount, windowStart, windowEnd, semesterType, academicYear)
+			if err != nil {
+				log.Printf("Warning: Could not create history record: %v", err)
+				// Continue despite history failure
+			}
+		}
+		log.Printf("Updated course limits for faculty %d (faculty_id: %s)", facultyID, teacherAlphanumericID)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error committing transaction: %v", err)
+		http.Error(w, "Failed to save changes", http.StatusInternalServerError)
 		return
 	}
 
@@ -327,7 +412,8 @@ func UpdateAppealStatus(w http.ResponseWriter, r *http.Request) {
 
 // GetAppealByID retrieves a specific appeal with teacher details
 func GetAppealByID(w http.ResponseWriter, r *http.Request) {
-	appealIDStr := r.URL.Query().Get("appeal_id")
+	vars := mux.Vars(r)
+	appealIDStr := vars["appeal_id"]
 	if appealIDStr == "" {
 		http.Error(w, "appeal_id is required", http.StatusBadRequest)
 		return
@@ -473,4 +559,259 @@ func GetTeacherAppealHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(appeals)
+}
+
+// GetTeacherAllocation retrieves current course allocations for a teacher
+func GetTeacherAllocation(w http.ResponseWriter, r *http.Request) {
+	facultyIDParam := r.URL.Query().Get("faculty_id")
+	if facultyIDParam == "" {
+		http.Error(w, "faculty_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get teachers.faculty_id from teachers.id
+	var facultyID string
+	teacherIDInt, err := strconv.Atoi(facultyIDParam)
+	if err == nil {
+		// If it's a number, look up faculty_id from teachers table
+		err = db.DB.QueryRow("SELECT faculty_id FROM teachers WHERE id = ?", teacherIDInt).Scan(&facultyID)
+		if err != nil {
+			log.Printf("Error fetching faculty_id for teacher_id %d: %v", teacherIDInt, err)
+			http.Error(w, "Teacher not found", http.StatusNotFound)
+			return
+		}
+	} else {
+		// If it's not a number, assume it's already the faculty_id
+		facultyID = facultyIDParam
+	}
+
+	log.Printf("Fetching allocations for faculty_id: %s", facultyID)
+
+	query := `
+		SELECT 
+			tcl.course_type_id,
+			ct.course_type AS course_type_name,
+			tcl.max_count
+		FROM teacher_course_limits tcl
+		JOIN course_type ct ON tcl.course_type_id = ct.id
+		WHERE tcl.teacher_id = ?
+		ORDER BY ct.id
+	`
+
+	rows, err := db.DB.Query(query, facultyID)
+	if err != nil {
+		log.Printf("Error fetching teacher allocation: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type CourseAllocation struct {
+		CourseTypeID   int    `json:"course_type_id"`
+		CourseTypeName string `json:"course_type_name"`
+		MaxCount       int    `json:"max_count"`
+	}
+
+	var allocations []CourseAllocation
+	for rows.Next() {
+		var alloc CourseAllocation
+		err := rows.Scan(&alloc.CourseTypeID, &alloc.CourseTypeName, &alloc.MaxCount)
+		if err != nil {
+			log.Printf("Error scanning allocation: %v", err)
+			continue
+		}
+		allocations = append(allocations, alloc)
+	}
+
+	if allocations == nil {
+		allocations = []CourseAllocation{}
+	}
+
+	log.Printf("Found %d allocations for faculty_id %s", len(allocations), facultyID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(allocations)
+}
+
+// DeactivateAllocationsForAcademicYear archives current allocations to history table and clears limits (called at window close)
+func DeactivateAllocationsForAcademicYear(w http.ResponseWriter, r *http.Request) {
+	academicYear := r.URL.Query().Get("academic_year")
+	if academicYear == "" {
+		http.Error(w, "academic_year is required", http.StatusBadRequest)
+		return
+	}
+
+	// Start transaction for atomic archive operation
+	tx, err := db.DB.Begin()
+	if err != nil {
+		log.Printf("Error starting transaction: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	// Get current window tracking information
+	var windowStart, windowEnd time.Time
+	var semesterType string
+	windowQuery := `
+		SELECT window_start, window_end, semester_type
+		FROM teacher_course_tracking
+		WHERE window_start <= NOW() AND window_end >= NOW()
+		LIMIT 1
+	`
+	err = tx.QueryRow(windowQuery).Scan(&windowStart, &windowEnd, &semesterType)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Warning: Could not fetch current window information: %v", err)
+		// Use NULL values if window not found
+		windowStart = time.Time{}
+		windowEnd = time.Time{}
+		semesterType = ""
+	}
+
+	// Get all current allocations to archive
+	getQuery := `
+		SELECT tcl.teacher_id, tcl.course_type_id, tcl.max_count
+		FROM teacher_course_limits tcl
+	`
+	rows, err := tx.Query(getQuery)
+	if err != nil {
+		log.Printf("Error fetching current allocations: %v", err)
+		http.Error(w, "Failed to fetch allocations", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var archivedCount int64 = 0
+
+	// Archive each allocation to history table
+	for rows.Next() {
+		var teacherID int
+		var courseTypeID, maxCount int
+		if err := rows.Scan(&teacherID, &courseTypeID, &maxCount); err != nil {
+			log.Printf("Error scanning allocation: %v", err)
+			continue
+		}
+
+		// Get alphanumeric teacher_id from teachers table
+		var teacherAlphanumericID string
+		teacherQuery := `SELECT faculty_id FROM teachers WHERE id = ?`
+		err = tx.QueryRow(teacherQuery, teacherID).Scan(&teacherAlphanumericID)
+		if err != nil {
+			log.Printf("Warning: Could not fetch teacher alphanumeric ID for teacher %d: %v", teacherID, err)
+			// Use numeric ID as fallback
+			teacherAlphanumericID = fmt.Sprintf("%d", teacherID)
+		}
+
+		// Insert archive record with window dates and semester type
+		historyQuery := `
+			INSERT INTO teacher_course_history 
+			(teacher_id, course_type_id, max_count, allocated_count, window_start, window_end, semester_type, academic_year, archived_at, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+		`
+		_, err = tx.Exec(historyQuery, teacherAlphanumericID, courseTypeID, maxCount, maxCount, windowStart, windowEnd, semesterType, academicYear)
+		if err != nil {
+			log.Printf("Error archiving allocation for teacher %d: %v", teacherID, err)
+			continue
+		}
+		archivedCount++
+	}
+
+	// Clear teacher_course_limits for fresh cycle
+	deleteQuery := `DELETE FROM teacher_course_limits`
+	result, err := tx.Exec(deleteQuery)
+	if err != nil {
+		log.Printf("Error clearing allocations: %v", err)
+		http.Error(w, "Failed to clear allocations", http.StatusInternalServerError)
+		return
+	}
+
+	deletedCount, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("Error getting deleted rows: %v", err)
+	}
+
+	// Commit transaction
+	if err = tx.Commit(); err != nil {
+		log.Printf("Error committing transaction: %v", err)
+		http.Error(w, "Failed to commit changes", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Archived %d allocations to history and cleared %d from limits for academic year %s", archivedCount, deletedCount, academicYear)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":         "Allocations archived and cleared successfully",
+		"archived_count":  archivedCount,
+		"cleared_count":   deletedCount,
+		"academic_year":   academicYear,
+	})
+}
+
+// GetActiveAllocations retrieves current allocations for a teacher (all allocations in teacher_course_limits are active)
+func GetActiveAllocations(w http.ResponseWriter, r *http.Request) {
+	facultyIDParam := r.URL.Query().Get("faculty_id")
+	if facultyIDParam == "" {
+		http.Error(w, "faculty_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get teachers.faculty_id from teachers.id
+	var facultyID string
+	teacherIDInt, err := strconv.Atoi(facultyIDParam)
+	if err == nil {
+		// If it's a number, look up faculty_id from teachers table
+		err = db.DB.QueryRow("SELECT faculty_id FROM teachers WHERE id = ?", teacherIDInt).Scan(&facultyID)
+		if err != nil {
+			log.Printf("Error fetching faculty_id for teacher_id %d: %v", teacherIDInt, err)
+			http.Error(w, "Teacher not found", http.StatusNotFound)
+			return
+		}
+	} else {
+		// If it's not a number, assume it's already the faculty_id
+		facultyID = facultyIDParam
+	}
+
+	query := `
+		SELECT 
+			tcl.course_type_id,
+			ct.course_type AS course_type_name,
+			tcl.max_count
+		FROM teacher_course_limits tcl
+		JOIN course_type ct ON tcl.course_type_id = ct.id
+		WHERE tcl.teacher_id = ?
+		ORDER BY ct.id
+	`
+
+	rows, err := db.DB.Query(query, facultyID)
+	if err != nil {
+		log.Printf("Error fetching allocations: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type CourseAllocation struct {
+		CourseTypeID   int    `json:"course_type_id"`
+		CourseTypeName string `json:"course_type_name"`
+		MaxCount       int    `json:"max_count"`
+	}
+
+	var allocations []CourseAllocation
+	for rows.Next() {
+		var alloc CourseAllocation
+		err := rows.Scan(&alloc.CourseTypeID, &alloc.CourseTypeName, &alloc.MaxCount)
+		if err != nil {
+			log.Printf("Error scanning allocation: %v", err)
+			continue
+		}
+		allocations = append(allocations, alloc)
+	}
+
+	if allocations == nil {
+		allocations = []CourseAllocation{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(allocations)
 }

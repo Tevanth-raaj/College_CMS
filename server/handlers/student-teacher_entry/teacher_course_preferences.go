@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -84,6 +85,7 @@ func GetTeacherAllocationSummary(w http.ResponseWriter, r *http.Request) {
 	summary.CurrentSemesterType = "odd" // Default or fetch from somewhere
 
 	// Fetch all course types and their limits/selections for this teacher
+	// Use faculty_id for teacher_course_limits (varchar) and id for teacher_course_preferences (int)
 	typeQuery := `
 		SELECT 
 			ct.id, 
@@ -96,7 +98,7 @@ func GetTeacherAllocationSummary(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN teacher_course_limits tcl ON ct.id = tcl.course_type_id AND tcl.teacher_id = ?
 		ORDER BY ct.id
 	`
-	rows, err := db.DB.Query(typeQuery, teacherID, teacherID)
+	rows, err := db.DB.Query(typeQuery, teacherID, summary.FacultyID)
 	if err != nil {
 		log.Printf("Error fetching type summaries: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -144,38 +146,24 @@ func GetTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 	teacherID := vars["teacher_id"]
 
 	academicYear := r.URL.Query().Get("academic_year")
+	if strings.TrimSpace(academicYear) == "" {
+		http.Error(w, "academic_year is required", http.StatusBadRequest)
+		return
+	}
 	
 	log.Printf("GetTeacherCoursePreferences - teacherID: %s, academicYear: %s", teacherID, academicYear)
 
-	// Get current and next semester type from teacher_course_tracking
-	var currentSemesterType, nextSemesterType string
-	err := db.DB.QueryRow(`
-		SELECT COALESCE(current_semester_type, 'even'),
-		       CASE WHEN current_semester_type = 'even' THEN 'odd' ELSE 'even' END
-		FROM teacher_course_tracking
-		WHERE academic_year = ?
-		LIMIT 1
-	`, academicYear).Scan(&currentSemesterType, &nextSemesterType)
-
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Error fetching semester type: %v", err)
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Check if teacher has already submitted/locked preferences for next semester (is_active=1)
+	// Simple lock check: does this teacher have ANY active (is_active=1) preferences?
 	var lockedCount int
-	err = db.DB.QueryRow(`
+	err := db.DB.QueryRow(`
 		SELECT COUNT(*) FROM teacher_course_preferences
-		WHERE teacher_id = ? AND academic_year = ? AND current_semester_type = ? AND is_active = 1
-	`, teacherID, academicYear, nextSemesterType).Scan(&lockedCount)
-
+		WHERE teacher_id = ? AND is_active = 1
+	`, teacherID).Scan(&lockedCount)
 	if err != nil {
 		log.Printf("Error checking lock status: %v", err)
 	}
-
 	isLocked := lockedCount > 0
-	log.Printf("Teacher %s - Next semester type: %s, is_locked: %v (active preference count: %d)", teacherID, nextSemesterType, isLocked, lockedCount)
+	log.Printf("[LOCK_CHECK] Teacher %s - active preference count: %d, is_locked: %v", teacherID, lockedCount, isLocked)
 
 	query := `
 		SELECT tcp.id, tcp.teacher_id, tcp.course_id, tcp.semester, COALESCE(tcp.batch, ''), COALESCE(ct.course_type, 'theory') as course_type, 
@@ -184,18 +172,10 @@ func GetTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 		FROM teacher_course_preferences tcp
 		LEFT JOIN courses c ON tcp.course_id = c.course_code
 		LEFT JOIN course_type ct ON tcp.course_type = ct.id
-		WHERE tcp.teacher_id = ? AND tcp.academic_year = ?
+		WHERE tcp.teacher_id = ? AND tcp.is_active = 1
 	`
 
-	args := []interface{}{teacherID, academicYear}
-
-	// If locked preferences exist, show only the locked ones (is_active=1)
-	// If not locked, show old preferences (is_active=0) for reference
-	if isLocked {
-		query += " AND tcp.is_active = 1"
-	} else {
-		query += " AND tcp.is_active = 0"
-	}
+	args := []interface{}{teacherID}
 
 	query += " ORDER BY tcp.semester, tcp.priority"
 
@@ -258,7 +238,7 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 			CourseID   string `json:"course_id"`
 			Semester   int    `json:"semester"`
 			Batch      string `json:"batch"`
-			CourseType int    `json:"course_type"`
+			CourseType string `json:"course_type"` // Changed to string (theory, theory_with_lab, lab)
 			Priority   int    `json:"priority"`
 		} `json:"preferences"`
 	}
@@ -275,14 +255,27 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 	log.Printf("CurrentSemesterType: %s", requestData.CurrentSemesterType)
 	log.Printf("Number of preferences: %d", len(requestData.Preferences))
 	for i, pref := range requestData.Preferences {
-		log.Printf("  Pref %d: CourseID=%s, Semester=%d, Batch=%s, CourseType=%d, Priority=%d", 
+		log.Printf("  Pref %d: CourseID=%s, Semester=%d, Batch=%s, CourseType=%s, Priority=%d", 
 			i+1, pref.CourseID, pref.Semester, pref.Batch, pref.CourseType, pref.Priority)
 	}
 	log.Printf("==========================================")
 
+	requestData.AcademicYear = strings.TrimSpace(requestData.AcademicYear)
+	if requestData.AcademicYear == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "academic_year is required",
+		})
+		return
+	}
+
+	var err error
+
 	// Check for pending appeals - teacher cannot modify preferences until appeal is resolved
 	var hasPendingAppeal bool
-	err := db.DB.QueryRow(`
+	err = db.DB.QueryRow(`
 		SELECT EXISTS(
 			SELECT 1 FROM teacher_course_appeal 
 			WHERE faculty_id = ? AND appeal_status = 0
@@ -306,93 +299,153 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current_semester_type and next_semester_type from teacher_course_tracking
-	var currentSemesterType, nextSemesterType string
+	// Get current_semester_type from the active tracking window
+	var currentSemesterType string
 	err = db.DB.QueryRow(`
-		SELECT COALESCE(current_semester_type, ''), 
-		       CASE WHEN current_semester_type = 'even' THEN 'odd' ELSE 'even' END
+		SELECT COALESCE(LOWER(TRIM(current_semester_type)), 'even')
 		FROM teacher_course_tracking
-		WHERE academic_year = ?
+		WHERE is_active = 1
+		ORDER BY id DESC
 		LIMIT 1
-	`, requestData.AcademicYear).Scan(&currentSemesterType, &nextSemesterType)
-
+	`).Scan(&currentSemesterType)
 	if err != nil {
-		log.Printf("Error fetching semester type from teacher_course_tracking: %v", err)
-		http.Error(w, "Failed to get semester type configuration", http.StatusInternalServerError)
-		return
+		log.Printf("Error fetching semester type from tracking: %v", err)
+		currentSemesterType = "even"
 	}
 
-	log.Printf("Current semester type: %s, Next semester type: %s", currentSemesterType, nextSemesterType)
-
-	// Check if selection window is open
-	var windowStart, windowEnd sql.NullTime
-	err = db.DB.QueryRow(`
-		SELECT window_start, window_end
-		FROM teacher_course_tracking
-		WHERE academic_year = ?
-		LIMIT 1
-	`, requestData.AcademicYear).Scan(&windowStart, &windowEnd)
-
-	if err != nil {
-		log.Printf("Error checking selection window: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   "Selection window not configured for this academic year",
-		})
-		return
-	}
-
-	// Validate window is active
-	now := time.Now()
-	if !windowStart.Valid || !windowEnd.Valid {
-		log.Printf("Selection window dates not set")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   "Teacher course selection window is not configured",
-		})
-		return
-	}
-
-	if now.Before(windowStart.Time) {
-		log.Printf("Selection window not yet open. Opens on: %v", windowStart.Time)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":    false,
-			"error":      "Teacher course selection window has not opened yet",
-			"opens_at":   windowStart.Time.Format("2006-01-02 15:04:05"),
-		})
-		return
-	}
-
-	if now.After(windowEnd.Time) {
-		// Window closes at END OF DAY (23:59:59), so we need to check if we're past midnight of the next day
-		nextDay := windowEnd.Time.AddDate(0, 0, 1)
-		if now.After(nextDay) {
-			log.Printf("Selection window closed. Closed on: %v (23:59:59)", windowEnd.Time)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success":   false,
-				"error":     "Teacher course selection window has closed",
-				"closed_at": windowEnd.Time.Format("2006-01-02") + " 23:59:59",
-			})
-			return
+	// Determine academic year to store preferences under:
+	// If current semester is 'odd', choices are for next year's ODD semester -> shift year forward
+	saveAcademicYear := requestData.AcademicYear
+	if currentSemesterType == "odd" {
+		parts := strings.Split(requestData.AcademicYear, "-")
+		if len(parts) == 2 {
+			var year1, year2 int
+			fmt.Sscanf(parts[0], "%d", &year1)
+			fmt.Sscanf(parts[1], "%d", &year2)
+			saveAcademicYear = fmt.Sprintf("%d-%d", year1+1, year2+1)
 		}
 	}
 
-	log.Printf("✓ Selection window is open: %v to %v", windowStart.Time, windowEnd.Time)
+	log.Printf("Current tracking semester: %s, Saving preferences under academic year: %s", currentSemesterType, saveAcademicYear)
 
-	// Validate teacher allocation dynamically - now using course_type ID
+	// Check if teacher has ALREADY submitted active preferences
+	var existingCount int
+	err = db.DB.QueryRow(`
+		SELECT COUNT(*) FROM teacher_course_preferences 
+		WHERE teacher_id = ? AND is_active = 1
+	`, requestData.TeacherID).Scan(&existingCount)
+
+	if err != nil {
+		log.Printf("Error checking existing active preferences: %v", err)
+		http.Error(w, "Error validating existing submission", http.StatusInternalServerError)
+		return
+	}
+
+	if existingCount > 0 {
+		log.Printf("Teacher %d already has active preferences - blocking duplicate save", requestData.TeacherID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "You have already submitted your course preferences for this semester window.",
+			"locked":  true,
+		})
+		return
+	}
+
+	// Check if selection window is open
+	var windowStart, windowEnd sql.NullTime
+	var isActive int
+	err = db.DB.QueryRow(`
+		SELECT window_start, window_end, COALESCE(is_active, 0)
+		FROM teacher_course_tracking
+		WHERE is_active = 1
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&windowStart, &windowEnd, &isActive)
+
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Error fetching window dates: %v", err)
+		http.Error(w, "Error validating selection window", http.StatusInternalServerError)
+		return
+	}
+
+	// Check if window is active (is_active = 1)
+	if isActive != 1 {
+		log.Printf("[SAVE_VALIDATION] Window is_active flag is off (value: %d) - cannot save", isActive)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Selection window is not active",
+			"locked":  true,
+		})
+		return
+	}
+
+	// Check if window dates are configured
+	if !windowStart.Valid || !windowEnd.Valid {
+		log.Printf("[SAVE_VALIDATION] Window dates not set - cannot save")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Selection window is not configured",
+			"locked":  true,
+		})
+		return
+	}
+
+	// Check if current time is within window range
+	now := time.Now()
+	if now.Before(windowStart.Time) || now.After(windowEnd.Time) {
+		log.Printf("[SAVE_VALIDATION] Outside window dates - now: %v, start: %v, end: %v", now, windowStart.Time, windowEnd.Time)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "The selection window is currently closed",
+			"locked":  true,
+		})
+		return
+	}
+	log.Printf("[SAVE_VALIDATION] Window is active and dates valid - now: %v (between %v and %v)", now, windowStart.Time, windowEnd.Time)
+
+	// Convert numeric teacher ID to alphanumeric faculty_id for teacher_course_limits query
+	var facultyID string
+	err = db.DB.QueryRow("SELECT faculty_id FROM teachers WHERE id = ?", requestData.TeacherID).Scan(&facultyID)
+	if err != nil {
+		log.Printf("Error fetching faculty_id for teacher %d: %v", requestData.TeacherID, err)
+		http.Error(w, "Teacher not found", http.StatusNotFound)
+		return
+	}
+
+	// Build course type mappings (name string <-> numeric ID)
+	courseTypeMap := make(map[string]int) // course_type string -> ID
+	typeNameMap := make(map[int]string)   // ID -> course_type string
+	typeRows, err := db.DB.Query("SELECT id, course_type FROM course_type")
+	if err != nil {
+		log.Printf("Error fetching course types: %v", err)
+		http.Error(w, "Failed to fetch course type mappings", http.StatusInternalServerError)
+		return
+	}
+	defer typeRows.Close()
+	
+	for typeRows.Next() {
+		var id int
+		var typeName string
+		if err := typeRows.Scan(&id, &typeName); err == nil {
+			courseTypeMap[typeName] = id
+			typeNameMap[id] = typeName
+		}
+	}
+
+	// Validate teacher allocation dynamically - using alphanumeric faculty_id (VARCHAR)
 	rows, err := db.DB.Query(`
 		SELECT ct.id, ct.course_type, COALESCE(tcl.max_count, 0)
 		FROM course_type ct
 		LEFT JOIN teacher_course_limits tcl ON ct.id = tcl.course_type_id AND tcl.teacher_id = ?
-	`, requestData.TeacherID)
+	`, facultyID)
 
 	if err != nil {
 		log.Printf("Error fetching teacher allocation: %v", err)
@@ -402,21 +455,21 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	limitMap := make(map[int]int) // Changed to map[int]int for course_type_id
-	typeNameMap := make(map[int]string) // To get type names for error messages
 	for rows.Next() {
 		var typeID int
 		var name string
 		var max int
 		if err := rows.Scan(&typeID, &name, &max); err == nil {
 			limitMap[typeID] = max
-			typeNameMap[typeID] = name
 		}
 	}
 
 	// Count selections by type ID
 	selectionCounts := make(map[int]int)
 	for _, pref := range requestData.Preferences {
-		selectionCounts[pref.CourseType]++
+		if courseTypeID, exists := courseTypeMap[pref.CourseType]; exists {
+			selectionCounts[courseTypeID]++
+		}
 	}
 
 	// Validate counts
@@ -449,23 +502,8 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// UPSERT behavior: Delete existing preferences for this teacher/academic_year/semester_type combination
-	// This allows resubmission and ensures no duplicates
-	log.Printf("Deleting existing preferences for teacher %d, academic year %s, semester type %s", 
-		requestData.TeacherID, requestData.AcademicYear, nextSemesterType)
-	deleteResult, err := tx.Exec(`
-		DELETE FROM teacher_course_preferences 
-		WHERE teacher_id = ? AND academic_year = ? AND current_semester_type = ?
-	`, requestData.TeacherID, requestData.AcademicYear, nextSemesterType)
-
-	if err != nil {
-		log.Printf("Error deleting existing preferences: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	
-	rowsDeleted, _ := deleteResult.RowsAffected()
-	log.Printf("Deleted %d existing preferences (if any)", rowsDeleted)
+	// Insert new preferences (no delete since we now prevent resubmission)
+	log.Printf("Inserting %d new preferences for teacher %d", len(requestData.Preferences), requestData.TeacherID)
 
 	// Insert new preferences
 	stmt, err := tx.Prepare(`
@@ -482,34 +520,42 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Inserting %d preferences for teacher %d", len(requestData.Preferences), requestData.TeacherID)
 	
-	// First, validate that all course_type IDs exist
+	// Validate and prepare preference data with converted course_type IDs
+	var prefsToInsert []map[string]interface{}
 	for i, pref := range requestData.Preferences {
-		var exists bool
-		err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM course_type WHERE id = ?)", pref.CourseType).Scan(&exists)
-		if err != nil || !exists {
-			log.Printf("Invalid course_type ID %d for course %s (preference %d)", pref.CourseType, pref.CourseID, i+1)
+		courseTypeID, exists := courseTypeMap[pref.CourseType]
+		if !exists {
+			log.Printf("Invalid course_type '%s' for course %s (preference %d)", pref.CourseType, pref.CourseID, i+1)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{
-				"error": fmt.Sprintf("Invalid course type ID %d. Please refresh the page and try again.", pref.CourseType),
+				"error": fmt.Sprintf("Invalid course type '%s'. Valid types are: theory, theory_with_lab, lab", pref.CourseType),
 			})
 			return
 		}
+		
+		prefsToInsert = append(prefsToInsert, map[string]interface{}{
+			"course_id":   pref.CourseID,
+			"semester":    pref.Semester,
+			"batch":       pref.Batch,
+			"course_type": courseTypeID, // Converted to numeric ID
+			"priority":    pref.Priority,
+		})
 	}
 	
-	for i, pref := range requestData.Preferences {
-		log.Printf("Inserting preference %d: CourseID=%s, Semester=%d, Batch=%s, CourseType=%d, Priority=%d", 
-			i+1, pref.CourseID, pref.Semester, pref.Batch, pref.CourseType, pref.Priority)
+	for i, prefData := range prefsToInsert {
+		log.Printf("Inserting preference %d: CourseID=%s, Semester=%d, Batch=%s, CourseTypeID=%d, Priority=%d", 
+			i+1, prefData["course_id"], prefData["semester"], prefData["batch"], prefData["course_type"], prefData["priority"])
 			
 		result, err := stmt.Exec(
 			requestData.TeacherID,
-			pref.CourseID,
-			pref.Semester,
-			pref.Batch,
-			pref.CourseType,
-			requestData.AcademicYear,
-			nextSemesterType,
-			pref.Priority,
+			prefData["course_id"],
+			prefData["semester"],
+			prefData["batch"],
+			prefData["course_type"],
+			saveAcademicYear,
+			currentSemesterType,
+			prefData["priority"],
 		)
 		if err != nil {
 			log.Printf("Error inserting preference: %v", err)
@@ -532,9 +578,8 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 	// After successful save, preferences are now locked for the next semester type
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":   true,
-		"message":   "Course preferences saved and locked successfully",
-		"locked":    true,
-		"next_semester_type": nextSemesterType,
+		"success": true,
+		"message": "Course preferences saved and locked successfully",
+		"locked":  true,
 	})
 }

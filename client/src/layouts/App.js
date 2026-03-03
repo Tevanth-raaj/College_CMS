@@ -24,8 +24,10 @@ import CourseAllocationPage from "../pages/curriculum/CourseAllocationPage";
 import ElectiveSelectionPage from "../pages/student/ElectiveSelectionPage";
 import TeacherCourseSelectionPage from "../pages/teacher/TeacherCourseSelectionPage";
 import HRFacultyPage from "../pages/hr/HRFacultyPage";
+import HRAppealsReviewPage from "../pages/hr/HRAppealsReviewPage";
 import ElectiveManagementPage from "../pages/curriculum/ElectiveManagementPage";
 import HODElectivePage from "../pages/curriculum/HODElectivePage";
+import HODHonourMinorEligibilityPage from "../pages/curriculum/HODHonourMinorEligibilityPage";
 import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
@@ -57,6 +59,7 @@ function App() {
           <Route path="/student/elective-selection" element={<ElectiveSelectionPage />} />
           <Route path="/elective-management" element={<ElectiveManagementPage />} />
           <Route path="/hod/elective-management" element={<HODElectivePage />} />
+          <Route path="/hod/honour-minor-eligibility" element={<HODHonourMinorEligibilityPage />} />
 
           <Route path="/teacher-courses" element={<TeacherCoursesPage />} />
           <Route path="/teacher-course/:courseId/students" element={<TeacherCourseStudentsPage />} />
@@ -66,6 +69,7 @@ function App() {
           <Route path="/my-assigned-students" element={<MyAssignedStudentsPage />} />
 
           <Route path="/hr/faculty" element={<HRFacultyPage />} />
+          <Route path="/hr/appeals" element={<HRAppealsReviewPage />} />
 
           <Route path="/regulations" element={<RegulationPage />} />
           <Route path="/curriculum/:id/editor" element={<RegulationEditorPage />} />

@@ -135,7 +135,7 @@ func runMigrations() error {
 		log.Printf("Initial values insert warning: %v", err)
 	}
 
-	// Create teacher_course_limits table
+	// Create teacher_course_limits table (current allocations only)
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS teacher_course_limits (
 			id INT PRIMARY KEY AUTO_INCREMENT,
@@ -144,6 +144,40 @@ func runMigrations() error {
 			max_count INT DEFAULT 0,
 			UNIQUE KEY (teacher_id, course_type_id),
 			FOREIGN KEY (course_type_id) REFERENCES course_type(id)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Create teacher_course_history table to track allocation history
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS teacher_course_history (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			teacher_id VARCHAR(50) NOT NULL,
+			course_id INT DEFAULT NULL,
+			course_code VARCHAR(20) DEFAULT NULL,
+			course_name VARCHAR(255) DEFAULT NULL,
+			course_type_id INT NOT NULL,
+			max_count INT DEFAULT 0,
+			allocated_count INT DEFAULT 0,
+			window_start DATE NOT NULL,
+			window_end DATE NOT NULL,
+			semester_type VARCHAR(10) COMMENT 'ODD or EVEN',
+			academic_year VARCHAR(20) COMMENT 'e.g., 2025-2026',
+			record_type VARCHAR(20) DEFAULT NULL COMMENT 'limit or course',
+			allocated_date TIMESTAMP NULL COMMENT 'When the cron assigned this course',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			archived_at TIMESTAMP NULL COMMENT 'When this allocation was archived (window closed)',
+			
+			FOREIGN KEY (course_type_id) REFERENCES course_type(id),
+			KEY idx_teacher_id (teacher_id),
+			KEY idx_course_id (course_id),
+			KEY idx_window_dates (window_start, window_end),
+			KEY idx_record_type (record_type),
+			KEY idx_archived_at (archived_at),
+			INDEX idx_teacher_course_window (teacher_id, course_type_id, window_start)
 		)
 	`)
 	if err != nil {
@@ -200,10 +234,13 @@ func runMigrations() error {
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS student_eligible_honour_minor (
 			id INT AUTO_INCREMENT PRIMARY KEY,
-			student_email VARCHAR(255) NOT NULL UNIQUE,
+			student_email VARCHAR(255) NOT NULL,
+			type VARCHAR(20) DEFAULT 'HONOUR' COMMENT 'Type of eligibility: HONOUR or MINOR',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			INDEX idx_student_email (student_email)
+			UNIQUE KEY idx_student_email_type (student_email, type),
+			INDEX idx_type (type),
+			INDEX idx_type_email (type, student_email)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
@@ -236,6 +273,21 @@ func runMigrations() error {
 		log.Printf("Warning: Failed to create teacher_course_appeal table: %v", err)
 	} else {
 		log.Println("teacher_course_appeal table created/verified successfully")
+	}
+
+	// Add allocation_run_at column to academic_calendar if it doesn't exist
+	var colExists int
+	err = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_NAME='academic_calendar' AND COLUMN_NAME='allocation_run_at'").Scan(&colExists)
+	if err == nil && colExists == 0 {
+		_, err = DB.Exec(`
+			ALTER TABLE academic_calendar 
+			ADD COLUMN allocation_run_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Timestamp when allocation was run for this window'
+		`)
+		if err != nil {
+			log.Printf("Warning: Failed to add allocation_run_at column: %v", err)
+		} else {
+			log.Println("allocation_run_at column added to academic_calendar")
+		}
 	}
 
 	// Run SQL migration files from db/migrations directory

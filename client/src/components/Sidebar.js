@@ -203,7 +203,37 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin"],
+        roles: ["admin", "teacher"],
+      },
+      {
+        name: "Course Selection",
+        path: "/teacher/course-selection",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+            />
+          </svg>
+        ),
+        roles: ["teacher"],
+      },
+      {
+        name: "Electives",
+        path: "/student/elective-selection",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3v-6"
+            />
+          </svg>
+        ),
+        roles: ["student"],
       },
       {
         name: "Mark Entry",
@@ -237,6 +267,21 @@ function Sidebar({ onExpandedChange }) {
         roles: ["admin", "coe"],
       },
       {
+        name: "Honour/Minor Import",
+        path: "/hod/honour-minor-eligibility",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 4v16m8-8H4"
+            />
+          </svg>
+        ),
+        roles: ["hod"],
+      },
+      {
         name: "Faculty Management",
         path: "/hr/faculty",
         icon: (
@@ -249,7 +294,22 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin", "hod"],
+        roles: ["admin", "hod", "hr"],
+      },
+      {
+        name: "Workload Appeals",
+        path: "/hr/appeals",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+            />
+          </svg>
+        ),
+        roles: ["admin", "hod", "hr"],
       },
     ];
 
@@ -368,8 +428,8 @@ function Sidebar({ onExpandedChange }) {
             key={item.path}
             onClick={() => navigate(item.path)}
             className={`w-full flex items-center rounded-lg transition-all duration-300 ease-in-out ${isActive(item.path)
-                ? "font-medium"
-                : "text-gray-900 hover:bg-gray-200 hover:text-gray-800"
+                ? "font-medium text-white"
+                : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
               } ${isSidebarExpanded
                 ? "px-4 py-3 justify-start"
                 : "px-0 py-3 justify-center"
@@ -378,20 +438,19 @@ function Sidebar({ onExpandedChange }) {
               ...(isActive(item.path)
                 ? {
                   backgroundColor: "rgb(125, 83, 246)",
-                  color: "#ffffff",
                 }
                 : {}),
             }}
           >
             <div className="flex items-center gap-3 transition-all duration-300 ease-in-out">
               <div
-                className={`flex-shrink-0 w-6 h-6 flex items-center justify-center ${isActive(item.path) ? "text-white" : "text-iconColor"
+                className={`flex-shrink-0 w-6 h-6 flex items-center justify-center ${isActive(item.path) ? "text-white" : "text-gray-600"
                   }`}
               >
                 {item.icon}
               </div>
               {isSidebarExpanded && (
-                <span className="whitespace-nowrap overflow-hidden">{item.name}</span>
+                <span className="whitespace-nowrap overflow-hidden text-sm font-semibold">{item.name}</span>
               )}
             </div>
           </button>

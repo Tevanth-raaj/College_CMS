@@ -87,8 +87,8 @@ func GetAllFaculty(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Fetch limits for this faculty
-		f.CourseLimits = getTeacherLimits(f.ID)
+		// Fetch limits for this faculty using alphanumeric faculty_id
+		f.CourseLimits = getTeacherLimits(f.FacultyID)
 		
 		faculty = append(faculty, f)
 	}
@@ -106,14 +106,14 @@ func GetAllFaculty(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func getTeacherLimits(teacherID uint64) []TeacherLimit {
+func getTeacherLimits(facultyID string) []TeacherLimit {
 	query := `
 		SELECT ct.id, ct.course_type, COALESCE(tcl.max_count, 0)
 		FROM course_type ct
 		LEFT JOIN teacher_course_limits tcl ON ct.id = tcl.course_type_id AND tcl.teacher_id = ?
 		ORDER BY ct.id
 	`
-	rows, err := db.DB.Query(query, teacherID)
+	rows, err := db.DB.Query(query, facultyID)
 	if err != nil {
 		log.Printf("Error fetching teacher limits: %v", err)
 		return []TeacherLimit{}
@@ -136,7 +136,7 @@ func UpdateFacultySubjectCounts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	var req struct {
-		FacultyID    uint64         `json:"faculty_id"`
+		FacultyID    string         `json:"faculty_id"` // Changed to string for alphanumeric ID
 		CourseLimits []TeacherLimit `json:"course_limits"`
 	}
 

@@ -126,21 +126,40 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	nextSemester := currentSemester + 1
 	log.Printf("Student department_id: %d, current semester: %d, next semester: %d, batch: %s", departmentID, currentSemester, nextSemester, batch)
 
-	// Step 4: Check if student is eligible for Honour/Minor courses
-	var isEligibleForHonourMinor bool
+	// Step 4: Check student eligibility for Honour/Minor courses by type
+	eligibilityMap := make(map[string]bool)
+	
+	// Check for HONOUR eligibility
+	var hasHonourEligibility bool
 	err = db.DB.QueryRow(`
 		SELECT EXISTS(
 			SELECT 1 FROM student_eligible_honour_minor 
-			WHERE student_email = ?
+			WHERE student_email = ? AND (type = 'HONOUR')
 		)
-	`, email).Scan(&isEligibleForHonourMinor)
+	`, email).Scan(&hasHonourEligibility)
 	
 	if err != nil {
-		log.Printf("Error checking honour/minor eligibility: %v", err)
-		isEligibleForHonourMinor = false // Default to not eligible
+		log.Printf("Error checking honour eligibility: %v", err)
+		hasHonourEligibility = false
 	}
+	eligibilityMap["HONOUR"] = hasHonourEligibility
 	
-	log.Printf("Student eligible for Honour/Minor: %v", isEligibleForHonourMinor)
+	// Check for MINOR eligibility
+	var hasMinorEligibility bool
+	err = db.DB.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM student_eligible_honour_minor 
+			WHERE student_email = ? AND (type = 'MINOR')
+		)
+	`, email).Scan(&hasMinorEligibility)
+	
+	if err != nil {
+		log.Printf("Error checking minor eligibility: %v", err)
+		hasMinorEligibility = false
+	}
+	eligibilityMap["MINOR"] = hasMinorEligibility
+	
+	log.Printf("Student eligible for Honour: %v, Minor: %v", hasHonourEligibility, hasMinorEligibility)
 
 	// Step 5: Get ALL elective slots for this semester with their HOD-assigned courses
 	query := `
@@ -239,9 +258,13 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	for _, slotID := range slotOrderList {
 		slot := slotMap[slotID]
 		
-		// Filter out HONOR and MINOR slots if student is not eligible
-		if !isEligibleForHonourMinor && (slot.SlotType == "HONOR" || slot.SlotType == "MINOR") {
-			log.Printf("Filtering out %s slot '%s' - student not eligible", slot.SlotType, slot.SlotName)
+		// Filter out slots based on eligibility
+		if slot.SlotType == "HONOR" && !eligibilityMap["HONOUR"] {
+			log.Printf("Filtering out HONOUR slot '%s' - student not eligible", slot.SlotName)
+			continue
+		}
+		if slot.SlotType == "MINOR" && !eligibilityMap["MINOR"] {
+			log.Printf("Filtering out MINOR slot '%s' - student not eligible", slot.SlotName)
 			continue
 		}
 		

@@ -36,10 +36,11 @@ function LoginPage() {
         localStorage.setItem('user_id', data.user.id) // Store with underscore for consistency
         localStorage.setItem('username', data.user.username) // Store username for API calls
         
-        // Store teacher ID if teacher role
-        if (data.user.role === 'teacher' && data.teacher_id) {
-          localStorage.setItem('teacherId', data.teacher_id)
-          localStorage.setItem('teacher_id', data.teacher_id) // Store with underscore for consistency
+        // Store teacher ID if teacher role (use teachers.id, NOT users.id)
+        if (data.user.role === 'teacher' && data.teacher_data?.teacher_id) {
+          localStorage.setItem('teacherId', data.teacher_data.teacher_id)
+          localStorage.setItem('teacher_id', data.teacher_data.teacher_id) // This is teachers.id, not users.id
+          localStorage.setItem('faculty_id', data.teacher_data.faculty_id) // Store alphanumeric faculty ID too
         }
 
         setUsername("");

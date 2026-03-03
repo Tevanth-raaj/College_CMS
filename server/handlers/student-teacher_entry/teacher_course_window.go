@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"server/db"
+	"strings"
 	
 	"github.com/gorilla/mux"
 )
@@ -21,12 +22,68 @@ func GetTeacherCourseWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var windowStart, windowEnd sql.NullTime
+	var currentSemesterType sql.NullString
+
+	var hasIsActive int
 	err := db.DB.QueryRow(`
-		SELECT window_start, window_end
-		FROM teacher_course_tracking
-		WHERE academic_year = ?
-		LIMIT 1
-	`, academicYear).Scan(&windowStart, &windowEnd)
+		SELECT COUNT(*)
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		AND TABLE_NAME = 'teacher_course_tracking'
+		AND COLUMN_NAME = 'is_active'
+	`).Scan(&hasIsActive)
+	if err != nil {
+		log.Printf("Error checking is_active column on teacher_course_tracking: %v", err)
+		hasIsActive = 0
+	}
+
+	if hasIsActive > 0 {
+		err = db.DB.QueryRow(`
+			SELECT window_start, window_end, COALESCE(current_semester_type, 'even')
+			FROM teacher_course_tracking
+			WHERE academic_year = ?
+			AND is_active = 1
+			AND window_start IS NOT NULL
+			AND window_end IS NOT NULL
+			AND window_start <= CURDATE()
+			AND window_end >= CURDATE()
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1
+		`, academicYear).Scan(&windowStart, &windowEnd, &currentSemesterType)
+
+		if err == sql.ErrNoRows {
+			err = db.DB.QueryRow(`
+				SELECT window_start, window_end, COALESCE(current_semester_type, 'even')
+				FROM teacher_course_tracking
+				WHERE academic_year = ?
+				AND is_active = 1
+				ORDER BY updated_at DESC, id DESC
+				LIMIT 1
+			`, academicYear).Scan(&windowStart, &windowEnd, &currentSemesterType)
+		}
+	} else {
+		err = db.DB.QueryRow(`
+			SELECT window_start, window_end, COALESCE(current_semester_type, 'even')
+			FROM teacher_course_tracking
+			WHERE academic_year = ?
+			AND window_start IS NOT NULL
+			AND window_end IS NOT NULL
+			AND window_start <= CURDATE()
+			AND window_end >= CURDATE()
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1
+		`, academicYear).Scan(&windowStart, &windowEnd, &currentSemesterType)
+
+		if err == sql.ErrNoRows {
+			err = db.DB.QueryRow(`
+				SELECT window_start, window_end, COALESCE(current_semester_type, 'even')
+				FROM teacher_course_tracking
+				WHERE academic_year = ?
+				ORDER BY updated_at DESC, id DESC
+				LIMIT 1
+			`, academicYear).Scan(&windowStart, &windowEnd, &currentSemesterType)
+		}
+	}
 
 	if err == sql.ErrNoRows {
 		w.Header().Set("Content-Type", "application/json")
@@ -47,33 +104,25 @@ func GetTeacherCourseWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current semester type - default to "even" or fetch from teacher_course_preferences if it exists
-	var currentSemesterType string
-	err2 := db.DB.QueryRow(`
-		SELECT COALESCE(current_semester_type, 'even')
-		FROM teacher_course_preferences
-		WHERE academic_year = ?
-		LIMIT 1
-	`, academicYear).Scan(&currentSemesterType)
-
-	if err2 != nil {
-		log.Printf("Warning: Could not fetch current semester type, defaulting to 'even': %v", err2)
-		currentSemesterType = "even"
+	semesterType := "even"
+	if currentSemesterType.Valid && strings.TrimSpace(currentSemesterType.String) != "" {
+		semesterType = strings.ToLower(strings.TrimSpace(currentSemesterType.String))
 	}
 
 	// Calculate next semester type
 	var nextSemesterType string
-	if currentSemesterType == "even" {
-		nextSemesterType = "odd"
-	} else {
+	if semesterType == "odd" {
 		nextSemesterType = "even"
+	} else {
+		nextSemesterType = "odd"
 	}
 
 	response := map[string]interface{}{
 		"academic_year":         academicYear,
 		"configured":            windowStart.Valid && windowEnd.Valid,
-		"current_semester_type": currentSemesterType,
+		"current_semester_type": semesterType,
 		"next_semester_type":    nextSemesterType,
+		"is_active_column":      hasIsActive > 0,
 	}
 
 	if windowStart.Valid {
