@@ -171,6 +171,15 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/course/{courseId}/student-marks", curriculum.GetStudentMarks).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/student-marks/save", curriculum.SaveStudentMarks).Methods("POST", "OPTIONS")
 
+	// Exam Absentees routes (COE role)
+	router.HandleFunc("/api/exam-absentees/preview", curriculum.PreviewAbsentees).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/exam-absentees/upload", curriculum.UploadAbsentees).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/exam-absentees", curriculum.GetExamAbsentees).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/exam-absentees/by-window/{windowId}", curriculum.DeleteExamAbsenteesByWindow).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/exam-absentees/{id}", curriculum.DeleteExamAbsentee).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/course/{courseId}/exam-absentees", curriculum.GetCourseWindowAbsentees).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/mark-categories/by-learning-mode", curriculum.GetMarkCategoriesByLearningMode).Methods("GET", "OPTIONS")
+
 	// Student-specific Mark Entry Permission routes
 	router.HandleFunc("/api/mark-entry/available-users", curriculum.GetAvailableUsersForAssignment).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/available-students", curriculum.GetStudentsForAssignment).Methods("GET", "OPTIONS")
@@ -229,9 +238,9 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/student-teacher-mapping/clear", studentteacher.ClearMappings).Methods("DELETE", "OPTIONS")
 
 	// Student Elective Selection routes
-	router.HandleFunc("/api/students/electives/available", studentteacher.GetAvailableElectives).Methods("GET", "OPTIONS")          // ?email=
-	router.HandleFunc("/api/students/electives/selections", studentteacher.SaveElectiveSelections).Methods("POST", "OPTIONS")       // ?email=
-	router.HandleFunc("/api/students/electives/selections", studentteacher.GetStudentElectiveSelections).Methods("GET", "OPTIONS")  // ?email=
+	router.HandleFunc("/api/students/electives/available", studentteacher.GetAvailableElectives).Methods("GET", "OPTIONS")         // ?email=
+	router.HandleFunc("/api/students/electives/selections", studentteacher.SaveElectiveSelections).Methods("POST", "OPTIONS")      // ?email=
+	router.HandleFunc("/api/students/electives/selections", studentteacher.GetStudentElectiveSelections).Methods("GET", "OPTIONS") // ?email=
 
 	// HR routes
 	router.HandleFunc("/api/hr/faculty", studentteacher.GetAllFaculty).Methods("GET", "OPTIONS")

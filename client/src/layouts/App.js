@@ -31,6 +31,7 @@ import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudents
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
 import MarkEntryPermissionsPage from "../pages/curriculum/MarkEntryPermissionsPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
+import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
 import PrivateRoute from "../components/PrivateRoute";
 import AppShell from "../components/AppShell";
 import NotFoundPage from "../components/NotFoundPage";
@@ -64,6 +65,7 @@ function App() {
           <Route path="/mark-entry" element={<MarkEntryPage />} />
           <Route path="/mark-entry-permissions" element={<MarkEntryPermissionsPage />} />
           <Route path="/my-assigned-students" element={<MyAssignedStudentsPage />} />
+          <Route path="/exam-absentees" element={<AbsenteesPage />} />
 
           <Route path="/hr/faculty" element={<HRFacultyPage />} />
 
