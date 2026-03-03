@@ -349,8 +349,9 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Fetch courses from OTHER departments' PE slot selections (for Minor slot options)
+	// Fetch courses offered TO this department by other departments via Minor Program Management
 	minorEligibleCourses := []models.MinorEligibleCourse{}
+	deptIDStr := fmt.Sprintf("%d", departmentID)
 	minorQuery := `
 		SELECT DISTINCT
 			c.id,
@@ -362,20 +363,19 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			d.id as department_id,
 			d.department_name,
 			COALESCE(d.department_code, '') as department_code,
-			ess.slot_name,
-			hes.semester
-		FROM hod_elective_selections hes
-		INNER JOIN courses c ON hes.course_id = c.id
-		INNER JOIN departments d ON hes.department_id = d.id
-		INNER JOIN elective_semester_slots ess ON hes.slot_id = ess.id
-		WHERE hes.department_id != ?
-			AND hes.academic_year = ?
-			AND hes.status = 'ACTIVE'
-			AND LOWER(ess.slot_name) LIKE '%professional elective%'
-		ORDER BY d.department_name, hes.semester, c.course_code
+			'Minor Offering' as slot_name,
+			hms.semester
+		FROM hod_minor_selections hms
+		INNER JOIN courses c ON hms.course_id = c.id
+		INNER JOIN departments d ON hms.department_id = d.id
+		WHERE hms.department_id != ?
+			AND hms.academic_year = ?
+			AND hms.status = 'ACTIVE'
+			AND JSON_CONTAINS(hms.allowed_dept_ids, ?)
+		ORDER BY d.department_name, hms.semester, c.course_code
 	`
 
-	minorRows, err := db.DB.Query(minorQuery, departmentID, academicYear)
+	minorRows, err := db.DB.Query(minorQuery, departmentID, academicYear, deptIDStr)
 	if err != nil {
 		log.Println("Error fetching minor eligible courses:", err)
 	} else {
@@ -403,8 +403,8 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Fetch previously-assigned Minor courses for this department that aren't in the curriculum's verticals
-	// (these are courses from other departments that were assigned to Minor slots)
+	// Fetch previously-assigned Minor Slot courses for this department
+	// (courses from other departments that were assigned to Minor Slot 1/2)
 	minorAssignedQuery := `
 		SELECT DISTINCT
 			c.id,
@@ -415,7 +415,16 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			COALESCE(c.credit, 0) as credit,
 			0 as card_id,
 			0 as vertical_id,
-			CONCAT(d_src.department_name, ' Minor') as vertical_name,
+			COALESCE(
+				(SELECT CONCAT(d2.department_name, ' Minor')
+				 FROM hod_minor_selections hms2
+				 INNER JOIN departments d2 ON hms2.department_id = d2.id
+				 WHERE hms2.course_id = c.id
+				   AND hms2.department_id != ?
+				   AND hms2.status = 'ACTIVE'
+				 LIMIT 1),
+				'Minor Offering'
+			) as vertical_name,
 			NULL as vertical_semester,
 			'minor_assigned' as card_type,
 			1 as is_selected,
@@ -425,21 +434,11 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		FROM hod_elective_selections hes
 		INNER JOIN courses c ON hes.course_id = c.id
 		INNER JOIN elective_semester_slots ess ON hes.slot_id = ess.id
-		LEFT JOIN (
-			SELECT hes2.course_id, d2.department_name
-			FROM hod_elective_selections hes2
-			INNER JOIN departments d2 ON hes2.department_id = d2.id
-			INNER JOIN elective_semester_slots ess2 ON hes2.slot_id = ess2.id
-			WHERE hes2.department_id != ?
-				AND hes2.academic_year = ?
-				AND hes2.status = 'ACTIVE'
-				AND LOWER(ess2.slot_name) LIKE '%professional elective%'
-		) d_src ON c.id = d_src.course_id
 		WHERE hes.department_id = ?
 			AND hes.academic_year = ?
 			AND (hes.batch = ? OR hes.batch IS NULL OR ? = '')
 			AND hes.status = 'ACTIVE'
-			AND LOWER(ess.slot_name) = 'minor'
+			AND LOWER(ess.slot_name) LIKE '%minor slot%'
 			AND c.id NOT IN (
 				SELECT cc2.course_id FROM curriculum_courses cc2
 				INNER JOIN normal_cards nc2 ON cc2.semester_id = nc2.id
@@ -448,7 +447,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		ORDER BY c.course_code
 	`
 
-	minorAssignedRows, err := db.DB.Query(minorAssignedQuery, departmentID, academicYear, departmentID, academicYear, batch, batch, curriculumID)
+	minorAssignedRows, err := db.DB.Query(minorAssignedQuery, departmentID, departmentID, academicYear, batch, batch, curriculumID)
 	if err != nil {
 		log.Println("Error fetching minor assigned courses:", err)
 	} else {
@@ -620,8 +619,13 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 	// Count honour course assignments by semester and collect course IDs per semester
 	honourCourseCountBySemester := make(map[int]int)
 	honourCourseIDsBySemester := make(map[int][]int)
+	minorCourseCountBySemester := make(map[int]int)
+	minorCourseIDsBySemester := make(map[int][]int)
 	professionalCourseIDsBySemester := make(map[int][]int)
 	addOnCourseIDsBySemester := make(map[int][]int)
+
+	// Track slot usage for honour and minor slots (each specific slot can have max 1 course)
+	slotCourseCount := make(map[int]int)
 
 	for _, assignment := range req.CourseAssignments {
 		slotName := slotMap[assignment.SlotID]
@@ -629,6 +633,31 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(strings.ToLower(slotName), "honour slot") {
 			honourCourseCountBySemester[sem]++
 			honourCourseIDsBySemester[sem] = append(honourCourseIDsBySemester[sem], assignment.CourseID)
+			
+			// Track individual honour slot usage
+			slotCourseCount[assignment.SlotID]++
+			if slotCourseCount[assignment.SlotID] > 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf("%s can have only 1 course", slotName),
+				})
+				return
+			}
+		} else if strings.Contains(strings.ToLower(slotName), "minor slot") {
+			minorCourseCountBySemester[sem]++
+			minorCourseIDsBySemester[sem] = append(minorCourseIDsBySemester[sem], assignment.CourseID)
+			
+			// Track individual minor slot usage
+			slotCourseCount[assignment.SlotID]++
+			if slotCourseCount[assignment.SlotID] > 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf("%s can have only 1 course", slotName),
+				})
+				return
+			}
 		} else if strings.Contains(strings.ToLower(slotName), "professional elective") {
 			professionalCourseIDsBySemester[sem] = append(professionalCourseIDsBySemester[sem], assignment.CourseID)
 		} else if strings.Contains(strings.ToLower(slotName), "add on") {
@@ -648,9 +677,22 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Validate max 2 minor courses per semester
+	for semester, count := range minorCourseCountBySemester {
+		if count > 2 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Maximum 2 minor courses allowed per semester. Semester %d has %d minor courses.", semester, count),
+			})
+			return
+		}
+	}
+
 	// Per-semester validations: no overlap between slot types within the same semester
 	for sem := 4; sem <= 8; sem++ {
 		honourIDs := honourCourseIDsBySemester[sem]
+		minorIDs := minorCourseIDsBySemester[sem]
 		profIDs := professionalCourseIDsBySemester[sem]
 		addOnIDs := addOnCourseIDsBySemester[sem]
 
@@ -662,6 +704,20 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 					json.NewEncoder(w).Encode(map[string]interface{}{
 						"success": false,
 						"message": fmt.Sprintf("Semester %d: Honour and Professional Elective cannot share the same course. Please select different courses.", sem),
+					})
+					return
+				}
+			}
+		}
+
+		// Minor vs Professional
+		for _, mID := range minorIDs {
+			for _, pID := range profIDs {
+				if mID == pID {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"message": fmt.Sprintf("Semester %d: Minor and Professional Elective cannot share the same course. Please select different courses.", sem),
 					})
 					return
 				}
@@ -1437,30 +1493,8 @@ func SaveHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate semester assignments (must be sem 5, 6, 7 with 2 courses each)
-	semesterCounts := make(map[int]int)
-	for _, assignment := range req.SemesterAssignments {
-		if assignment.Semester < 5 || assignment.Semester > 7 {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"message": "Minor courses must be in semesters 5, 6, or 7",
-			})
-			return
-		}
-		semesterCounts[assignment.Semester]++
-	}
-
-	for sem := 5; sem <= 7; sem++ {
-		if semesterCounts[sem] != 2 {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"message": fmt.Sprintf("Each semester (5, 6, 7) must have exactly 2 courses. Semester %d has %d courses.", sem, semesterCounts[sem]),
-			})
-			return
-		}
-	}
+	// No special validation needed for minor slots - they work like any other slots
+	// Minor Slot 1 and Minor Slot 2 are regular slots in elective_semester_slots
 
 	// Get HOD's info
 	var userID, departmentID, curriculumID int
@@ -1589,7 +1623,7 @@ func SaveHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 
 	response := models.SaveMinorResponse{
 		Success: true,
-		Message: fmt.Sprintf("Minor program saved successfully: %d courses across semesters 5-7", len(req.SemesterAssignments)),
+		Message: fmt.Sprintf("Minor program saved successfully: %d courses offered", len(req.SemesterAssignments)),
 	}
 
 	w.WriteHeader(http.StatusOK)

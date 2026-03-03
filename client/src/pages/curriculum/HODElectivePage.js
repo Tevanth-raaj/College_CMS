@@ -812,8 +812,13 @@ const HODElectivePage = () => {
       .toLowerCase()
       .includes("honour slot");
 
+    const isMinorSlot = selectedSlot.slot_name
+      .toLowerCase()
+      .includes("minor slot");
+
     // Check 1: If it's a specific honour slot (Honour Slot 1 or 2), allow max 1 course
-    if (isHonourSlot) {
+    // Same for Minor Slot 1 or 2
+    if (isHonourSlot || isMinorSlot) {
       const semesterAssignments =
         courseAssignmentsBySemester[targetSemester] || {};
       const currentCourseCount = Object.entries(semesterAssignments).filter(
@@ -823,7 +828,8 @@ const HODElectivePage = () => {
             const slot = semesterSlots.find((s) => s.id === sid);
             return (
               slot &&
-              slot.slot_name.toLowerCase().includes("honour slot") &&
+              (slot.slot_name.toLowerCase().includes("honour slot") ||
+                slot.slot_name.toLowerCase().includes("minor slot")) &&
               slot.id === normalizedSlotId
             );
           }),
@@ -1173,16 +1179,16 @@ const HODElectivePage = () => {
     return [["Department Courses", addOnCourses]];
   }, [addOnCourses]);
 
-  // Group Minor eligible courses: own PE courses + other departments' PE selections
+  // Group Minor eligible courses: own department courses + courses offered by other departments
   const groupedMinorElectives = useMemo(() => {
-    // Start with own PE courses (same as groupedElectives)
+    // Start with own department's vertical/PE courses
     const groups = [...groupedElectives];
 
-    // Add courses from other departments' PE selections, grouped by department
+    // Add courses offered TO this department by other departments via Minor Program Management
     if (minorEligibleCourses.length > 0) {
       const deptGrouped = new Map();
       minorEligibleCourses.forEach((mc) => {
-        const deptLabel = `${mc.department_name} (${mc.department_code || "Other Dept"})`;
+        const deptLabel = `${mc.department_name} (${mc.department_code || "Other Dept"}) - Minor Offering`;
         if (!deptGrouped.has(deptLabel)) {
           deptGrouped.set(deptLabel, []);
         }
@@ -1654,7 +1660,7 @@ const HODElectivePage = () => {
         )}
       </div>
 
-      {/* Minor Program Section */}
+      {/* Minor Program Management */}
       <div className="mt-8">
         <div className="bg-white rounded-xl shadow-md p-6">
           <h2 className="text-2xl font-bold text-gray-900 mb-4">
@@ -1663,9 +1669,9 @@ const HODElectivePage = () => {
           <div className="bg-purple-50 border-l-4 border-purple-500 p-4 mb-6">
             <p className="text-sm text-purple-800">
               <strong>Minor programs</strong> allow other departments to study
-              courses from your verticals. Select a vertical, distribute 6
-              courses across semesters 5, 6, 7 (2 each), and choose which
-              departments can access them.
+              courses from your verticals. Select a vertical, choose 2 courses
+              per semester (5, 6, 7), and select which departments can access
+              them.
             </p>
           </div>
 
