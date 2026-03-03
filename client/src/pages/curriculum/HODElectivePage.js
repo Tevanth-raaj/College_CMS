@@ -267,6 +267,10 @@ const HODElectivePage = () => {
   const [oeAllowedDepartments, setOeAllowedDepartments] = useState([]);
   const [oeSaveMessage, setOeSaveMessage] = useState("");
 
+  // Vertical lock tracking (honour/minor vertical must be same across semesters per batch)
+  const [semesterBatchMap, setSemesterBatchMap] = useState({}); // { semester: batch }
+  const [verticalLocks, setVerticalLocks] = useState([]); // [{ batch, lock_type, vertical_id, vertical_name, ... }]
+
   // Fetch HOD profile on component mount
   useEffect(() => {
     fetchHODProfile();
@@ -281,6 +285,7 @@ const HODElectivePage = () => {
   useEffect(() => {
     if (academicYear && targetSemester) {
       fetchElectives();
+      fetchVerticalLocks();
     }
   }, [academicYear, targetSemester]);
 
@@ -330,8 +335,37 @@ const HODElectivePage = () => {
         ),
       );
       setTargetSemester(nextSemesters[0] || null);
+
+      // Store semester→batch map for vertical lock tracking
+      if (
+        data.semester_batch_map &&
+        typeof data.semester_batch_map === "object"
+      ) {
+        // Convert keys from string to int
+        const batchMap = {};
+        Object.entries(data.semester_batch_map).forEach(([sem, batch]) => {
+          batchMap[parseInt(sem, 10)] = batch;
+        });
+        setSemesterBatchMap(batchMap);
+      }
     } catch (error) {
       console.error("Error fetching academic calendar:", error);
+    }
+  };
+
+  const fetchVerticalLocks = async () => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/hod/vertical-locks?email=${encodeURIComponent(userEmail)}`,
+      );
+      const data = await response.json();
+      if (data.locks) {
+        setVerticalLocks(data.locks);
+      } else {
+        setVerticalLocks([]);
+      }
+    } catch (error) {
+      console.error("Error fetching vertical locks:", error);
     }
   };
 
@@ -676,7 +710,7 @@ const HODElectivePage = () => {
       new Set(
         currentSemesters
           .map((semester) => (semester < 8 ? semester + 1 : null))
-          .filter((semester) => semester && semester >= 4 && semester <= 8),
+          .filter((semester) => semester && semester >= 4 && semester <= 7),
       ),
     );
   }, [currentSemesters]);
@@ -1348,6 +1382,39 @@ const HODElectivePage = () => {
                   {/* Accordion Content */}
                   {isExpanded && (
                     <div className="p-6">
+                      {/* Vertical Lock Banners */}
+                      {(() => {
+                        const batch = semesterBatchMap[semester];
+                        if (!batch || verticalLocks.length === 0) return null;
+                        const locksForBatch = verticalLocks.filter(
+                          (l) => l.batch === batch,
+                        );
+                        if (locksForBatch.length === 0) return null;
+                        return (
+                          <div className="mb-4 space-y-2">
+                            {locksForBatch.map((lock) => (
+                              <div
+                                key={`${lock.lock_type}-${lock.batch}`}
+                                className="flex items-center gap-2 px-4 py-2.5 rounded-lg border bg-amber-50 border-amber-200 text-amber-800 text-sm"
+                              >
+                                <span className="text-base">🔒</span>
+                                <span className="font-semibold capitalize">
+                                  {lock.lock_type}
+                                </span>
+                                <span>vertical locked to</span>
+                                <span className="font-bold">
+                                  {lock.vertical_name}
+                                </span>
+                                <span className="text-amber-600">
+                                  (Batch {lock.batch}, first assigned in Sem{" "}
+                                  {lock.first_semester})
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
                       {slots.length === 0 ? (
                         <div className="text-center text-gray-500 py-8">
                           No slots configured for Semester {semester}
@@ -1493,11 +1560,55 @@ const HODElectivePage = () => {
                                           semester,
                                         )
                                       }
-                                      options={
-                                        isMinorSlot
+                                      options={(() => {
+                                        const isHSlot = slot.slot_name
+                                          .toLowerCase()
+                                          .includes("honour slot");
+                                        const isMSlot = slot.slot_name
+                                          .toLowerCase()
+                                          .includes("minor slot");
+
+                                        // Determine base options
+                                        let opts = isMSlot
                                           ? groupedMinorElectives
-                                          : groupedElectives
-                                      }
+                                          : groupedElectives;
+
+                                        // Apply vertical lock filtering for honour/minor slots
+                                        if (isHSlot || isMSlot) {
+                                          const batch =
+                                            semesterBatchMap[semester];
+                                          const lockType = isHSlot
+                                            ? "honour"
+                                            : "minor";
+                                          const lock =
+                                            batch &&
+                                            verticalLocks.find(
+                                              (l) =>
+                                                l.batch === batch &&
+                                                l.lock_type === lockType,
+                                            );
+                                          if (lock) {
+                                            // Filter to only show courses from the locked vertical
+                                            opts = opts
+                                              .map(([groupName, courses]) => [
+                                                groupName,
+                                                courses.filter(
+                                                  (c) =>
+                                                    c.vertical_id ===
+                                                      lock.vertical_id ||
+                                                    String(
+                                                      getVerticalName(c),
+                                                    ) === lock.vertical_name,
+                                                ),
+                                              ])
+                                              .filter(
+                                                ([, courses]) =>
+                                                  courses.length > 0,
+                                              );
+                                          }
+                                        }
+                                        return opts;
+                                      })()}
                                       placeholder="+ Add a course..."
                                       disabled={false}
                                     />
@@ -1510,121 +1621,125 @@ const HODElectivePage = () => {
                       )}
 
                       {/* Add On Courses Section */}
-                      {addOnCourses.length > 0 && (
-                        <div className="mt-4">
-                          {(() => {
-                            const addOnSlot = semesterSlots.find(
-                              (s) =>
-                                s.semester === semester &&
-                                s.slot_name === "Add On",
-                            );
-                            const selectedAddOns = Object.entries(
-                              addOnAssignmentsBySemester[semester] || {},
-                            ).map(([courseId, courseData]) => {
-                              const course =
-                                availableElectives.find(
-                                  (c) => c.id === parseInt(courseId),
-                                ) ||
-                                addOnCourses.find(
-                                  (c) => c.id === parseInt(courseId),
-                                );
-                              return {
-                                id: parseInt(courseId),
-                                course_code:
-                                  courseData.course_code ||
-                                  course?.course_code ||
-                                  "Unknown",
-                                course_name:
-                                  courseData.course_name ||
-                                  course?.course_name ||
-                                  "Course",
-                                credit: course?.credit || 0,
-                              };
-                            });
+                      {addOnCourses.length > 0 &&
+                        semesterSlots.some(
+                          (s) =>
+                            s.semester === semester && s.slot_name === "Add On",
+                        ) && (
+                          <div className="mt-4">
+                            {(() => {
+                              const addOnSlot = semesterSlots.find(
+                                (s) =>
+                                  s.semester === semester &&
+                                  s.slot_name === "Add On",
+                              );
+                              const selectedAddOns = Object.entries(
+                                addOnAssignmentsBySemester[semester] || {},
+                              ).map(([courseId, courseData]) => {
+                                const course =
+                                  availableElectives.find(
+                                    (c) => c.id === parseInt(courseId),
+                                  ) ||
+                                  addOnCourses.find(
+                                    (c) => c.id === parseInt(courseId),
+                                  );
+                                return {
+                                  id: parseInt(courseId),
+                                  course_code:
+                                    courseData.course_code ||
+                                    course?.course_code ||
+                                    "Unknown",
+                                  course_name:
+                                    courseData.course_name ||
+                                    course?.course_name ||
+                                    "Course",
+                                  credit: course?.credit || 0,
+                                };
+                              });
 
-                            return (
-                              <div className="border rounded-lg overflow-hidden border-gray-200">
-                                {/* Slot Header */}
-                                <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b">
-                                  <div className="flex items-center gap-3">
-                                    <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-teal-100 text-teal-800">
-                                      Add On
-                                    </span>
-                                    <span className="text-sm font-medium text-gray-900">
-                                      Add On Courses
-                                    </span>
-                                  </div>
-                                  <span className="text-xs text-gray-500">
-                                    {selectedAddOns.length} course
-                                    {selectedAddOns.length !== 1
-                                      ? "s"
-                                      : ""}{" "}
-                                    selected
-                                  </span>
-                                </div>
-
-                                {/* Slot Body */}
-                                <div className="p-4">
-                                  {/* Selected courses as chips */}
-                                  {selectedAddOns.length > 0 && (
-                                    <div className="flex flex-wrap gap-2 mb-3">
-                                      {selectedAddOns.map((course) => (
-                                        <div
-                                          key={course.id}
-                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-300 rounded-full text-sm shadow-sm hover:shadow transition-shadow"
-                                        >
-                                          <span className="font-semibold text-gray-800">
-                                            {course.course_code}
-                                          </span>
-                                          <span className="text-gray-500">
-                                            -
-                                          </span>
-                                          <span className="text-gray-700 max-w-[200px] truncate">
-                                            {course.course_name}
-                                          </span>
-                                          <span className="text-xs text-gray-400 ml-1">
-                                            ({course.credit}cr)
-                                          </span>
-                                          <button
-                                            onClick={() =>
-                                              handleClearAddOn(
-                                                course.id,
-                                                semester,
-                                              )
-                                            }
-                                            className="ml-1 w-5 h-5 flex items-center justify-center rounded-full text-gray-400 hover:bg-red-100 hover:text-red-600 transition-colors"
-                                            title="Remove course"
-                                          >
-                                            ×
-                                          </button>
-                                        </div>
-                                      ))}
+                              return (
+                                <div className="border rounded-lg overflow-hidden border-gray-200">
+                                  {/* Slot Header */}
+                                  <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b">
+                                    <div className="flex items-center gap-3">
+                                      <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-teal-100 text-teal-800">
+                                        Add On
+                                      </span>
+                                      <span className="text-sm font-medium text-gray-900">
+                                        Add On Courses
+                                      </span>
                                     </div>
-                                  )}
+                                    <span className="text-xs text-gray-500">
+                                      {selectedAddOns.length} course
+                                      {selectedAddOns.length !== 1
+                                        ? "s"
+                                        : ""}{" "}
+                                      selected
+                                    </span>
+                                  </div>
 
-                                  {/* Add Course Dropdown */}
-                                  <div className="max-w-md">
-                                    <SearchableSelect
-                                      value=""
-                                      onChange={(courseId) =>
-                                        handleAddOnCourseChange(
-                                          parseInt(courseId, 10),
-                                          semester,
-                                        )
-                                      }
-                                      options={groupedElectives}
-                                      placeholder="+ Add a course..."
-                                      disabled={
-                                        !availableSemesters.includes(semester)
-                                      }
-                                    />
+                                  {/* Slot Body */}
+                                  <div className="p-4">
+                                    {/* Selected courses as chips */}
+                                    {selectedAddOns.length > 0 && (
+                                      <div className="flex flex-wrap gap-2 mb-3">
+                                        {selectedAddOns.map((course) => (
+                                          <div
+                                            key={course.id}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-300 rounded-full text-sm shadow-sm hover:shadow transition-shadow"
+                                          >
+                                            <span className="font-semibold text-gray-800">
+                                              {course.course_code}
+                                            </span>
+                                            <span className="text-gray-500">
+                                              -
+                                            </span>
+                                            <span className="text-gray-700 max-w-[200px] truncate">
+                                              {course.course_name}
+                                            </span>
+                                            <span className="text-xs text-gray-400 ml-1">
+                                              ({course.credit}cr)
+                                            </span>
+                                            <button
+                                              onClick={() =>
+                                                handleClearAddOn(
+                                                  course.id,
+                                                  semester,
+                                                )
+                                              }
+                                              className="ml-1 w-5 h-5 flex items-center justify-center rounded-full text-gray-400 hover:bg-red-100 hover:text-red-600 transition-colors"
+                                              title="Remove course"
+                                            >
+                                              ×
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+
+                                    {/* Add Course Dropdown */}
+                                    <div className="max-w-md">
+                                      <SearchableSelect
+                                        value=""
+                                        onChange={(courseId) =>
+                                          handleAddOnCourseChange(
+                                            parseInt(courseId, 10),
+                                            semester,
+                                          )
+                                        }
+                                        options={groupedElectives}
+                                        placeholder="+ Add a course..."
+                                        disabled={
+                                          !availableSemesters.includes(semester)
+                                        }
+                                      />
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      )}
+                              );
+                            })()}
+                          </div>
+                        )}
                     </div>
                   )}
                 </div>

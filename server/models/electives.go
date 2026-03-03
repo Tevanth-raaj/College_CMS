@@ -6,7 +6,9 @@ import "time"
 type AcademicCalendar struct {
 	ID                     int        `json:"id"`
 	AcademicYear           string     `json:"academic_year"`
+	YearLevel              int        `json:"year_level"`
 	CurrentSemester        int        `json:"current_semester"`
+	Batch                  *string    `json:"batch,omitempty"`
 	SemesterStartDate      time.Time  `json:"semester_start_date"`
 	SemesterEndDate        time.Time  `json:"semester_end_date"`
 	ElectiveSelectionStart *time.Time `json:"elective_selection_start,omitempty"`
@@ -14,6 +16,19 @@ type AcademicCalendar struct {
 	IsCurrent              bool       `json:"is_current"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
+}
+
+// VerticalLock represents a locked honour/minor vertical for a department+batch
+type VerticalLock struct {
+	ID                int    `json:"id"`
+	DepartmentID      int    `json:"department_id"`
+	Batch             string `json:"batch"`
+	LockType          string `json:"lock_type"` // "honour" or "minor"
+	VerticalID        int    `json:"vertical_id"`
+	VerticalName      string `json:"vertical_name"`
+	LockedByUserID    int    `json:"locked_by_user_id"`
+	FirstSemester     int    `json:"first_semester"`
+	FirstAcademicYear string `json:"first_academic_year"`
 }
 
 // HODElectiveSelection represents HOD's elective course selections

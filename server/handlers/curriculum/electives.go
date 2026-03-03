@@ -799,6 +799,142 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// ==================== Vertical Lock Enforcement ====================
+	// For honour/minor slot courses, enforce that all semesters for the same batch
+	// use the same vertical. Auto-create lock on first assignment, enforce on subsequent.
+
+	// Step 1: Build semester→batch map from academic_calendar
+	semBatchMap := make(map[int]string)
+	batchRows, err := db.DB.Query(`
+		SELECT current_semester + 1 as next_sem, batch
+		FROM academic_calendar
+		WHERE is_current = 1 AND batch IS NOT NULL AND batch != ''
+	`)
+	if err != nil {
+		log.Println("Error fetching semester-batch map:", err)
+	} else {
+		defer batchRows.Close()
+		for batchRows.Next() {
+			var nextSem int
+			var batch string
+			if err := batchRows.Scan(&nextSem, &batch); err == nil {
+				if nextSem >= 4 && nextSem <= 8 {
+					semBatchMap[nextSem] = batch
+				}
+			}
+		}
+	}
+
+	// Step 2: For each honour/minor course, look up its vertical and check/create lock
+	type lockKey struct {
+		batch    string
+		lockType string
+	}
+	// Collect the vertical we expect for each (batch, lock_type) in this save request
+	newLockExpectations := make(map[lockKey]struct {
+		verticalID   int
+		verticalName string
+		semester     int
+	})
+
+	for _, assignment := range req.CourseAssignments {
+		slotName := slotMap[assignment.SlotID]
+		isHonour := strings.Contains(strings.ToLower(slotName), "honour slot")
+		isMinor := strings.Contains(strings.ToLower(slotName), "minor slot")
+
+		if !isHonour && !isMinor {
+			continue
+		}
+
+		batch := semBatchMap[assignment.Semester]
+		if batch == "" {
+			continue // No batch configured for this semester — skip lock enforcement
+		}
+
+		lockType := "honour"
+		if isMinor {
+			lockType = "minor"
+		}
+
+		verticalID, verticalName, err := lookupCourseVertical(assignment.CourseID, curriculumID)
+		if err != nil {
+			// Course might be from another dept (minor offering) — skip lock for those
+			continue
+		}
+
+		key := lockKey{batch: batch, lockType: lockType}
+		if existing, ok := newLockExpectations[key]; ok {
+			// Already have an expectation for this batch+type — must be same vertical
+			if existing.verticalID != verticalID {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf(
+						"All %s courses for batch %s must be from the same vertical. "+
+							"Semester %d uses '%s' but semester %d uses '%s'.",
+						lockType, batch, existing.semester, existing.verticalName,
+						assignment.Semester, verticalName),
+				})
+				return
+			}
+		} else {
+			newLockExpectations[key] = struct {
+				verticalID   int
+				verticalName string
+				semester     int
+			}{verticalID, verticalName, assignment.Semester}
+		}
+
+		// Check existing lock in database
+		var existingLockVerticalID int
+		var existingLockVerticalName string
+		lockErr := db.DB.QueryRow(`
+			SELECT vertical_id, vertical_name FROM honour_minor_vertical_locks
+			WHERE department_id = ? AND batch = ? AND lock_type = ?
+		`, departmentID, batch, lockType).Scan(&existingLockVerticalID, &existingLockVerticalName)
+
+		if lockErr == nil {
+			// Lock exists — enforce it
+			if existingLockVerticalID != verticalID {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf(
+						"Batch %s already has %s vertical locked to '%s'. "+
+							"Cannot assign course from '%s' vertical. "+
+							"All %s courses across semesters must be from the same vertical.",
+						batch, lockType, existingLockVerticalName, verticalName, lockType),
+				})
+				return
+			}
+		}
+		// If no lock exists (sql.ErrNoRows), we'll create one after successful save
+	}
+
+	// Step 3: Create any new locks that don't exist yet (inside the transaction)
+	for key, expectation := range newLockExpectations {
+		var existingID int
+		lockErr := tx.QueryRow(`
+			SELECT id FROM honour_minor_vertical_locks
+			WHERE department_id = ? AND batch = ? AND lock_type = ?
+		`, departmentID, key.batch, key.lockType).Scan(&existingID)
+
+		if lockErr != nil {
+			// No existing lock — create one
+			_, err := tx.Exec(`
+				INSERT INTO honour_minor_vertical_locks
+				(department_id, batch, lock_type, vertical_id, vertical_name, locked_by_user_id, first_semester, first_academic_year)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			`, departmentID, key.batch, key.lockType, expectation.verticalID, expectation.verticalName,
+				userID, expectation.semester, req.AcademicYear)
+			if err != nil {
+				log.Println("Error creating vertical lock:", err)
+				// Non-fatal — continue saving
+			}
+		}
+	}
+	// ==================== End Vertical Lock Enforcement ====================
+
 	// Delete existing selections for this department/batch/year for all relevant semesters
 	semesterSet := make(map[int]bool)
 	for _, assignment := range req.CourseAssignments {
@@ -1198,7 +1334,7 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-		SELECT id, academic_year, current_semester, semester_start_date, semester_end_date,
+		SELECT id, academic_year, year_level, current_semester, batch, semester_start_date, semester_end_date,
 		       elective_selection_start, elective_selection_end, is_current, created_at, updated_at
 		FROM academic_calendar
 		WHERE is_current = 1
@@ -1219,12 +1355,15 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 
 	calendars := []models.AcademicCalendar{}
 	currentSemesters := []int{}
+	semesterBatchMap := make(map[int]string) // maps next_semester → batch
 	for rows.Next() {
 		var calendar models.AcademicCalendar
 		if err := rows.Scan(
 			&calendar.ID,
 			&calendar.AcademicYear,
+			&calendar.YearLevel,
 			&calendar.CurrentSemester,
+			&calendar.Batch,
 			&calendar.SemesterStartDate,
 			&calendar.SemesterEndDate,
 			&calendar.ElectiveSelectionStart,
@@ -1238,6 +1377,11 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 		}
 		calendars = append(calendars, calendar)
 		currentSemesters = append(currentSemesters, calendar.CurrentSemester)
+		// Map the NEXT semester (what HOD assigns for) to the batch
+		nextSem := calendar.CurrentSemester + 1
+		if nextSem >= 4 && nextSem <= 8 && calendar.Batch != nil {
+			semesterBatchMap[nextSem] = *calendar.Batch
+		}
 	}
 
 	if len(calendars) == 0 {
@@ -1258,9 +1402,10 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"academic_year":     calendars[0].AcademicYear,
-		"current_semesters": currentSemesters,
-		"calendars":         calendars,
+		"academic_year":      calendars[0].AcademicYear,
+		"current_semesters":  currentSemesters,
+		"calendars":          calendars,
+		"semester_batch_map": semesterBatchMap,
 	})
 }
 
@@ -2186,4 +2331,117 @@ func GetHODOEOfferings(w http.ResponseWriter, r *http.Request) {
 		"success":  true,
 		"offering": response,
 	})
+}
+
+// ==================== Vertical Lock Handlers ====================
+
+// GetVerticalLocks returns all honour/minor vertical locks for the HOD's department
+func GetVerticalLocks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Method not allowed",
+		})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Email parameter required",
+		})
+		return
+	}
+
+	// Get HOD's department
+	var departmentID int
+	deptQuery := `
+		SELECT d.id
+		FROM users u
+		INNER JOIN teachers t ON u.email = t.email
+		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+		INNER JOIN departments d ON dt.department_id = d.id
+		WHERE u.email = ? AND u.role = 'hod'
+		LIMIT 1
+	`
+	err := db.DB.QueryRow(deptQuery, email).Scan(&departmentID)
+	if err != nil {
+		log.Println("Error fetching department:", err)
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Department not found",
+		})
+		return
+	}
+
+	// Fetch all vertical locks for this department
+	query := `
+		SELECT id, department_id, batch, lock_type, vertical_id, vertical_name,
+		       locked_by_user_id, first_semester, first_academic_year
+		FROM honour_minor_vertical_locks
+		WHERE department_id = ?
+		ORDER BY batch, lock_type
+	`
+
+	rows, err := db.DB.Query(query, departmentID)
+	if err != nil {
+		log.Println("Error fetching vertical locks:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+	defer rows.Close()
+
+	locks := []models.VerticalLock{}
+	for rows.Next() {
+		var lock models.VerticalLock
+		if err := rows.Scan(
+			&lock.ID,
+			&lock.DepartmentID,
+			&lock.Batch,
+			&lock.LockType,
+			&lock.VerticalID,
+			&lock.VerticalName,
+			&lock.LockedByUserID,
+			&lock.FirstSemester,
+			&lock.FirstAcademicYear,
+		); err != nil {
+			log.Println("Error scanning vertical lock:", err)
+			continue
+		}
+		locks = append(locks, lock)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"locks":   locks,
+	})
+}
+
+// lookupCourseVertical finds the vertical_id and vertical_name for a given course_id via curriculum_courses → normal_cards
+func lookupCourseVertical(courseID int, curriculumID int) (int, string, error) {
+	var verticalID int
+	var verticalName string
+	query := `
+		SELECT nc.id, nc.vertical_name
+		FROM curriculum_courses cc
+		INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+		WHERE cc.course_id = ? AND cc.curriculum_id = ?
+		AND nc.card_type IN ('vertical', 'open_elective')
+		AND nc.status = 1
+		LIMIT 1
+	`
+	err := db.DB.QueryRow(query, courseID, curriculumID).Scan(&verticalID, &verticalName)
+	return verticalID, verticalName, err
 }
