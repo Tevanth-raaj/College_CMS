@@ -578,7 +578,7 @@ const TeacherCourseSelectionPage = () => {
                         ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
                         : totalSelected !== totalRequired
                         ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm hover:shadow-md'
+                        : 'bg-primary text-white shadow-sm hover:shadow-md'
                     }`}
                     title={!lockCheckDone ? 'Checking lock status...' : preferencesLocked ? 'You have already submitted your preferences for this semester window' : totalSelected !== totalRequired ? `Select ${totalRequired - totalSelected} more course(s)` : ''}
                   >
@@ -614,7 +614,7 @@ const TeacherCourseSelectionPage = () => {
                     className={`w-full py-3 rounded-lg font-semibold text-sm transition-all ${
                       preferencesLocked
                         ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'bg-white border-2 border-gray-300 text-gray-700 hover:border-red-500 hover:text-red-600'
+                        : 'text-white border-2 bg-red-500'
                     }`}
                   >
                     Clear All
@@ -626,13 +626,13 @@ const TeacherCourseSelectionPage = () => {
             {/* Right Side - Course Selection */}
             <div className="lg:col-span-2">              {/* Course Categories Info */}
               <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <h3 className="font-semibold text-blue-900 text-sm">📘 Core Courses</h3>
-                  <p className="text-xs text-blue-700 mt-1">Required courses all students must take</p>
+                <div className="card-custom p-4">
+                  <h3 className="text-sm font-semibold text-gray-900">Core Courses</h3>
+                  <p className="text-xs text-gray-600 mt-1">Required courses all students must take</p>
                 </div>
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                  <h3 className="font-semibold text-green-900 text-sm">✨ Student-Chosen Electives</h3>
-                  <p className="text-xs text-green-700 mt-1">Only courses your department students enrolled in</p>
+                <div className="card-custom p-4">
+                  <h3 className="text-sm font-semibold text-gray-900">Student-Chosen Electives</h3>
+                  <p className="text-xs text-gray-600 mt-1">Courses chosen by students in your department</p>
                 </div>
               </div>
               {/* Search and Filter */}
@@ -647,7 +647,7 @@ const TeacherCourseSelectionPage = () => {
                       placeholder="Search courses..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      className="input-custom pl-10"
                     />
                   </div>
                   <div className="flex gap-2">
@@ -696,10 +696,18 @@ const TeacherCourseSelectionPage = () => {
                         }`}
                       >
                         <div className="flex items-start gap-4">
-                          <div className={`flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center text-2xl ${
-                            isSelected ? 'bg-indigo-100' : 'bg-gray-100'
+                          <div className={`flex-shrink-0 w-10 h-10 rounded-md flex items-center justify-center ${
+                            isSelected ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'
                           }`}>
-                            {isSelected ? '✓' : '○'}
+                            {isSelected ? (
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            ) : (
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                            )}
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
@@ -824,7 +832,7 @@ const TeacherCourseSelectionPage = () => {
                         appeal.appeal_status === 0 
                           ? 'border-yellow-200 bg-yellow-50' 
                           : appeal.hr_action?.String === 'APPROVED' 
-                          ? 'border-green-200 bg-green-50' 
+                          ? 'border-primary bg-primary-50' 
                           : 'border-red-200 bg-red-50'
                       }`}
                     >
@@ -834,7 +842,7 @@ const TeacherCourseSelectionPage = () => {
                             appeal.appeal_status === 0 
                               ? 'bg-yellow-200 text-yellow-800' 
                               : appeal.hr_action?.String === 'APPROVED' 
-                              ? 'bg-green-200 text-green-800' 
+                              ? 'bg-primary-100 text-primary-800' 
                               : 'bg-red-200 text-red-800'
                           }`}>
                             {appeal.appeal_status === 0 ? 'Pending' : appeal.hr_action?.String || 'Resolved'}
@@ -892,7 +900,7 @@ const TeacherCourseSelectionPage = () => {
             <div className="p-6 border-t border-gray-200">
               <button
                 onClick={() => setShowAppealHistoryModal(false)}
-                className="w-full px-4 py-2 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors"
+                className="w-full px-4 py-2 btn-primary-custom"
               >
                 Close
               </button>

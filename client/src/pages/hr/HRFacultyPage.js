@@ -331,7 +331,8 @@ const HRFacultyPage = () => {
   }
 
   return (
-    <MainLayout>
+    <MainLayout
+    >
       <div className="h-screen flex flex-col overflow-hidden bg-gradient-to-br from-gray-50 to-gray-100">
         {/* Header with Actions */}
         <div className="flex-none bg-white border-b border-gray-200 px-8 py-6 shadow-sm">
@@ -340,9 +341,9 @@ const HRFacultyPage = () => {
               <h1 className="text-4xl font-bold text-gray-900">Faculty Workload Management</h1>
               <p className="text-base text-gray-600 mt-2">Assign and manage course requirements for faculty members</p>
             </div>
-            <div className="text-right bg-gradient-to-br from-blue-50 to-indigo-50 px-6 py-4 rounded-xl border border-blue-200">
-              <div className="text-3xl font-bold text-blue-600">{filteredFaculty.length}</div>
-              <div className="text-xs text-blue-600 uppercase tracking-wide font-semibold mt-1">Faculties Listed</div>
+            <div className="text-right bg-gradient-to-br from-blue-50 to-indigo-50 px-6 py-4 rounded-xl border border-primary">
+              <div className="text-3xl font-bold text-primary">{filteredFaculty.length}</div>
+              <div className="text-xs text-primary uppercase tracking-wide font-semibold mt-1">Faculties Listed</div>
             </div>
           </div>
 
@@ -350,7 +351,7 @@ const HRFacultyPage = () => {
           <div className="flex gap-3 items-center">
             <button
               onClick={handleDownloadTemplate}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg font-semibold hover:shadow-lg hover:from-blue-600 hover:to-blue-700 transition-all"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg font-semibold hover:shadow-lg hover:from-blue-600 hover:to-blue-700 transition-all"
               title="Download blank template for bulk import"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -361,7 +362,7 @@ const HRFacultyPage = () => {
 
             <button
               onClick={handleExportTemplate}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-lg font-semibold hover:shadow-lg hover:from-emerald-600 hover:to-emerald-700 transition-all"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg font-semibold hover:shadow-lg hover:from-emerald-600 hover:to-emerald-700 transition-all"
               title="Export current workload assignments"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -370,7 +371,7 @@ const HRFacultyPage = () => {
               Export Current
             </button>
 
-            <label className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg font-semibold hover:shadow-lg hover:from-purple-600 hover:to-purple-700 transition-all cursor-pointer">
+            <label className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg font-semibold hover:shadow-lg hover:from-purple-600 hover:to-purple-700 transition-all cursor-pointer">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
@@ -408,7 +409,7 @@ const HRFacultyPage = () => {
           <div className="max-w-7xl mx-auto grid grid-cols-3 gap-6">
             <div>
               <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-widest">
-                🔍 Search Faculty
+                Search Faculty
               </label>
               <input
                 type="text"
@@ -420,7 +421,7 @@ const HRFacultyPage = () => {
             </div>
             <div>
               <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-widest">
-                🏢 Department
+                Department
               </label>
               <select
                 value={departmentFilter}
@@ -435,7 +436,7 @@ const HRFacultyPage = () => {
             </div>
             <div>
               <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-widest">
-                ✓ Status
+                Status
               </label>
               <select
                 value={statusFilter}
@@ -531,7 +532,7 @@ const HRFacultyPage = () => {
                             <td className="px-6 py-5 whitespace-nowrap text-center">
                               <div className="flex justify-center gap-1">
                                 {(f.course_limits || []).map((limit, idx) => (
-                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold bg-indigo-100 text-indigo-700">
+                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold  text-indigo-700">
                                     {limit.max_count}
                                   </span>
                                 ))}
@@ -554,14 +555,14 @@ const HRFacultyPage = () => {
             {/* Modal */}
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-300">
               {/* Modal Header */}
-              <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-blue-600 text-white px-8 py-6 flex items-center justify-between">
+              <div className="sticky top-0 bg-primary text-white px-8 py-6 flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-bold">Workload Assignment</h2>
                   <p className="text-indigo-100 text-sm mt-1">Configure course requirements</p>
                 </div>
                 <button
                   onClick={() => setSelectedFaculty(null)}
-                  className="p-2 rounded-lg text-white hover:bg-indigo-700 transition-colors"
+                  className="p-2 rounded-lg text-white transition-colors"
                   aria-label="Close modal"
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -573,7 +574,7 @@ const HRFacultyPage = () => {
               {/* Modal Content */}
               <div className="p-8">
                 {/* Faculty Info Card */}
-                <div className="mb-8 p-6 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-xl border-2 border-indigo-200">
+                <div className="mb-8 p-6 bg-background rounded-xl border-2 border-indigo-200">
                   <div className="flex items-start mb-5">
                     {selectedFaculty.profile_img?.Valid && selectedFaculty.profile_img.String ? (
                       <img
@@ -592,7 +593,7 @@ const HRFacultyPage = () => {
                         ID: {selectedFaculty.faculty_id}
                       </div>
                       {selectedFaculty.department_name?.String && (
-                        <div className="text-sm text-gray-700 mt-3 font-semibold">🏢 {selectedFaculty.department_name.String}</div>
+                        <div className="text-sm text-gray-700 mt-3 font-semibold"> {selectedFaculty.department_name.String}</div>
                       )}
                     </div>
                   </div>
@@ -620,15 +621,8 @@ const HRFacultyPage = () => {
                 {/* Workload Assignment Section */}
                 <div className="space-y-6">
                   <div>
-                    <h3 className="text-lg font-bold text-gray-900 mb-5 flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center">
-                        <svg className="w-6 h-6 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
-                          <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
-                        </svg>
-                      </div>
-                      Course Type Quotas
-                    </h3>
-                    
+                    <h2 className="text-lg font-bold text-gray-900 mb-6">Course Type Quotas</h2>
+
                     <div className="space-y-4">
                       {courseLimits.length === 0 ? (
                         <div className="p-5 bg-yellow-50 border-2 border-yellow-300 rounded-lg text-sm text-yellow-800 font-semibold">
@@ -642,8 +636,8 @@ const HRFacultyPage = () => {
                                 <span className={`w-3 h-3 rounded-full ${idx === 0 ? 'bg-blue-500' : idx === 1 ? 'bg-purple-500' : 'bg-pink-500'}`}></span>
                                 {limit.type_name}
                               </label>
-                              <span className="text-sm font-bold text-indigo-600 bg-indigo-100 px-3 py-1 rounded-full">
-                                {limit.max_count} 📚
+                              <span className="text-sm font-semibold text-gray-700">
+                                {limit.max_count}
                               </span>
                             </div>
                             <div className="relative">
@@ -653,9 +647,9 @@ const HRFacultyPage = () => {
                                 max="20"
                                 value={limit.max_count}
                                 onChange={(e) => handleLimitChange(limit.course_type_id, e.target.value)}
-                                className="w-full px-5 py-4 text-base border-2 border-gray-300 rounded-xl focus:outline-none focus:border-indigo-500 focus:ring-3 focus:ring-indigo-200 transition-all font-bold text-gray-900"
+                                className="input-custom"
                               />
-                              <div className="absolute right-4 top-1/2 transform -translate-y-1/2 text-2xl">📊</div>
+                              {/* removed decorative icon for a cleaner, professional look */}
                             </div>
                             <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
                               <div 
