@@ -19,6 +19,8 @@ function MarkEntryPage() {
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [markErrors, setMarkErrors] = useState({}) // key: `${studentId}_${categoryId}`
   const [absentees, setAbsentees] = useState([]) // [{student_id, mark_category_id}]
+  const [applicableWindows, setApplicableWindows] = useState([])
+  const [selectedWindowId, setSelectedWindowId] = useState(null)
 
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
@@ -135,7 +137,45 @@ function MarkEntryPage() {
     if (userRole !== 'teacher' && !hasActiveWindow) return
     fetchMarkCategories()
     loadExistingMarks()
-  }, [selectedCourse, learningMode, hasActiveWindow, userRole])
+  }, [selectedCourse, learningMode, hasActiveWindow, userRole, selectedWindowId])
+
+  useEffect(() => {
+    if (!isTeacher || !selectedCourse || !facultyIdentifier) {
+      setApplicableWindows([])
+      setSelectedWindowId(null)
+      return
+    }
+    fetchApplicableWindows()
+  }, [isTeacher, selectedCourse?.course_id, facultyIdentifier])
+
+  const fetchApplicableWindows = async () => {
+    try {
+      const params = new URLSearchParams({
+        teacher_id: facultyIdentifier,
+        course_id: String(selectedCourse.course_id),
+      })
+      const response = await fetch(`${API_BASE_URL}/mark-entry/applicable-windows?${params.toString()}`)
+      if (!response.ok) {
+        setApplicableWindows([])
+        setSelectedWindowId(null)
+        return
+      }
+
+      const data = await response.json()
+      const windows = Array.isArray(data) ? data : []
+      setApplicableWindows(windows)
+
+      if (windows.length === 0) {
+        setSelectedWindowId(null)
+      } else if (!windows.some((w) => w.id === selectedWindowId)) {
+        setSelectedWindowId(windows[0].id)
+      }
+    } catch (error) {
+      console.error('Error fetching applicable windows:', error)
+      setApplicableWindows([])
+      setSelectedWindowId(null)
+    }
+  }
 
   const fetchMarkCategories = async () => {
     try {
@@ -158,8 +198,15 @@ function MarkEntryPage() {
         : '1,2'
       
       console.log('Requesting mark categories for learning modes:', learningModesParam)
+      const params = new URLSearchParams({
+        teacher_id: facultyIdentifier,
+        learning_modes: learningModesParam,
+      })
+      if (selectedWindowId) {
+        params.set('window_id', String(selectedWindowId))
+      }
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?teacher_id=${facultyIdentifier}&learning_modes=${learningModesParam}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?${params.toString()}`
       )
       if (response.status === 403) {
         setMarkCategories([])
@@ -202,8 +249,14 @@ function MarkEntryPage() {
         setMessage({ type: 'error', text: 'User identifier not found. Please login again.' })
         return
       }
+      const params = new URLSearchParams({
+        teacher_id: facultyIdentifier,
+      })
+      if (selectedWindowId) {
+        params.set('window_id', String(selectedWindowId))
+      }
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/student-marks?teacher_id=${facultyIdentifier}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/student-marks?${params.toString()}`
       )
       if (response.status === 403) {
         setStudentMarks({})
@@ -532,6 +585,7 @@ function MarkEntryPage() {
         body: JSON.stringify({
           course_id: selectedCourse.course_id,
           faculty_id: facultyId,
+          window_id: selectedWindowId || undefined,
           mark_entries: markEntries,
         }),
       })
@@ -556,6 +610,21 @@ function MarkEntryPage() {
 
   const handleSaveMarks = () => {
     setShowSaveDialog(true)
+  }
+
+  const handleFillOnes = () => {
+    const updated = { ...studentMarks }
+    students.forEach((student) => {
+      if (!updated[student.student_id]) {
+        updated[student.student_id] = {}
+      }
+      filteredMarkCategories.forEach((category) => {
+        if (isCellAbsent(student.student_id, category.id)) return
+        updated[student.student_id][category.id] = 1
+      })
+    })
+    setStudentMarks(updated)
+    setMessage({ type: 'success', text: 'Filled mark cells with 1 for current students/components.' })
   }
 
   const handleConfirmSave = async () => {
@@ -681,6 +750,31 @@ function MarkEntryPage() {
           </div>
         )}
 
+        {/* Debug: Applicable Window Selector (faculty only, shown only if multiple windows apply) */}
+        {isTeacher && selectedCourse && applicableWindows.length > 1 && (
+          <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 shadow-sm">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-800">Debug Window Selector</h4>
+                <p className="text-xs text-gray-600 mt-1">Multiple active windows apply for this course/faculty. Select one for mark load/save.</p>
+              </div>
+              <div className="min-w-[320px]">
+                <select
+                  value={selectedWindowId || ''}
+                  onChange={(e) => setSelectedWindowId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                  className="w-full px-3 py-2 border border-amber-300 rounded-lg focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 bg-white"
+                >
+                  {applicableWindows.map((window) => (
+                    <option key={window.id} value={window.id}>
+                      Window #{window.id} | {window.start_at} to {window.end_at}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Mark Entry Table */}
         {selectedCourse && filteredMarkCategories.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col" style={{ height: 'calc(100vh - 400px)', minHeight: '500px' }}>
@@ -700,6 +794,13 @@ function MarkEntryPage() {
                     </span>
                   ) : (
                     <>
+                      <button
+                        onClick={handleFillOnes}
+                        disabled={savingMarks}
+                        className="px-5 py-2 bg-gray-600 text-white text-sm font-medium rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Fill 1s
+                      </button>
                       <button
                         onClick={handleSaveMarks}
                         disabled={savingMarks}

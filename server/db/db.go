@@ -1105,6 +1105,10 @@ func RemoveNameColumnFromNormalCards() error {
 	// Drop the name column
 	_, err = DB.Exec("ALTER TABLE normal_cards DROP COLUMN name")
 	if err != nil {
+		if mysqlErr, ok := err.(*mysql.MySQLError); ok && mysqlErr.Number == 1091 {
+			log.Println("Name column already removed from normal_cards, skipping")
+			return nil
+		}
 		return fmt.Errorf("failed to drop name column from normal_cards: %w", err)
 	}
 

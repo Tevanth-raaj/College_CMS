@@ -90,6 +90,199 @@ type extensionRequestBody struct {
 	ExamType       string `json:"exam_type,omitempty"`
 }
 
+type selectedWindowContext struct {
+	ID           int
+	TeacherID    sql.NullString
+	DepartmentID sql.NullInt64
+	Semester     sql.NullInt64
+	CourseID     sql.NullInt64
+	StartAt      time.Time
+	EndAt        time.Time
+	Enabled      bool
+	ComponentIDs []int
+}
+
+func getTeacherIdentifierAliases(teacherID string) []string {
+	teacherID = strings.TrimSpace(teacherID)
+	aliases := map[string]bool{}
+	if teacherID != "" {
+		aliases[teacherID] = true
+	}
+
+	var numericTeacherID sql.NullInt64
+	_ = db.DB.QueryRow(`SELECT id FROM teachers WHERE faculty_id = ? LIMIT 1`, teacherID).Scan(&numericTeacherID)
+	if numericTeacherID.Valid {
+		aliases[strconv.FormatInt(numericTeacherID.Int64, 10)] = true
+	}
+
+	var teacherEmail sql.NullString
+	_ = db.DB.QueryRow(`SELECT email FROM teachers WHERE faculty_id = ? LIMIT 1`, teacherID).Scan(&teacherEmail)
+	if teacherEmail.Valid && strings.TrimSpace(teacherEmail.String) != "" {
+		email := strings.TrimSpace(teacherEmail.String)
+		aliases[email] = true
+
+		var username sql.NullString
+		_ = db.DB.QueryRow(`SELECT username FROM users WHERE email = ? LIMIT 1`, email).Scan(&username)
+		if username.Valid && strings.TrimSpace(username.String) != "" {
+			aliases[strings.TrimSpace(username.String)] = true
+		}
+	}
+
+	var userEmail sql.NullString
+	_ = db.DB.QueryRow(`SELECT email FROM users WHERE username = ? LIMIT 1`, teacherID).Scan(&userEmail)
+	if userEmail.Valid && strings.TrimSpace(userEmail.String) != "" {
+		email := strings.TrimSpace(userEmail.String)
+		aliases[email] = true
+
+		var facultyID sql.NullString
+		_ = db.DB.QueryRow(`SELECT faculty_id FROM teachers WHERE email = ? LIMIT 1`, email).Scan(&facultyID)
+		if facultyID.Valid && strings.TrimSpace(facultyID.String) != "" {
+			aliases[strings.TrimSpace(facultyID.String)] = true
+		}
+
+		_ = db.DB.QueryRow(`SELECT id FROM teachers WHERE email = ? LIMIT 1`, email).Scan(&numericTeacherID)
+		if numericTeacherID.Valid {
+			aliases[strconv.FormatInt(numericTeacherID.Int64, 10)] = true
+		}
+	}
+
+	out := make([]string, 0, len(aliases))
+	for alias := range aliases {
+		out = append(out, alias)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func getSelectedWindowContext(windowID int) (*selectedWindowContext, error) {
+	ctx := &selectedWindowContext{}
+	err := db.DB.QueryRow(`
+		SELECT id, teacher_id, department_id, semester, course_id, start_at, end_at, enabled
+		FROM mark_entry_windows
+		WHERE id = ?
+	`, windowID).Scan(
+		&ctx.ID,
+		&ctx.TeacherID,
+		&ctx.DepartmentID,
+		&ctx.Semester,
+		&ctx.CourseID,
+		&ctx.StartAt,
+		&ctx.EndAt,
+		&ctx.Enabled,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.DB.Query(`SELECT assessment_component_id FROM mark_entry_window_components WHERE window_id = ?`, windowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ctx.ComponentIDs = []int{}
+	for rows.Next() {
+		var componentID int
+		if scanErr := rows.Scan(&componentID); scanErr == nil {
+			ctx.ComponentIDs = append(ctx.ComponentIDs, componentID)
+		}
+	}
+
+	return ctx, nil
+}
+
+func doesWindowMatchAssignment(window *selectedWindowContext, assignment markEntryAssignmentRow) bool {
+	if window == nil {
+		return true
+	}
+	if window.TeacherID.Valid && strings.TrimSpace(window.TeacherID.String) != "" && strings.TrimSpace(window.TeacherID.String) != assignment.TeacherID {
+		return false
+	}
+	if window.DepartmentID.Valid && int(window.DepartmentID.Int64) > 0 && int(window.DepartmentID.Int64) != assignment.DepartmentID {
+		return false
+	}
+	if window.Semester.Valid && int(window.Semester.Int64) > 0 && int(window.Semester.Int64) != assignment.Semester {
+		return false
+	}
+	if window.CourseID.Valid && int(window.CourseID.Int64) > 0 && int(window.CourseID.Int64) != assignment.CourseID {
+		return false
+	}
+	return true
+}
+
+func getAbsentComponentsByStudent(windowID int, courseID int) map[int]map[int]bool {
+	result := map[int]map[int]bool{}
+	rows, err := db.DB.Query(`
+		SELECT student_id, mark_category_id
+		FROM exam_absentees
+		WHERE window_id = ? AND course_id = ?
+	`, windowID, courseID)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var studentID int
+		var componentID int
+		if scanErr := rows.Scan(&studentID, &componentID); scanErr != nil {
+			continue
+		}
+		if _, ok := result[studentID]; !ok {
+			result[studentID] = map[int]bool{}
+		}
+		result[studentID][componentID] = true
+	}
+
+	return result
+}
+
+func getEnteredMarksByStudent(courseID int, aliases []string) map[int]map[int]float64 {
+	result := map[int]map[int]float64{}
+	if len(aliases) == 0 {
+		return result
+	}
+
+	placeholders := make([]string, len(aliases))
+	args := make([]interface{}, 0, len(aliases)+1)
+	args = append(args, courseID)
+	for index, alias := range aliases {
+		placeholders[index] = "?"
+		args = append(args, strings.ToLower(strings.TrimSpace(alias)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT student_id, assessment_component_id, COALESCE(obtained_marks, 0)
+		FROM student_marks
+		WHERE course_id = ?
+		  AND (
+			LOWER(TRIM(COALESCE(faculty_id, ''))) IN (%s)
+			OR TRIM(COALESCE(faculty_id, '')) = ''
+		  )
+	`, strings.Join(placeholders, ","))
+
+	rows, err := db.DB.Query(query, args...)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var studentID int
+		var componentID int
+		var marks float64
+		if scanErr := rows.Scan(&studentID, &componentID, &marks); scanErr != nil {
+			continue
+		}
+		if _, ok := result[studentID]; !ok {
+			result[studentID] = map[int]float64{}
+		}
+		result[studentID][componentID] = marks
+	}
+
+	return result
+}
+
 func getDepartmentContextFromUsername(username string) (int, string, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
@@ -111,8 +304,10 @@ func getDepartmentContextFromUsername(username string) (int, string, error) {
 	err = db.DB.QueryRow(`
 		SELECT d.id, d.department_name
 		FROM teachers t
-		JOIN departments d ON CAST(t.dept AS UNSIGNED) = d.id
+		LEFT JOIN department_teachers dt ON dt.teacher_id = t.faculty_id
+		LEFT JOIN departments d ON d.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
 		WHERE t.email = ?
+		  AND d.id IS NOT NULL
 		LIMIT 1
 	`, strings.TrimSpace(email.String)).Scan(&departmentID, &departmentName)
 	if err == nil {
@@ -219,30 +414,22 @@ func getExpectedComponents(courseTypeID int, learningModeID int, allowedComponen
 }
 
 func isStudentCompleteForAssignment(studentID int, courseID int, teacherID string, expected map[int]bool) (bool, float64, bool, error) {
-	rows, err := db.DB.Query(`
-		SELECT assessment_component_id, obtained_marks
-		FROM student_marks
-		WHERE student_id = ? AND course_id = ? AND faculty_id = ?
-	`, studentID, courseID, teacherID)
-	if err != nil {
-		return false, 0, false, err
-	}
-	defer rows.Close()
+	aliases := getTeacherIdentifierAliases(teacherID)
+	enteredMarksByStudent := getEnteredMarksByStudent(courseID, aliases)
+	studentMarks := enteredMarksByStudent[studentID]
 
-	entered := make(map[int]bool)
+	if studentMarks == nil {
+		if len(expected) == 0 {
+			return false, 0, false, nil
+		}
+		return false, 0, false, nil
+	}
+
 	total := 0.0
 	hasAny := false
-	for rows.Next() {
-		var componentID int
-		var marks sql.NullFloat64
-		if scanErr := rows.Scan(&componentID, &marks); scanErr != nil {
-			continue
-		}
-		entered[componentID] = true
-		if marks.Valid {
-			total += marks.Float64
-			hasAny = true
-		}
+	for _, marks := range studentMarks {
+		total += marks
+		hasAny = true
 	}
 
 	if len(expected) == 0 {
@@ -250,7 +437,7 @@ func isStudentCompleteForAssignment(studentID int, courseID int, teacherID strin
 	}
 
 	for componentID := range expected {
-		if !entered[componentID] {
+		if _, ok := studentMarks[componentID]; !ok {
 			return false, total, hasAny, nil
 		}
 	}
@@ -281,15 +468,16 @@ func getDepartmentAssignments(departmentID int, semester int) ([]markEntryAssign
 			c.course_name,
 			tca.teacher_id,
 			COALESCE(t.name, tca.teacher_id) AS teacher_name,
-			d.id,
-			d.department_name,
+			COALESCE(d.id, 0) AS department_id,
+			COALESCE(d.department_name, 'Unmapped') AS department_name,
 			nc.semester_number
 		FROM teacher_course_allocation tca
 		JOIN courses c ON c.id = tca.course_id
 		JOIN curriculum_courses cc ON cc.course_id = c.id
 		JOIN normal_cards nc ON nc.id = cc.semester_id
-		JOIN teachers t ON t.faculty_id = tca.teacher_id
-		JOIN departments d ON CAST(t.dept AS UNSIGNED) = d.id
+		LEFT JOIN teachers t ON t.faculty_id = tca.teacher_id
+		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id
+		LEFT JOIN departments d ON d.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
 		WHERE d.id = ?
 			AND nc.semester_number = ?
 		ORDER BY c.course_code, teacher_name
@@ -334,6 +522,8 @@ func buildMarkEntryOverview(departmentID int, semester int) ([]markEntryOverview
 		if typeErr != nil {
 			continue
 		}
+		teacherAliases := getTeacherIdentifierAliases(assignment.TeacherID)
+		enteredMarksByStudent := getEnteredMarksByStudent(assignment.CourseID, teacherAliases)
 
 		windowID, windowStart, windowEnd, allowedComponents, windowStatus, windowErr := findBestWindowForAssignment(
 			assignment.TeacherID,
@@ -343,6 +533,31 @@ func buildMarkEntryOverview(departmentID int, semester int) ([]markEntryOverview
 		)
 		if windowErr != nil {
 			return nil, windowErr
+		}
+
+		completionAllowedComponents := allowedComponents
+		if len(allowedComponents) > 0 {
+			allowedSet := make(map[int]bool, len(allowedComponents))
+			for _, componentID := range allowedComponents {
+				allowedSet[componentID] = true
+			}
+
+			hasMarksInAllowed := false
+			for _, studentMarks := range enteredMarksByStudent {
+				for componentID := range studentMarks {
+					if allowedSet[componentID] {
+						hasMarksInAllowed = true
+						break
+					}
+				}
+				if hasMarksInAllowed {
+					break
+				}
+			}
+
+			if !hasMarksInAllowed {
+				completionAllowedComponents = []int{}
+			}
 		}
 
 		studentRows, studentErr := db.DB.Query(`
@@ -359,6 +574,10 @@ func buildMarkEntryOverview(departmentID int, semester int) ([]markEntryOverview
 		completed := 0
 		studentIDs := make([]int, 0)
 		expectedByMode := make(map[int]map[int]bool)
+		absentByStudent := map[int]map[int]bool{}
+		if windowID != nil {
+			absentByStudent = getAbsentComponentsByStudent(*windowID, assignment.CourseID)
+		}
 		for studentRows.Next() {
 			var studentID int
 			var learningMode int
@@ -370,7 +589,7 @@ func buildMarkEntryOverview(departmentID int, semester int) ([]markEntryOverview
 
 			expected, ok := expectedByMode[learningMode]
 			if !ok {
-				expected, err = getExpectedComponents(courseTypeID, learningMode, allowedComponents)
+				expected, err = getExpectedComponents(courseTypeID, learningMode, completionAllowedComponents)
 				if err != nil {
 					studentRows.Close()
 					return nil, err
@@ -378,11 +597,31 @@ func buildMarkEntryOverview(departmentID int, semester int) ([]markEntryOverview
 				expectedByMode[learningMode] = expected
 			}
 
-			isComplete, _, _, completeErr := isStudentCompleteForAssignment(studentID, assignment.CourseID, assignment.TeacherID, expected)
-			if completeErr != nil {
-				studentRows.Close()
-				return nil, completeErr
+			expectedFiltered := map[int]bool{}
+			for componentID := range expected {
+				if absentByStudent[studentID][componentID] {
+					continue
+				}
+				expectedFiltered[componentID] = true
 			}
+
+			studentMarks := enteredMarksByStudent[studentID]
+			isComplete := true
+			for componentID := range expectedFiltered {
+				if studentMarks == nil {
+					isComplete = false
+					break
+				}
+				if _, ok := studentMarks[componentID]; !ok {
+					isComplete = false
+					break
+				}
+			}
+
+			if len(expectedFiltered) == 0 {
+				isComplete = true
+			}
+
 			if isComplete {
 				completed++
 			}
@@ -514,6 +753,424 @@ func GetHODMarkEntryOverview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func getAssignmentsForWindowMonitor(semester int, departmentID *int) ([]markEntryAssignmentRow, error) {
+	query := `
+		SELECT DISTINCT
+			c.id,
+			c.course_code,
+			c.course_name,
+			tca.teacher_id,
+			COALESCE(t.name, tca.teacher_id) AS teacher_name,
+			COALESCE(d.id, 0) AS department_id,
+			COALESCE(d.department_name, 'Unmapped') AS department_name,
+			nc.semester_number
+		FROM teacher_course_allocation tca
+		JOIN courses c ON c.id = tca.course_id
+		JOIN curriculum_courses cc ON cc.course_id = c.id
+		JOIN normal_cards nc ON nc.id = cc.semester_id
+		LEFT JOIN teachers t ON t.faculty_id = tca.teacher_id
+		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id
+		LEFT JOIN departments d ON d.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
+		WHERE nc.semester_number = ?
+	`
+	args := []interface{}{semester}
+	if departmentID != nil {
+		query += " AND d.id = ?"
+		args = append(args, *departmentID)
+	}
+	query += " ORDER BY department_name, c.course_code, teacher_name"
+
+	rows, err := db.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]markEntryAssignmentRow, 0)
+	for rows.Next() {
+		var item markEntryAssignmentRow
+		if scanErr := rows.Scan(
+			&item.CourseID,
+			&item.CourseCode,
+			&item.CourseName,
+			&item.TeacherID,
+			&item.TeacherName,
+			&item.DepartmentID,
+			&item.Department,
+			&item.Semester,
+		); scanErr != nil {
+			continue
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+func buildWindowMonitorRows(assignments []markEntryAssignmentRow, selectedWindow *selectedWindowContext) ([]markEntryOverviewRow, error) {
+	now := time.Now().UTC()
+	rows := make([]markEntryOverviewRow, 0)
+
+	for _, assignment := range assignments {
+		if !doesWindowMatchAssignment(selectedWindow, assignment) {
+			continue
+		}
+
+		courseTypeID, typeErr := getCourseTypeForCourse(assignment.CourseID)
+		if typeErr != nil {
+			continue
+		}
+
+		var windowID *int
+		var windowStart, windowEnd *time.Time
+		allowedComponents := []int{}
+		windowStatus := "not_configured"
+
+		if selectedWindow != nil {
+			windowID = &selectedWindow.ID
+			windowStart = &selectedWindow.StartAt
+			windowEnd = &selectedWindow.EndAt
+			allowedComponents = selectedWindow.ComponentIDs
+			if !selectedWindow.Enabled {
+				windowStatus = "disabled"
+			} else if now.Before(selectedWindow.StartAt) {
+				windowStatus = "upcoming"
+			} else if now.After(selectedWindow.EndAt) {
+				windowStatus = "closed"
+			} else {
+				windowStatus = "open"
+			}
+		} else {
+			bestWindowID, startAt, endAt, components, status, err := findBestWindowForAssignment(
+				assignment.TeacherID,
+				assignment.DepartmentID,
+				assignment.Semester,
+				assignment.CourseID,
+			)
+			if err != nil {
+				return nil, err
+			}
+			windowID = bestWindowID
+			windowStart = startAt
+			windowEnd = endAt
+			allowedComponents = components
+			windowStatus = status
+		}
+
+		teacherAliases := getTeacherIdentifierAliases(assignment.TeacherID)
+		enteredMarksByStudent := getEnteredMarksByStudent(assignment.CourseID, teacherAliases)
+
+		completionAllowedComponents := allowedComponents
+		if len(allowedComponents) > 0 {
+			allowedSet := make(map[int]bool, len(allowedComponents))
+			for _, componentID := range allowedComponents {
+				allowedSet[componentID] = true
+			}
+
+			hasMarksInAllowed := false
+			for _, studentMarks := range enteredMarksByStudent {
+				for componentID := range studentMarks {
+					if allowedSet[componentID] {
+						hasMarksInAllowed = true
+						break
+					}
+				}
+				if hasMarksInAllowed {
+					break
+				}
+			}
+
+			if !hasMarksInAllowed {
+				completionAllowedComponents = []int{}
+			}
+		}
+		absentByStudent := map[int]map[int]bool{}
+		if windowID != nil {
+			absentByStudent = getAbsentComponentsByStudent(*windowID, assignment.CourseID)
+		}
+
+		studentRows, studentErr := db.DB.Query(`
+			SELECT s.id, COALESCE(s.learning_mode_id, 2)
+			FROM course_student_teacher_allocation csta
+			JOIN students s ON s.id = csta.student_id
+			WHERE csta.course_id = ? AND csta.teacher_id = ? AND csta.status = 1
+		`, assignment.CourseID, assignment.TeacherID)
+		if studentErr != nil {
+			return nil, studentErr
+		}
+
+		assigned := 0
+		completed := 0
+		studentIDs := make([]int, 0)
+		expectedByMode := make(map[int]map[int]bool)
+		for studentRows.Next() {
+			var studentID int
+			var learningMode int
+			if scanErr := studentRows.Scan(&studentID, &learningMode); scanErr != nil {
+				continue
+			}
+			assigned++
+			studentIDs = append(studentIDs, studentID)
+
+			expected, ok := expectedByMode[learningMode]
+			if !ok {
+				expected, _ = getExpectedComponents(courseTypeID, learningMode, completionAllowedComponents)
+				expectedByMode[learningMode] = expected
+			}
+
+			expectedFiltered := map[int]bool{}
+			for componentID := range expected {
+				if absentByStudent[studentID][componentID] {
+					continue
+				}
+				expectedFiltered[componentID] = true
+			}
+
+			studentMarks := enteredMarksByStudent[studentID]
+			isComplete := true
+			for componentID := range expectedFiltered {
+				if studentMarks == nil {
+					isComplete = false
+					break
+				}
+				if _, ok := studentMarks[componentID]; !ok {
+					isComplete = false
+					break
+				}
+			}
+			if len(expectedFiltered) == 0 {
+				isComplete = true
+			}
+			if isComplete {
+				completed++
+			}
+		}
+		studentRows.Close()
+
+		completion := 0.0
+		if assigned > 0 {
+			completion = (float64(completed) / float64(assigned)) * 100
+		}
+
+		late := false
+		if windowEnd != nil && windowEnd.Before(now) && completion < 100 {
+			late = true
+		}
+
+		extensionStatus := "none"
+		if windowID != nil {
+			extensionStatus = getLatestExtensionStatus(*windowID, assignment.CourseID, assignment.TeacherID)
+		}
+
+		overview := markEntryOverviewRow{
+			CourseID:            assignment.CourseID,
+			CourseCode:          assignment.CourseCode,
+			CourseName:          assignment.CourseName,
+			TeacherID:           assignment.TeacherID,
+			TeacherName:         assignment.TeacherName,
+			DepartmentID:        assignment.DepartmentID,
+			DepartmentName:      assignment.Department,
+			Semester:            assignment.Semester,
+			WindowID:            windowID,
+			WindowStatus:        windowStatus,
+			AssignedStudents:    assigned,
+			CompletedStudents:   completed,
+			CompletionPercent:   completion,
+			Late:                late,
+			ExtensionStatus:     extensionStatus,
+			AllowedComponentIDs: allowedComponents,
+			StudentIDs:          studentIDs,
+		}
+
+		if windowStart != nil {
+			s := windowStart.Local().Format(markEntryTimeLayout)
+			overview.WindowStartAt = &s
+		}
+		if windowEnd != nil {
+			e := windowEnd.Local().Format(markEntryTimeLayout)
+			overview.WindowEndAt = &e
+		}
+
+		rows = append(rows, overview)
+	}
+
+	return rows, nil
+}
+
+func GetHODWindowMonitor(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		http.Error(w, "username is required", http.StatusBadRequest)
+		return
+	}
+
+	semesterStr := strings.TrimSpace(r.URL.Query().Get("semester"))
+	if semesterStr == "" {
+		http.Error(w, "semester is required", http.StatusBadRequest)
+		return
+	}
+	semester, err := strconv.Atoi(semesterStr)
+	if err != nil || semester <= 0 {
+		http.Error(w, "invalid semester", http.StatusBadRequest)
+		return
+	}
+
+	departmentID, departmentName, err := getDepartmentContextFromUsername(username)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	assignments, err := getAssignmentsForWindowMonitor(semester, &departmentID)
+	if err != nil {
+		log.Printf("[GetHODWindowMonitor] getAssignmentsForWindowMonitor failed: %v", err)
+		http.Error(w, "failed to load assignments", http.StatusInternalServerError)
+		return
+	}
+
+	var selectedWindow *selectedWindowContext
+	if windowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id")); windowIDStr != "" {
+		windowID, convErr := strconv.Atoi(windowIDStr)
+		if convErr != nil || windowID <= 0 {
+			http.Error(w, "invalid window_id", http.StatusBadRequest)
+			return
+		}
+		selectedWindow, err = getSelectedWindowContext(windowID)
+		if err != nil {
+			http.Error(w, "window not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	rows, err := buildWindowMonitorRows(assignments, selectedWindow)
+	if err != nil {
+		log.Printf("[GetHODWindowMonitor] buildWindowMonitorRows failed: %v", err)
+		http.Error(w, "failed to build monitor rows", http.StatusInternalServerError)
+		return
+	}
+
+	totalAssignments := len(rows)
+	completedAssignments := 0
+	totalStudents := 0
+	completedStudents := 0
+	for _, row := range rows {
+		totalStudents += row.AssignedStudents
+		completedStudents += row.CompletedStudents
+		if row.CompletionPercent >= 100 {
+			completedAssignments++
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"department_id":   departmentID,
+		"department_name": departmentName,
+		"semester":        semester,
+		"summary": map[string]int{
+			"total_assignments":     totalAssignments,
+			"completed_assignments": completedAssignments,
+			"pending_assignments":   totalAssignments - completedAssignments,
+			"total_students":        totalStudents,
+			"completed_students":    completedStudents,
+		},
+		"rows": rows,
+	})
+}
+
+func GetAdminWindowMonitor(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	semesterStr := strings.TrimSpace(r.URL.Query().Get("semester"))
+	if semesterStr == "" {
+		http.Error(w, "semester is required", http.StatusBadRequest)
+		return
+	}
+	semester, err := strconv.Atoi(semesterStr)
+	if err != nil || semester <= 0 {
+		http.Error(w, "invalid semester", http.StatusBadRequest)
+		return
+	}
+
+	var departmentID *int
+	if departmentIDStr := strings.TrimSpace(r.URL.Query().Get("department_id")); departmentIDStr != "" {
+		parsed, convErr := strconv.Atoi(departmentIDStr)
+		if convErr != nil || parsed <= 0 {
+			http.Error(w, "invalid department_id", http.StatusBadRequest)
+			return
+		}
+		departmentID = &parsed
+	}
+
+	assignments, err := getAssignmentsForWindowMonitor(semester, departmentID)
+	if err != nil {
+		log.Printf("[GetAdminWindowMonitor] getAssignmentsForWindowMonitor failed: %v", err)
+		http.Error(w, "failed to load assignments", http.StatusInternalServerError)
+		return
+	}
+
+	var selectedWindow *selectedWindowContext
+	if windowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id")); windowIDStr != "" {
+		windowID, convErr := strconv.Atoi(windowIDStr)
+		if convErr != nil || windowID <= 0 {
+			http.Error(w, "invalid window_id", http.StatusBadRequest)
+			return
+		}
+		selectedWindow, err = getSelectedWindowContext(windowID)
+		if err != nil {
+			http.Error(w, "window not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	rows, err := buildWindowMonitorRows(assignments, selectedWindow)
+	if err != nil {
+		log.Printf("[GetAdminWindowMonitor] buildWindowMonitorRows failed: %v", err)
+		http.Error(w, "failed to build monitor rows", http.StatusInternalServerError)
+		return
+	}
+
+	totalAssignments := len(rows)
+	completedAssignments := 0
+	totalStudents := 0
+	completedStudents := 0
+	for _, row := range rows {
+		totalStudents += row.AssignedStudents
+		completedStudents += row.CompletedStudents
+		if row.CompletionPercent >= 100 {
+			completedAssignments++
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"semester": semester,
+		"summary": map[string]int{
+			"total_assignments":     totalAssignments,
+			"completed_assignments": completedAssignments,
+			"pending_assignments":   totalAssignments - completedAssignments,
+			"total_students":        totalStudents,
+			"completed_students":    completedStudents,
+		},
+		"rows": rows,
+	})
+}
+
 func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -537,20 +1194,48 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := db.DB.Query(`
+	aliases := getTeacherIdentifierAliases(teacherID)
+	if len(aliases) == 0 {
+		aliases = []string{teacherID}
+	}
+	log.Printf("[GetTeacherEnteredStudents] teacher_id=%s aliases=%v course_id=%d", teacherID, aliases, courseID)
+
+	teacherPlaceholders := make([]string, len(aliases))
+	teacherArgs := make([]interface{}, 0, len(aliases)+1)
+	for index, alias := range aliases {
+		teacherPlaceholders[index] = "?"
+		teacherArgs = append(teacherArgs, alias)
+	}
+	teacherArgs = append(teacherArgs, courseID)
+
+	allowedByWindow := map[int]bool{}
+	if windowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id")); windowIDStr != "" {
+		if windowID, convErr := strconv.Atoi(windowIDStr); convErr == nil && windowID > 0 {
+			rows, compErr := db.DB.Query(`SELECT assessment_component_id FROM mark_entry_window_components WHERE window_id = ?`, windowID)
+			if compErr == nil {
+				for rows.Next() {
+					var componentID int
+					if scanErr := rows.Scan(&componentID); scanErr == nil {
+						allowedByWindow[componentID] = true
+					}
+				}
+				rows.Close()
+			}
+		}
+	}
+
+	studentQuery := fmt.Sprintf(`
 		SELECT
 			s.id,
 			COALESCE(s.enrollment_no, ''),
-			s.student_name,
-			COALESCE(SUM(sm.obtained_marks), 0) AS total_marks,
-			COUNT(sm.id) > 0 AS has_entries
+			s.student_name
 		FROM course_student_teacher_allocation csta
 		JOIN students s ON s.id = csta.student_id
-		LEFT JOIN student_marks sm ON sm.student_id = s.id AND sm.course_id = csta.course_id AND sm.faculty_id = csta.teacher_id
-		WHERE csta.teacher_id = ? AND csta.course_id = ?
-		GROUP BY s.id, s.enrollment_no, s.student_name
+		WHERE csta.teacher_id IN (%s) AND csta.course_id = ? AND csta.status = 1
 		ORDER BY s.student_name
-	`, teacherID, courseID)
+	`, strings.Join(teacherPlaceholders, ","))
+
+	rows, err := db.DB.Query(studentQuery, teacherArgs...)
 	if err != nil {
 		log.Printf("Error fetching teacher entered students: %v", err)
 		http.Error(w, "failed to fetch students", http.StatusInternalServerError)
@@ -558,22 +1243,76 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
+	placeholders := make([]string, len(aliases))
+	args := make([]interface{}, 0, len(aliases)+1)
+	args = append(args, courseID)
+	for index, alias := range aliases {
+		placeholders[index] = "?"
+		args = append(args, strings.ToLower(strings.TrimSpace(alias)))
+	}
+
+	marksQuery := fmt.Sprintf(`
+		SELECT sm.student_id, sm.assessment_component_id, COALESCE(mct.name, CONCAT('Component ', sm.assessment_component_id)), COALESCE(sm.obtained_marks, 0)
+		FROM student_marks sm
+		LEFT JOIN mark_category_types mct ON mct.id = sm.assessment_component_id
+		WHERE sm.course_id = ?
+		  AND (
+			LOWER(TRIM(COALESCE(sm.faculty_id, ''))) IN (%s)
+			OR TRIM(COALESCE(sm.faculty_id, '')) = ''
+		  )
+	`, strings.Join(placeholders, ","))
+	markRows, markErr := db.DB.Query(marksQuery, args...)
+	if markErr != nil {
+		log.Printf("Error fetching marks for drill-down: %v", markErr)
+		http.Error(w, "failed to fetch mark components", http.StatusInternalServerError)
+		return
+	}
+	defer markRows.Close()
+
+	componentMapByStudent := map[int][]map[string]interface{}{}
+	totalByStudent := map[int]float64{}
+	markRowCount := 0
+	for markRows.Next() {
+		var studentID int
+		var componentID int
+		var componentName string
+		var obtained float64
+		if scanErr := markRows.Scan(&studentID, &componentID, &componentName, &obtained); scanErr != nil {
+			continue
+		}
+		allowedInWindow := true
+		if len(allowedByWindow) > 0 {
+			allowedInWindow = allowedByWindow[componentID]
+		}
+
+		componentMapByStudent[studentID] = append(componentMapByStudent[studentID], map[string]interface{}{
+			"assessment_component_id":   componentID,
+			"assessment_component_name": componentName,
+			"obtained_marks":            obtained,
+			"allowed_in_window":         allowedInWindow,
+		})
+		totalByStudent[studentID] += obtained
+		markRowCount++
+	}
+	log.Printf("[GetTeacherEnteredStudents] matched mark rows=%d for teacher_id=%s course_id=%d", markRowCount, teacherID, courseID)
+
 	items := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var studentID int
 		var enrollmentNo string
 		var studentName string
-		var totalMarks float64
-		var hasEntries bool
-		if scanErr := rows.Scan(&studentID, &enrollmentNo, &studentName, &totalMarks, &hasEntries); scanErr != nil {
+		if scanErr := rows.Scan(&studentID, &enrollmentNo, &studentName); scanErr != nil {
 			continue
 		}
+		components := componentMapByStudent[studentID]
+		hasEntries := len(components) > 0
 		items = append(items, map[string]interface{}{
 			"student_id":     studentID,
 			"enrollment_no":  enrollmentNo,
 			"student_name":   studentName,
-			"total_marks":    totalMarks,
+			"total_marks":    totalByStudent[studentID],
 			"has_mark_entry": hasEntries,
+			"components":     components,
 		})
 	}
 
@@ -1014,15 +1753,25 @@ func GetMarkEntryExtensionAnalytics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func buildResultAnalysis(departmentID int, semester int) ([]resultAnalysisRow, error) {
-	assignments, err := getDepartmentAssignments(departmentID, semester)
+func buildResultAnalysis(departmentID int, semester int, window *selectedWindowContext) ([]resultAnalysisRow, error) {
+	assignments, err := getAssignmentsForWindowMonitor(semester, &departmentID)
 	if err != nil {
 		return nil, err
 	}
 
 	courseMap := make(map[int]resultAnalysisRow)
-	courseTeacherMap := make(map[int]map[string]bool)
+	courseAliasMap := make(map[int]map[string]bool)
+	allowedByWindow := map[int]bool{}
+	if window != nil && len(window.ComponentIDs) > 0 {
+		for _, componentID := range window.ComponentIDs {
+			allowedByWindow[componentID] = true
+		}
+	}
+
 	for _, assignment := range assignments {
+		if !doesWindowMatchAssignment(window, assignment) {
+			continue
+		}
 		if _, exists := courseMap[assignment.CourseID]; !exists {
 			courseMap[assignment.CourseID] = resultAnalysisRow{
 				CourseID:   assignment.CourseID,
@@ -1030,23 +1779,63 @@ func buildResultAnalysis(departmentID int, semester int) ([]resultAnalysisRow, e
 				CourseName: assignment.CourseName,
 				Ranges:     map[string]int{"0-10": 0, "11-20": 0, "21-24": 0, "25-30": 0, "31-40": 0, "41-50": 0},
 			}
-			courseTeacherMap[assignment.CourseID] = make(map[string]bool)
+			courseAliasMap[assignment.CourseID] = make(map[string]bool)
 		}
-		courseTeacherMap[assignment.CourseID][assignment.TeacherID] = true
+		for _, alias := range getTeacherIdentifierAliases(assignment.TeacherID) {
+			courseAliasMap[assignment.CourseID][alias] = true
+		}
 	}
 
 	rows := make([]resultAnalysisRow, 0, len(courseMap))
 	for courseID, base := range courseMap {
-		teachers := courseTeacherMap[courseID]
+		aliases := make([]string, 0, len(courseAliasMap[courseID]))
+		for alias := range courseAliasMap[courseID] {
+			aliases = append(aliases, alias)
+		}
 
 		studentRows, err := db.DB.Query(`
 			SELECT DISTINCT csta.student_id, s.student_name
 			FROM course_student_teacher_allocation csta
 			JOIN students s ON s.id = csta.student_id
-			WHERE csta.course_id = ?
+			WHERE csta.course_id = ? AND csta.status = 1
 		`, courseID)
 		if err != nil {
 			return nil, err
+		}
+
+		enteredMarksByStudent := map[int]float64{}
+		appearedByStudent := map[int]bool{}
+		if len(aliases) > 0 {
+			placeholders := make([]string, len(aliases))
+			args := make([]interface{}, 0, len(aliases)+1)
+			args = append(args, courseID)
+			for index, alias := range aliases {
+				placeholders[index] = "?"
+				args = append(args, alias)
+			}
+
+			marksQuery := fmt.Sprintf(`
+				SELECT student_id, assessment_component_id, COALESCE(obtained_marks, 0)
+				FROM student_marks
+				WHERE course_id = ? AND faculty_id IN (%s)
+			`, strings.Join(placeholders, ","))
+			markRows, markErr := db.DB.Query(marksQuery, args...)
+			if markErr == nil {
+				for markRows.Next() {
+					var studentID int
+					var componentID int
+					var marks float64
+					if scanErr := markRows.Scan(&studentID, &componentID, &marks); scanErr != nil {
+						continue
+					}
+					if len(allowedByWindow) > 0 && !allowedByWindow[componentID] {
+						continue
+					}
+					enteredMarksByStudent[studentID] += marks
+					appearedByStudent[studentID] = true
+				}
+				markRows.Close()
+			}
 		}
 
 		studentTotals := make([]studentMarkTotal, 0)
@@ -1057,32 +1846,11 @@ func buildResultAnalysis(departmentID int, semester int) ([]resultAnalysisRow, e
 				continue
 			}
 
-			total := 0.0
-			hasMarks := false
-			for teacherID := range teachers {
-				markRows, markErr := db.DB.Query(`
-					SELECT obtained_marks
-					FROM student_marks
-					WHERE course_id = ? AND student_id = ? AND faculty_id = ?
-				`, courseID, studentID, teacherID)
-				if markErr != nil {
-					continue
-				}
-				for markRows.Next() {
-					var marks sql.NullFloat64
-					if scanErr := markRows.Scan(&marks); scanErr == nil && marks.Valid {
-						total += marks.Float64
-						hasMarks = true
-					}
-				}
-				markRows.Close()
-			}
-
 			studentTotals = append(studentTotals, studentMarkTotal{
 				StudentID:   studentID,
 				StudentName: studentName,
-				TotalMarks:  total,
-				Appeared:    hasMarks,
+				TotalMarks:  enteredMarksByStudent[studentID],
+				Appeared:    appearedByStudent[studentID],
 			})
 		}
 		studentRows.Close()
@@ -1173,6 +1941,7 @@ func GetResultAnalysis(w http.ResponseWriter, r *http.Request) {
 	}
 
 	departmentIDStr := strings.TrimSpace(r.URL.Query().Get("department_id"))
+	role := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("role")))
 	username := strings.TrimSpace(r.URL.Query().Get("username"))
 
 	departmentID := 0
@@ -1185,6 +1954,10 @@ func GetResultAnalysis(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = db.DB.QueryRow(`SELECT department_name FROM departments WHERE id = ?`, departmentID).Scan(&departmentName)
 	} else {
+		if role == "admin" || role == "coe" {
+			http.Error(w, "department_id is required for admin/coe", http.StatusBadRequest)
+			return
+		}
 		if username == "" {
 			http.Error(w, "username is required when department_id is absent", http.StatusBadRequest)
 			return
@@ -1196,7 +1969,21 @@ func GetResultAnalysis(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rows, err := buildResultAnalysis(departmentID, semester)
+	var selectedWindow *selectedWindowContext
+	if windowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id")); windowIDStr != "" {
+		windowID, convErr := strconv.Atoi(windowIDStr)
+		if convErr != nil || windowID <= 0 {
+			http.Error(w, "invalid window_id", http.StatusBadRequest)
+			return
+		}
+		selectedWindow, err = getSelectedWindowContext(windowID)
+		if err != nil {
+			http.Error(w, "window not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	rows, err := buildResultAnalysis(departmentID, semester, selectedWindow)
 	if err != nil {
 		log.Printf("Error generating result analysis: %v", err)
 		http.Error(w, "failed to generate result analysis", http.StatusInternalServerError)

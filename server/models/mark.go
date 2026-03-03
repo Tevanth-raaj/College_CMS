@@ -46,6 +46,7 @@ type StudentMarkEntry struct {
 type MarkEntrySaveRequest struct {
 	CourseID    int                `json:"course_id"`
 	FacultyID   string             `json:"faculty_id"`
+	WindowID    int                `json:"window_id,omitempty"`
 	MarkEntries []StudentMarkEntry `json:"mark_entries"`
 }
 

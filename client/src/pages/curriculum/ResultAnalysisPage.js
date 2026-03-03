@@ -6,41 +6,104 @@ const RANGE_KEYS = ['0-10', '11-20', '21-24', '25-30', '31-40', '41-50']
 
 function ResultAnalysisPage() {
   const username = localStorage.getItem('username')
-  const userRole = localStorage.getItem('userRole')
+  const userRole = (localStorage.getItem('userRole') || '').toLowerCase()
+  const isAdminMode = userRole === 'admin' || userRole === 'coe'
+  const canAccess = isAdminMode || userRole === 'hod'
 
   const [semester, setSemester] = useState('4')
   const [examType, setExamType] = useState('PT1')
+  const [windowId, setWindowId] = useState('')
+  const [departmentId, setDepartmentId] = useState('')
+
+  const [windows, setWindows] = useState([])
+  const [departments, setDepartments] = useState([])
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [departmentName, setDepartmentName] = useState('')
   const [rows, setRows] = useState([])
 
-  const canAccess = userRole === 'hod' || userRole === 'admin' || userRole === 'coe'
+  useEffect(() => {
+    if (!canAccess) return
+    fetchWindows()
+    if (isAdminMode) fetchDepartments()
+  }, [canAccess, isAdminMode])
+
+  useEffect(() => {
+    if (!canAccess) return
+    fetchAnalysis()
+  }, [semester, examType, windowId, departmentId, canAccess])
+
+  const fetchWindows = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/mark-entry-windows`)
+      if (!response.ok) throw new Error('Failed to fetch windows')
+      const data = await response.json()
+      setWindows(Array.isArray(data) ? data : [])
+    } catch (err) {
+      setWindows([])
+    }
+  }
+
+  const fetchDepartments = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/departments`)
+      const data = await response.json()
+      const rawList = Array.isArray(data) ? data : (data.departments || [])
+      const list = rawList.map((department) => ({
+        id: department.id || department.department_id,
+        label: department.name || department.department_name || department.department || 'Unknown Department',
+      }))
+      setDepartments(list)
+    } catch (err) {
+      setDepartments([])
+    }
+  }
 
   const fetchAnalysis = async () => {
-    if (!username || !semester) return
+    if (!semester) return
     setLoading(true)
     setError('')
+
     try {
-      const response = await fetch(`${API_BASE_URL}/hod/result-analysis?username=${encodeURIComponent(username)}&semester=${semester}&exam_type=${encodeURIComponent(examType)}`)
-      const data = await response.json()
-      if (!response.ok) {
-        throw new Error(data.error || data.message || 'Failed to load analysis')
+      const params = new URLSearchParams()
+      params.append('semester', semester)
+      params.append('exam_type', examType)
+      params.append('role', userRole)
+      if (windowId) params.append('window_id', windowId)
+
+      if (isAdminMode) {
+        if (!departmentId) {
+          setRows([])
+          setDepartmentName('')
+          setLoading(false)
+          return
+        }
+        params.append('department_id', departmentId)
+      } else {
+        params.append('username', username || '')
       }
+
+      const response = await fetch(`${API_BASE_URL}/hod/result-analysis?${params.toString()}`)
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || data.message || 'Failed to load analysis')
+
       setRows(Array.isArray(data.rows) ? data.rows : [])
       setDepartmentName(data.department_name || '')
     } catch (err) {
       setRows([])
+      setDepartmentName('')
       setError(err.message)
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => {
-    if (canAccess) fetchAnalysis()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [semester, examType, canAccess])
+  const windowOptions = useMemo(() => {
+    return windows
+      .filter((w) => !w.semester || String(w.semester) === String(semester))
+      .sort((a, b) => (b.id || 0) - (a.id || 0))
+  }, [windows, semester])
 
   const columnHeaders = useMemo(() => rows.map((item) => item.course_code), [rows])
 
@@ -90,23 +153,42 @@ function ResultAnalysisPage() {
       title="Result Analysis"
       subtitle={`Department: ${departmentName || '-'} • Semester: ${semester} • Exam: ${examType}`}
       actions={
-        <div className="flex items-center gap-2">
-          <select value={examType} onChange={(event) => setExamType(event.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={examType} onChange={(e) => setExamType(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
             <option value="PT1">PT1</option>
             <option value="PT2">PT2</option>
             <option value="Model">Model</option>
             <option value="EndSem">EndSem</option>
           </select>
-          <select value={semester} onChange={(event) => setSemester(event.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+
+          <select value={semester} onChange={(e) => setSemester(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
             {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
               <option key={value} value={value}>Semester {value}</option>
             ))}
           </select>
+
+          <select value={windowId} onChange={(e) => setWindowId(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm min-w-[220px]">
+            <option value="">All windows</option>
+            {windowOptions.map((w) => (
+              <option key={w.id} value={w.id}>Window #{w.id} ({w.start_at?.slice(0, 16)} - {w.end_at?.slice(0, 16)})</option>
+            ))}
+          </select>
+
+          {isAdminMode && (
+            <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm min-w-[180px]">
+              <option value="">Select department</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>{d.label}</option>
+              ))}
+            </select>
+          )}
+
           <button className="bg-primary text-white px-3 py-2 rounded-lg text-sm" onClick={fetchAnalysis}>Refresh</button>
         </div>
       }
     >
       {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm mb-4">{error}</div>}
+
       <div className="bg-white border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">

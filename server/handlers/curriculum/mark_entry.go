@@ -1,6 +1,7 @@
 package curriculum
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,6 +25,30 @@ func mapCourseCategoryToTypeID(category string) int {
 		return 2
 	}
 	return 1
+}
+
+func normalizeFacultyIdentifier(raw string) string {
+	identifier := strings.TrimSpace(raw)
+	if identifier == "" {
+		return identifier
+	}
+
+	var facultyID sql.NullString
+	err := db.DB.QueryRow(`SELECT faculty_id FROM teachers WHERE faculty_id = ? LIMIT 1`, identifier).Scan(&facultyID)
+	if err == nil && facultyID.Valid && strings.TrimSpace(facultyID.String) != "" {
+		return strings.TrimSpace(facultyID.String)
+	}
+
+	var email sql.NullString
+	err = db.DB.QueryRow(`SELECT email FROM users WHERE username = ? LIMIT 1`, identifier).Scan(&email)
+	if err == nil && email.Valid && strings.TrimSpace(email.String) != "" {
+		err = db.DB.QueryRow(`SELECT faculty_id FROM teachers WHERE email = ? LIMIT 1`, strings.TrimSpace(email.String)).Scan(&facultyID)
+		if err == nil && facultyID.Valid && strings.TrimSpace(facultyID.String) != "" {
+			return strings.TrimSpace(facultyID.String)
+		}
+	}
+
+	return identifier
 }
 
 // GetMarkCategoriesByType fetches all mark categories for a specific course type
@@ -185,13 +210,23 @@ func GetMarkCategoriesForCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	selectedWindowID := 0
+	if windowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id")); windowIDStr != "" {
+		value, convErr := strconv.Atoi(windowIDStr)
+		if convErr != nil || value <= 0 {
+			http.Error(w, "Invalid window ID", http.StatusBadRequest)
+			return
+		}
+		selectedWindowID = value
+	}
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
 
-	windowOpen, _, allowedComponents, err := resolveMarkEntryWindow(courseID, teacherID)
+	windowOpen, _, allowedComponents, err := resolveMarkEntryWindowWithSelection(courseID, teacherID, selectedWindowID)
 	if err != nil {
 		log.Printf("Error resolving mark entry window: %v", err)
 		http.Error(w, "Failed to validate mark entry window", http.StatusInternalServerError)
@@ -343,13 +378,19 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	normalizedFacultyID := normalizeFacultyIdentifier(saveRequest.FacultyID)
+	if normalizedFacultyID == "" {
+		http.Error(w, "Faculty ID is required", http.StatusBadRequest)
+		return
+	}
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
 
-	windowOpen, windowID, allowedComponents, err := resolveMarkEntryWindow(saveRequest.CourseID, saveRequest.FacultyID)
+	windowOpen, windowID, allowedComponents, err := resolveMarkEntryWindowWithSelection(saveRequest.CourseID, normalizedFacultyID, saveRequest.WindowID)
 	if err != nil {
 		log.Printf("Error resolving mark entry window: %v", err)
 		http.Error(w, "Failed to validate mark entry window", http.StatusInternalServerError)
@@ -361,7 +402,7 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get assigned student IDs for this user (if student-specific permissions exist)
-	assignedStudents, err := getAssignedStudentIDs(saveRequest.FacultyID, saveRequest.CourseID)
+	assignedStudents, err := getAssignedStudentIDs(normalizedFacultyID, saveRequest.CourseID)
 	if err != nil {
 		log.Printf("Error fetching assigned students: %v", err)
 		http.Error(w, "Failed to validate student permissions", http.StatusInternalServerError)
@@ -473,7 +514,7 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		_, err = database.Exec(query,
 			entry.StudentID,
 			entry.CourseID,
-			saveRequest.FacultyID,
+			normalizedFacultyID,
 			entry.AssessmentComponentID,
 			entry.ObtainedMarks,
 			convertedMarks,
@@ -532,13 +573,23 @@ func GetStudentMarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	selectedWindowID := 0
+	if windowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id")); windowIDStr != "" {
+		value, convErr := strconv.Atoi(windowIDStr)
+		if convErr != nil || value <= 0 {
+			http.Error(w, "Invalid window ID", http.StatusBadRequest)
+			return
+		}
+		selectedWindowID = value
+	}
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
 
-	windowOpen, _, _, err := resolveMarkEntryWindow(courseID, teacherID)
+	windowOpen, _, _, err := resolveMarkEntryWindowWithSelection(courseID, teacherID, selectedWindowID)
 	if err != nil {
 		log.Printf("Error resolving mark entry window: %v", err)
 		http.Error(w, "Failed to validate mark entry window", http.StatusInternalServerError)

@@ -348,6 +348,10 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 }
 
 func resolveMarkEntryWindow(courseID int, teacherID string) (bool, int, []int, error) {
+	return resolveMarkEntryWindowWithSelection(courseID, teacherID, 0)
+}
+
+func resolveMarkEntryWindowWithSelection(courseID int, teacherID string, selectedWindowID int) (bool, int, []int, error) {
 	database := db.DB
 	if database == nil {
 		return false, 0, nil, sql.ErrConnDone
@@ -457,12 +461,18 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, int, []int, e
 	nowLocal := time.Now()
 	nowUTC := nowLocal.UTC()
 
-	var windowID int
-	var startAt time.Time
-	var endAt time.Time
-	var enabledInt int
-	found := false
+	matchedWindows := make([]struct {
+		id         int
+		startAt    time.Time
+		endAt      time.Time
+		enabledInt int
+	}, 0)
+
 	for rows.Next() {
+		var windowID int
+		var startAt time.Time
+		var endAt time.Time
+		var enabledInt int
 		if err := rows.Scan(&windowID, &startAt, &endAt, &enabledInt); err != nil {
 			return false, 0, nil, err
 		}
@@ -474,18 +484,43 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, int, []int, e
 		inLocal := !nowLocal.Before(startAt) && !nowLocal.After(endAt)
 		inUTC := !nowUTC.Before(startAt.UTC()) && !nowUTC.After(endAt.UTC())
 		if inLocal || inUTC {
-			found = true
-			break
+			matchedWindows = append(matchedWindows, struct {
+				id         int
+				startAt    time.Time
+				endAt      time.Time
+				enabledInt int
+			}{
+				id:         windowID,
+				startAt:    startAt,
+				endAt:      endAt,
+				enabledInt: enabledInt,
+			})
 		}
 	}
 
-	if !found {
+	if len(matchedWindows) == 0 {
 		log.Printf("No matching window rule found")
 		return false, 0, nil, nil
 	}
 
+	resolvedWindow := matchedWindows[0]
+	if selectedWindowID > 0 {
+		selectedFound := false
+		for _, candidate := range matchedWindows {
+			if candidate.id == selectedWindowID {
+				resolvedWindow = candidate
+				selectedFound = true
+				break
+			}
+		}
+		if !selectedFound {
+			log.Printf("Selected window %d is not applicable for courseID=%d teacherID=%s", selectedWindowID, courseID, teacherID)
+			return false, 0, nil, nil
+		}
+	}
+
 	log.Printf("Found active window: id=%d, start=%s, end=%s, now=%s",
-		windowID, startAt.Format("2006-01-02 15:04:05"), endAt.Format("2006-01-02 15:04:05"), nowLocal.Format("2006-01-02 15:04:05"))
+		resolvedWindow.id, resolvedWindow.startAt.Format("2006-01-02 15:04:05"), resolvedWindow.endAt.Format("2006-01-02 15:04:05"), nowLocal.Format("2006-01-02 15:04:05"))
 
 	// Load allowed component IDs for this window (empty = all allowed)
 	var allowedComponents []int
@@ -493,7 +528,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, int, []int, e
 		SELECT assessment_component_id
 		FROM mark_entry_window_components
 		WHERE window_id = ?
-	`, windowID)
+	`, resolvedWindow.id)
 	if err == nil {
 		defer componentRows.Close()
 		for componentRows.Next() {
@@ -505,7 +540,148 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, int, []int, e
 	}
 
 	log.Printf("Window allows components: %v (empty = all allowed)", allowedComponents)
-	return true, windowID, allowedComponents, nil
+	return true, resolvedWindow.id, allowedComponents, nil
+}
+
+func GetApplicableMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	teacherID := strings.TrimSpace(r.URL.Query().Get("teacher_id"))
+	courseIDStr := strings.TrimSpace(r.URL.Query().Get("course_id"))
+	if teacherID == "" || courseIDStr == "" {
+		http.Error(w, "teacher_id and course_id are required", http.StatusBadRequest)
+		return
+	}
+
+	courseID, err := strconv.Atoi(courseIDStr)
+	if err != nil || courseID <= 0 {
+		http.Error(w, "invalid course_id", http.StatusBadRequest)
+		return
+	}
+
+	database := db.DB
+	if database == nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+
+	var facultyID string
+	err = database.QueryRow(`SELECT faculty_id FROM teachers WHERE id = ? OR faculty_id = ?`, teacherID, teacherID).Scan(&facultyID)
+	if err != nil && err != sql.ErrNoRows {
+		http.Error(w, "failed to resolve teacher", http.StatusInternalServerError)
+		return
+	}
+	if err == sql.ErrNoRows || strings.TrimSpace(facultyID) == "" {
+		facultyID = teacherID
+	}
+
+	var numericUserID sql.NullInt64
+	_ = database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, facultyID).Scan(&numericUserID)
+
+	var departmentID sql.NullInt64
+	_ = database.QueryRow(`
+		SELECT department_id
+		FROM department_teachers
+		WHERE teacher_id = ? AND status = 1
+		ORDER BY id DESC
+		LIMIT 1
+	`, facultyID).Scan(&departmentID)
+
+	var semester sql.NullInt64
+	var cardType string
+	_ = database.QueryRow(`
+		SELECT nc.semester_number, COALESCE(nc.card_type, 'semester')
+		FROM curriculum_courses cc
+		JOIN normal_cards nc ON cc.semester_id = nc.id
+		WHERE cc.course_id = ?
+		LIMIT 1
+	`, courseID).Scan(&semester, &cardType)
+	if cardType != "semester" {
+		semester = sql.NullInt64{Valid: false}
+	}
+
+	query := `
+		SELECT id, start_at, end_at
+		FROM mark_entry_windows
+		WHERE enabled = 1
+		  AND ((teacher_id IS NULL AND user_id IS NULL) OR teacher_id = ? OR user_id = ?)
+		  AND (course_id IS NULL OR course_id = ?)
+		  AND (? IS NULL OR department_id IS NULL OR department_id = 0 OR department_id = ?)
+		  AND (? IS NULL OR semester IS NULL OR semester = 0 OR semester = ?)
+		ORDER BY
+		  (teacher_id IS NOT NULL) DESC,
+		  (user_id IS NOT NULL) DESC,
+		  (course_id IS NOT NULL) DESC,
+		  (department_id IS NOT NULL) DESC,
+		  (semester IS NOT NULL) DESC,
+		  updated_at DESC
+		LIMIT 25
+	`
+
+	deptValue := interface{}(nil)
+	if departmentID.Valid {
+		deptValue = departmentID.Int64
+	}
+
+	semValue := interface{}(nil)
+	if semester.Valid {
+		semValue = semester.Int64
+	}
+
+	userIDValue := interface{}(nil)
+	if numericUserID.Valid {
+		userIDValue = numericUserID.Int64
+	}
+
+	rows, queryErr := database.Query(query, facultyID, userIDValue, courseID, deptValue, deptValue, semValue, semValue)
+	if queryErr != nil {
+		http.Error(w, "failed to load applicable windows", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var windowID int
+		var startAt time.Time
+		var endAt time.Time
+		if scanErr := rows.Scan(&windowID, &startAt, &endAt); scanErr != nil {
+			continue
+		}
+		if now.Before(startAt.UTC()) || now.After(endAt.UTC()) {
+			continue
+		}
+
+		componentIDs := make([]int, 0)
+		compRows, compErr := database.Query(`SELECT assessment_component_id FROM mark_entry_window_components WHERE window_id = ?`, windowID)
+		if compErr == nil {
+			for compRows.Next() {
+				var componentID int
+				if compScanErr := compRows.Scan(&componentID); compScanErr == nil {
+					componentIDs = append(componentIDs, componentID)
+				}
+			}
+			compRows.Close()
+		}
+
+		items = append(items, map[string]interface{}{
+			"id":            windowID,
+			"start_at":      startAt.Local().Format(markEntryTimeLayout),
+			"end_at":        endAt.Local().Format(markEntryTimeLayout),
+			"component_ids": componentIDs,
+		})
+	}
+
+	json.NewEncoder(w).Encode(items)
 }
 
 // validateStudentPermission checks if a user has permission to enter marks for a specific student
