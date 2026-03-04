@@ -504,12 +504,14 @@ function RecordedAbsenteesSection({
         map.set(key, {
           key,
           window_id: a.window_id,
+          window_name: a.window_name || '',
           earliest: a.created_at,
           window_end_at: a.window_end_at || null,
           rows: [],
         })
       }
       const g = map.get(key)
+      if (a.window_name && !g.window_name) g.window_name = a.window_name
       g.rows.push(a)
       if (new Date(a.created_at) < new Date(g.earliest)) g.earliest = a.created_at
       // Keep the latest window_end_at across rows
@@ -645,6 +647,9 @@ function RecordedAbsenteesSection({
 
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
+                    {group.window_name && (
+                      <p className="text-sm font-semibold text-gray-800 mb-1 truncate">{group.window_name}</p>
+                    )}
                     <div className="flex items-center gap-2 flex-wrap">
                       {isExamOver && (
                         <span className="px-2.5 py-0.5 bg-gray-200 text-gray-600 text-xs font-bold rounded-full uppercase tracking-wide">

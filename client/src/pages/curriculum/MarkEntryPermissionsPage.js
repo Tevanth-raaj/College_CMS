@@ -72,6 +72,13 @@ function MarkEntryPermissionsPage() {
   const [loadingClosedWindows, setLoadingClosedWindows] = useState(false)
   const [expandedClosedWindowId, setExpandedClosedWindowId] = useState(null)
   const [closedWindowView, setClosedWindowView] = useState({}) // { [windowId]: 'pending' | 'completed' }
+  const [activeWindowView, setActiveWindowView] = useState({}) // { [windowId]: 'pending' | 'completed' }
+
+  // Search/filter state for window lists
+  const [existingWindowSearch, setExistingWindowSearch] = useState('')
+  const [existingUserWindowSearch, setExistingUserWindowSearch] = useState('')
+  const [activePendingSearch, setActivePendingSearch] = useState('')
+  const [closedPendingSearch, setClosedPendingSearch] = useState('')
   const [selectedTeachers, setSelectedTeachers] = useState({}) // { [windowId]: Set of "teacherId|courseId" }
   const [extensionModal, setExtensionModal] = useState(null) // { windowId, teachers: [{teacher_id, course_id}] }
   const [extensionEndDate, setExtensionEndDate] = useState('')
@@ -1796,13 +1803,37 @@ function MarkEntryPermissionsPage() {
                 </div>
               </div>
               {existingTab === 'window-scope' ? (
-                <span className="px-3 py-1 bg-background text-primary rounded-full text-sm font-semibold">
-                  {existingWindows.length} {existingWindows.length === 1 ? 'window' : 'windows'}
-                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search by name, ID, dept, course…"
+                    value={existingWindowSearch}
+                    onChange={e => setExistingWindowSearch(e.target.value)}
+                    className="w-56 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <span className="px-3 py-1 bg-background text-primary rounded-full text-sm font-semibold">
+                    {existingWindows.filter(w => {
+                      const q = existingWindowSearch.toLowerCase()
+                      return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.course_name||'').toLowerCase().includes(q)
+                    }).length} {existingWindows.length === 1 ? 'window' : 'windows'}
+                  </span>
+                </div>
               ) : (
-                <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
-                  {userAssignedWindows.length} {userAssignedWindows.length === 1 ? 'window' : 'windows'}
-                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search by name, ID, user, course…"
+                    value={existingUserWindowSearch}
+                    onChange={e => setExistingUserWindowSearch(e.target.value)}
+                    className="w-56 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
+                    {userAssignedWindows.filter(w => {
+                      const q = existingUserWindowSearch.toLowerCase()
+                      return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.user_username||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q)
+                    }).length} {userAssignedWindows.length === 1 ? 'window' : 'windows'}
+                  </span>
+                </div>
               )}
             </div>
 
@@ -1813,9 +1844,18 @@ function MarkEntryPermissionsPage() {
                   <div className="text-center py-12 text-gray-400">
                     <p className="text-sm">No windows configured yet</p>
                   </div>
-                ) : (
+                ) : (() => {
+                  const filtered = existingWindows.filter(w => {
+                    const q = existingWindowSearch.toLowerCase()
+                    return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.course_name||'').toLowerCase().includes(q)
+                  })
+                  return filtered.length === 0 ? (
+                    <div className="text-center py-12 text-gray-400">
+                      <p className="text-sm">No windows match &ldquo;{existingWindowSearch}&rdquo;</p>
+                    </div>
+                  ) : (
                   <div className="space-y-3">
-                    {existingWindows.map((win) => {
+                    {filtered.map((win) => {
                       const { status, color } = getWindowStatus(win)
                       return (
                         <div key={win.id} className="bg-gray-50 rounded-lg p-4 border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all">
@@ -1856,7 +1896,8 @@ function MarkEntryPermissionsPage() {
                       )
                     })}
                   </div>
-                )}
+                  )
+                })()}
               </div>
             )}
 
@@ -1867,9 +1908,18 @@ function MarkEntryPermissionsPage() {
                   <div className="text-center py-12 text-gray-400">
                     <p className="text-sm">No user-assigned windows configured yet</p>
                   </div>
-                ) : (
+                ) : (() => {
+                  const filteredU = userAssignedWindows.filter(w => {
+                    const q = existingUserWindowSearch.toLowerCase()
+                    return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.user_username||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q)
+                  })
+                  return filteredU.length === 0 ? (
+                    <div className="text-center py-12 text-gray-400">
+                      <p className="text-sm">No windows match "{existingUserWindowSearch}"</p>
+                    </div>
+                  ) : (
                   <div className="space-y-3">
-                    {userAssignedWindows.map((win) => {
+                    {filteredU.map((win) => {
                       const { status, color } = getWindowStatus(win)
                       return (
                         <div key={win.id} className="bg-background rounded-lg p-4 border border-purple-200 hover:border-purple-300 hover:shadow-sm transition-all">
@@ -1925,7 +1975,8 @@ function MarkEntryPermissionsPage() {
                       )
                     })}
                   </div>
-                )}
+                  )
+                })()}
               </div>
             )}
           </div>
@@ -1943,13 +1994,22 @@ function MarkEntryPermissionsPage() {
                     Teachers who have not yet submitted marks for currently active windows
                   </p>
                 </div>
-                <button
-                  onClick={fetchPendingWindows}
-                  disabled={loadingPendingWindows}
-                  className="px-4 py-2 bg-primary hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {loadingPendingWindows ? 'Refreshing...' : 'Refresh'}
-                </button>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search windows…"
+                    value={activePendingSearch}
+                    onChange={e => setActivePendingSearch(e.target.value)}
+                    className="w-44 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <button
+                    onClick={fetchPendingWindows}
+                    disabled={loadingPendingWindows}
+                    className="px-4 py-2 bg-primary hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {loadingPendingWindows ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
               </div>
 
               {loadingPendingWindows ? (
@@ -1967,13 +2027,20 @@ function MarkEntryPermissionsPage() {
                     All teachers have submitted their marks for active windows.
                   </p>
                 </div>
-              ) : (
+              ) : (  
                 <div className="space-y-4">
-                  {pendingWindows.map((window) => {
+                  {pendingWindows.filter(w => {
+                    const q = activePendingSearch.toLowerCase()
+                    return !q || String(w.window_id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q)
+                  }).map((window) => {
                     const isExpanded = expandedWindowId === window.window_id
                     const startDate = new Date(window.start_at)
                     const endDate = new Date(window.end_at)
-                    
+                    const currentView = activeWindowView[window.window_id] || 'pending'
+                    const pendingList = window.pending_teachers || []
+                    const completedList = window.completed_teachers || []
+                    const showingList = currentView === 'completed' ? completedList : pendingList
+
                     return (
                       <div
                         key={window.window_id}
@@ -2019,7 +2086,10 @@ function MarkEntryPermissionsPage() {
                                 </span>
                               )}
                               <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">
-                                {window.pending_teachers.length} Pending
+                                {pendingList.length} Pending
+                              </span>
+                              <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-bold rounded-full">
+                                {completedList.length} Submitted
                               </span>
                               <span className="px-2 py-0.5 bg-green-100 text-green-800 text-xs font-semibold rounded-full">
                                 Active
@@ -2043,34 +2113,77 @@ function MarkEntryPermissionsPage() {
 
                         {isExpanded && (
                           <div className="border-t border-gray-200">
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-sm">
-                                <thead className="bg-gray-50">
-                                  <tr>
-                                    {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name'].map(h => (
-                                      <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                                        {h}
-                                      </th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                  {window.pending_teachers.map((teacher, idx) => (
-                                    <tr key={`${teacher.teacher_id}-${teacher.course_id}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                      <td className="px-4 py-3 text-gray-400 text-xs">{idx + 1}</td>
-                                      <td className="px-4 py-3 font-mono text-gray-700 text-xs">{teacher.teacher_id}</td>
-                                      <td className="px-4 py-3 font-medium text-gray-800">{teacher.teacher_name}</td>
-                                      <td className="px-4 py-3">
-                                        <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
-                                          {teacher.course_code}
-                                        </span>
-                                      </td>
-                                      <td className="px-4 py-3 text-gray-600 text-xs">{teacher.course_name}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                            {/* Toggle between Pending and Submitted */}
+                            <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center">
+                              <div className="inline-flex rounded-lg bg-gray-200 p-0.5">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setActiveWindowView(prev => ({ ...prev, [window.window_id]: 'pending' }))
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    currentView === 'pending'
+                                      ? 'bg-red-500 text-white shadow-sm'
+                                      : 'text-gray-600 hover:text-gray-800'
+                                  }`}
+                                >
+                                  Not Submitted ({pendingList.length})
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setActiveWindowView(prev => ({ ...prev, [window.window_id]: 'completed' }))
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    currentView === 'completed'
+                                      ? 'bg-green-500 text-white shadow-sm'
+                                      : 'text-gray-600 hover:text-gray-800'
+                                  }`}
+                                >
+                                  Submitted ({completedList.length})
+                                </button>
+                              </div>
                             </div>
+
+                            {showingList.length === 0 ? (
+                              <div className="py-8 text-center text-gray-400 text-sm">
+                                {currentView === 'completed' ? 'No teachers have submitted marks for this window yet.' : 'All teachers have submitted marks for this window!'}
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead className={currentView === 'completed' ? 'bg-green-50' : 'bg-red-50'}>
+                                    <tr>
+                                      {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name', ...(currentView === 'completed' ? ['Submitted At'] : [])].map(h => (
+                                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                                          {h}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {showingList.map((teacher, idx) => (
+                                      <tr key={`${teacher.teacher_id}-${teacher.course_id}`} className={idx % 2 === 0 ? 'bg-white' : (currentView === 'completed' ? 'bg-green-50/30' : 'bg-red-50/30')}>
+                                        <td className="px-4 py-3 text-gray-400 text-xs">{idx + 1}</td>
+                                        <td className="px-4 py-3 font-mono text-gray-700 text-xs">{teacher.teacher_id}</td>
+                                        <td className="px-4 py-3 font-medium text-gray-800">{teacher.teacher_name}</td>
+                                        <td className="px-4 py-3">
+                                          <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
+                                            {teacher.course_code}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-3 text-gray-600 text-xs">{teacher.course_name}</td>
+                                        {currentView === 'completed' && (
+                                          <td className="px-4 py-3 text-gray-500 text-xs">
+                                            {teacher.submitted_at ? new Date(teacher.submitted_at).toLocaleString() : '—'}
+                                          </td>
+                                        )}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -2089,13 +2202,22 @@ function MarkEntryPermissionsPage() {
                     Teachers who did not complete mark entry before the window deadline passed
                   </p>
                 </div>
-                <button
-                  onClick={fetchClosedPendingWindows}
-                  disabled={loadingClosedWindows}
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {loadingClosedWindows ? 'Refreshing...' : 'Refresh'}
-                </button>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search windows…"
+                    value={closedPendingSearch}
+                    onChange={e => setClosedPendingSearch(e.target.value)}
+                    className="w-44 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    onClick={fetchClosedPendingWindows}
+                    disabled={loadingClosedWindows}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {loadingClosedWindows ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
               </div>
 
               {loadingClosedWindows ? (
@@ -2115,7 +2237,10 @@ function MarkEntryPermissionsPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {closedPendingWindows.map((window) => {
+                  {closedPendingWindows.filter(w => {
+                    const q = closedPendingSearch.toLowerCase()
+                    return !q || String(w.window_id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q)
+                  }).map((window) => {
                     const isExpanded = expandedClosedWindowId === window.window_id
                     const startDate = new Date(window.start_at)
                     const endDate = new Date(window.end_at)
