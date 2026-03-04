@@ -1101,9 +1101,19 @@ function MarkEntryPage() {
                               return (
                                 <td key={category.id} className="px-3 py-3 text-center border-r border-gray-200" style={{ minWidth: '140px', maxWidth: '180px' }}>
                                   {isSubmitted ? (
-                                    <span className="inline-block w-20 px-2 py-1 text-center text-sm font-medium text-gray-700 bg-gray-100 rounded border border-gray-200">
-                                      {earned ?? '—'}
-                                    </span>
+                                    isCellAbsent(student.student_id, category.id) ? (
+                                      <span className="inline-flex items-center gap-1 text-red-400 text-xs font-medium tracking-wide">
+                                        <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                          <circle cx="12" cy="12" r="10" />
+                                          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                                        </svg>
+                                        Absent
+                                      </span>
+                                    ) : (
+                                      <span className="inline-block w-20 px-2 py-1 text-center text-sm font-medium text-gray-700 bg-gray-100 rounded border border-gray-200">
+                                        {earned ?? '—'}
+                                      </span>
+                                    )
                                   ) : isCellAbsent(student.student_id, category.id) ? (
                                     <span className="inline-flex items-center gap-1 text-red-300 text-xs font-medium tracking-wide">
                                       <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

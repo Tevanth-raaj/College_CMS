@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import * as XLSX from 'xlsx'
 import { API_BASE_URL } from '../../config'
 
 const LEARNING_MODES = [
@@ -199,6 +200,17 @@ function AbsenteesContent() {
   const canPreview = file && selectedGroupIds && step === 'idle'
   const canConfirm = step === 'previewing' && previewRows.length > 0
 
+  const handleDownloadTemplate = () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['exam_id', 'course_id', 'student_id'],
+    ])
+    // Set column widths for readability
+    ws['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 16 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Absentees Template')
+    XLSX.writeFile(wb, 'exam_absentees_report.xlsx')
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       {/* ── header ── */}
@@ -211,7 +223,18 @@ function AbsenteesContent() {
 
       {/* ── Upload card ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
-        <h2 className="text-base font-semibold text-gray-800 mb-5">Upload Absentees</h2>
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-base font-semibold text-gray-800">Upload Absentees</h2>
+          <button
+            onClick={handleDownloadTemplate}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200 rounded-lg transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Download Template
+          </button>
+        </div>
 
         {/* Controls row */}
         <div className="flex flex-wrap items-end gap-6">
