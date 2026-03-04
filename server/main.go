@@ -9,6 +9,7 @@ import (
 	"server/middleware"
 	"server/routes"
 	"server/scheduler"
+
 	"github.com/joho/godotenv"
 )
 
@@ -100,6 +101,11 @@ func main() {
 	// Add user_id to mark_entry_windows for user-based windows
 	if err := db.AddUserIdToMarkEntryWindows(); err != nil {
 		log.Fatal("Failed to add user_id to mark_entry_windows:", err)
+	}
+
+	// Add window_name to mark_entry_windows for auto-generated window names
+	if err := db.AddWindowNameToMarkEntryWindows(); err != nil {
+		log.Fatal("Failed to add window_name to mark_entry_windows:", err)
 	}
 
 	// Start the allocation scheduler (auto-runs when teacher selection window closes)

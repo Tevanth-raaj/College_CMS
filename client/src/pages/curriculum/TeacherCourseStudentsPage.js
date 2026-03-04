@@ -23,7 +23,13 @@ function TeacherCourseStudentsPage() {
     setError('')
 
     try {
-      const teacherID = localStorage.getItem('teacherId')
+      const teacherID = localStorage.getItem('teacherId') || localStorage.getItem('teacher_id')
+      if (!teacherID) {
+        setError('Teacher ID not found. Please login again.')
+        setLoading(false)
+        return
+      }
+      
       const url = `${API_BASE_URL}/teachers/${teacherID}/courses`
       const response = await fetch(url)
 
@@ -46,6 +52,25 @@ function TeacherCourseStudentsPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const formatDateTime = (dateString) => {
+    const date = new Date(dateString)
+    return date.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    })
+  }
+
+  const isWindowActive = (window) => {
+    const now = new Date()
+    const startDate = new Date(window.start_at)
+    const endDate = new Date(window.end_at)
+    return now >= startDate && now <= endDate
   }
 
   if (loading) {
@@ -97,6 +122,90 @@ function TeacherCourseStudentsPage() {
       }
     >
       <div className="space-y-6">
+        {/* Mark Entry Window Section */}
+        {course?.has_window && course?.window && (
+          <div className={`${isWindowActive(course.window) ? 'bg-purple-50 border-[#7D53F6]' : 'bg-gray-50 border-gray-400'} border-l-4 p-4 rounded-lg`}>
+            <div className="flex items-start">
+              <div className="flex-shrink-0">
+                <svg className={`h-6 w-6 ${isWindowActive(course.window) ? 'text-[#7D53F6]' : 'text-gray-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {isWindowActive(course.window) ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  )}
+                </svg>
+              </div>
+              <div className="ml-3 flex-1">
+                <h3 className={`text-lg font-semibold mb-3 ${isWindowActive(course.window) ? 'text-purple-900' : 'text-gray-700'}`}>
+                  {isWindowActive(course.window) ? 'Active Mark Entry Window' : 'Expired Mark Entry Window'}
+                </h3>
+                <div className={`bg-white p-4 rounded-lg shadow-sm border ${isWindowActive(course.window) ? 'border-purple-200' : 'border-gray-200'}`}>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-gray-600">Window ID</p>
+                      <p className="text-sm font-semibold text-gray-900">#{course.window.id}</p>
+                    </div>
+                    {course.window.department_name && (
+                      <div>
+                        <p className="text-sm text-gray-600">Department</p>
+                        <p className="text-sm font-semibold text-gray-900">{course.window.department_name}</p>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-sm text-gray-600">Start Date</p>
+                      <p className="text-sm font-semibold text-gray-900">{formatDateTime(course.window.start_at)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">End Date</p>
+                      <p className="text-sm font-semibold text-gray-900">{formatDateTime(course.window.end_at)}</p>
+                    </div>
+                    {course.window.semester && (
+                      <div>
+                        <p className="text-sm text-gray-600">Semester</p>
+                        <p className="text-sm font-semibold text-gray-900">{course.window.semester}</p>
+                      </div>
+                    )}
+                    {course.window.component_names && course.window.component_names.length > 0 && (
+                      <div className="col-span-2">
+                        <p className="text-sm text-gray-600">Assessment Components</p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {/* Remove duplicates and render unique component names */}
+                          {[...new Set(course.window.component_names)].map((compName, idx) => (
+                            <span key={idx} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                              {compName}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {isWindowActive(course.window) && (
+                    <button
+                      onClick={() => navigate('/mark-entry')}
+                      className="mt-3 w-full px-4 py-2 bg-[#7D53F6] text-white rounded-lg hover:bg-purple-700 transition-colors"
+                    >
+                      Enter Marks
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* No Window Message */}
+        {!course?.has_window && (
+          <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <svg className="h-6 w-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="ml-3 text-blue-700 font-medium">No mark entry window available for this course</p>
+            </div>
+          </div>
+        )}
+
+        {/* Students List */}
         {/* Course Info Card */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

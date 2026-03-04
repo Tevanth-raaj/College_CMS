@@ -9,17 +9,19 @@ import (
 	"server/db"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ElectiveOption represents an available elective course
 type ElectiveOption struct {
-	CourseID   int    `json:"course_id"`
-	CourseCode string `json:"course_code"`
-	CourseName string `json:"course_name"`
-	Credits    int    `json:"credits"`
-	Category   string `json:"category"`
-	SlotID     int    `json:"slot_id"`
-	SlotName   string `json:"slot_name"`
+	HodSelectionID int    `json:"hod_selection_id"` // hod_elective_selections.id — use this as the key when submitting
+	CourseID        int    `json:"course_id"`
+	CourseCode      string `json:"course_code"`
+	CourseName      string `json:"course_name"`
+	Credits         int    `json:"credits"`
+	Category        string `json:"category"`
+	SlotID          int    `json:"slot_id"`
+	SlotName        string `json:"slot_name"`
 }
 
 // ElectiveSlot represents a group of electives for a specific slot
@@ -33,13 +35,16 @@ type ElectiveSlot struct {
 
 // ElectivesBySlot represents electives organized by slots
 type ElectivesBySlot struct {
-	StudentID        int                `json:"student_id"`
-	DepartmentID     int                `json:"department_id"`
-	CurrentSemester  int                `json:"current_semester"`
-	NextSemester     int                `json:"next_semester"`
-	Batch            string             `json:"batch"`
-	Slots            []ElectiveSlot     `json:"slots"`
-	ExistingSelections map[string]int   `json:"existing_selections"` // slot_name -> course_id
+	StudentID          int             `json:"student_id"`
+	DepartmentID       int             `json:"department_id"`
+	CurrentSemester    int             `json:"current_semester"`
+	NextSemester       int             `json:"next_semester"`
+	Batch              string          `json:"batch"`
+	Slots              []ElectiveSlot  `json:"slots"`
+	ExistingSelections map[string]int  `json:"existing_selections"` // slot_name -> hod_selection_id
+	WindowOpen         bool            `json:"window_open"`
+	WindowStart        string          `json:"window_start"` // YYYY-MM-DD
+	WindowEnd          string          `json:"window_end"`   // YYYY-MM-DD
 }
 
 // ElectiveSelection represents a student's elective choice
@@ -126,21 +131,61 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	nextSemester := currentSemester + 1
 	log.Printf("Student department_id: %d, current semester: %d, next semester: %d, batch: %s", departmentID, currentSemester, nextSemester, batch)
 
-	// Step 4: Check if student is eligible for Honour/Minor courses
-	var isEligibleForHonourMinor bool
+	// Step 3b: Check elective selection window from academic_calendar
+	var windowStart, windowEnd string
+	windowOpen := false
+	err = db.DB.QueryRow(`
+		SELECT
+			COALESCE(DATE_FORMAT(elective_selection_start,'%Y-%m-%d'), '') as ws,
+			COALESCE(DATE_FORMAT(elective_selection_end,  '%Y-%m-%d'), '') as we
+		FROM academic_calendar
+		WHERE current_semester = ? AND is_current = 1
+		LIMIT 1
+	`, currentSemester).Scan(&windowStart, &windowEnd)
+	if err != nil {
+		log.Printf("Warning: could not fetch elective window from academic_calendar: %v", err)
+	}
+	if windowStart != "" && windowEnd != "" {
+		const dateFmt = "2006-01-02"
+		today := time.Now().Format(dateFmt)
+		windowOpen = today >= windowStart && today <= windowEnd
+		log.Printf("Elective window: %s to %s, today: %s, open: %v", windowStart, windowEnd, today, windowOpen)
+	}
+
+	// Step 4: Check student eligibility for Honour/Minor courses by type
+	eligibilityMap := make(map[string]bool)
+	
+	// Check for HONOUR eligibility
+	var hasHonourEligibility bool
 	err = db.DB.QueryRow(`
 		SELECT EXISTS(
 			SELECT 1 FROM student_eligible_honour_minor 
-			WHERE student_email = ?
+			WHERE student_email = ? AND (type = 'HONOUR')
 		)
-	`, email).Scan(&isEligibleForHonourMinor)
+	`, email).Scan(&hasHonourEligibility)
 	
 	if err != nil {
-		log.Printf("Error checking honour/minor eligibility: %v", err)
-		isEligibleForHonourMinor = false // Default to not eligible
+		log.Printf("Error checking honour eligibility: %v", err)
+		hasHonourEligibility = false
 	}
+	eligibilityMap["HONOUR"] = hasHonourEligibility
 	
-	log.Printf("Student eligible for Honour/Minor: %v", isEligibleForHonourMinor)
+	// Check for MINOR eligibility
+	var hasMinorEligibility bool
+	err = db.DB.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM student_eligible_honour_minor 
+			WHERE student_email = ? AND (type = 'MINOR')
+		)
+	`, email).Scan(&hasMinorEligibility)
+	
+	if err != nil {
+		log.Printf("Error checking minor eligibility: %v", err)
+		hasMinorEligibility = false
+	}
+	eligibilityMap["MINOR"] = hasMinorEligibility
+	
+	log.Printf("Student eligible for Honour: %v, Minor: %v", hasHonourEligibility, hasMinorEligibility)
 
 	// Step 5: Get ALL elective slots for this semester with their HOD-assigned courses
 	query := `
@@ -153,7 +198,8 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			ess.id as slot_id,
 			ess.slot_name,
 			ess.is_active,
-			ess.slot_order
+			ess.slot_order,
+			COALESCE(hes.id, 0) as hod_selection_id
 		FROM elective_semester_slots ess
 		LEFT JOIN hod_elective_selections hes ON ess.id = hes.slot_id 
 			AND hes.semester = ?
@@ -198,6 +244,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			&elective.SlotName,
 			&isActive,
 			&slotOrder,
+			&elective.HodSelectionID,
 		)
 		if err != nil {
 			log.Printf("Error scanning elective: %v", err)
@@ -205,8 +252,8 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Log each row for debugging
-		log.Printf("Row %d: slot_id=%d (%s), course_id=%d (%s)", 
-			rowCount, elective.SlotID, elective.SlotName, elective.CourseID, elective.CourseCode)
+		log.Printf("Row %d: slot_id=%d (%s), course_id=%d (%s), hod_selection_id=%d",
+			rowCount, elective.SlotID, elective.SlotName, elective.CourseID, elective.CourseCode, elective.HodSelectionID)
 
 		// Create slot if it doesn't exist
 		if _, exists := slotMap[elective.SlotID]; !exists {
@@ -238,10 +285,38 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	var slots []ElectiveSlot
 	for _, slotID := range slotOrderList {
 		slot := slotMap[slotID]
-		
-		// Filter out HONOR and MINOR slots if student is not eligible
-		if !isEligibleForHonourMinor && (slot.SlotType == "HONOR" || slot.SlotType == "MINOR") {
-			log.Printf("Filtering out %s slot '%s' - student not eligible", slot.SlotType, slot.SlotName)
+
+		// Post-process: if a slot is named like a professional slot but ALL its courses
+		// belong to a different category (e.g. HOD put Add-On courses in "Professional Elective 9"),
+		// reclassify it based on the dominant course category.
+		if slot.SlotType == "PROFESSIONAL" && len(slot.Courses) > 0 {
+			allAddon := true
+			allOpen  := true
+			for _, c := range slot.Courses {
+				cat := strings.ToLower(c.Category)
+				if !strings.Contains(cat, "addon") && !strings.Contains(cat, "add-on") && !strings.Contains(cat, "add on") {
+					allAddon = false
+				}
+				if !strings.Contains(cat, "open") {
+					allOpen = false
+				}
+			}
+			if allAddon {
+				log.Printf("Reclassifying slot '%s' from PROFESSIONAL to ADDON (all courses are Add-On category)", slot.SlotName)
+				slot.SlotType = "ADDON"
+			} else if allOpen {
+				log.Printf("Reclassifying slot '%s' from PROFESSIONAL to OPEN (all courses are Open category)", slot.SlotName)
+				slot.SlotType = "OPEN"
+			}
+		}
+
+		// Filter out slots based on eligibility
+		if slot.SlotType == "HONOR" && !eligibilityMap["HONOUR"] {
+			log.Printf("Filtering out HONOUR slot '%s' - student not eligible", slot.SlotName)
+			continue
+		}
+		if slot.SlotType == "MINOR" && !eligibilityMap["MINOR"] {
+			log.Printf("Filtering out MINOR slot '%s' - student not eligible", slot.SlotName)
 			continue
 		}
 		
@@ -254,7 +329,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	// Fetch existing selections for this student and semester
 	existingSelections := make(map[string]int)
 	selectionRows, err := db.DB.Query(`
-		SELECT ess.slot_name, hes.course_id
+		SELECT ess.slot_name, sec.hod_selection_id
 		FROM student_elective_choices sec
 		INNER JOIN hod_elective_selections hes ON sec.hod_selection_id = hes.id
 		INNER JOIN elective_semester_slots ess ON hes.slot_id = ess.id
@@ -267,12 +342,12 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		defer selectionRows.Close()
 		for selectionRows.Next() {
 			var slotName string
-			var courseID int
-			if err := selectionRows.Scan(&slotName, &courseID); err != nil {
+			var hodSelID int
+			if err := selectionRows.Scan(&slotName, &hodSelID); err != nil {
 				log.Printf("Error scanning selection: %v", err)
 				continue
 			}
-			existingSelections[slotName] = courseID
+			existingSelections[slotName] = hodSelID
 		}
 		log.Printf("Found %d existing selections for student", len(existingSelections))
 	}
@@ -290,6 +365,9 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		Batch:              batch,
 		Slots:              slots,
 		ExistingSelections: existingSelections,
+		WindowOpen:         windowOpen,
+		WindowStart:        windowStart,
+		WindowEnd:          windowEnd,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -312,14 +390,9 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Saving elective selections for email: %s", email)
 
-	// Get student_id from contact_details using student_email
+	// Get student_id
 	var studentID int
-	err := db.DB.QueryRow(`
-		SELECT student_id 
-		FROM contact_details 
-		WHERE student_email = ?
-	`, email).Scan(&studentID)
-	
+	err := db.DB.QueryRow(`SELECT student_id FROM contact_details WHERE student_email = ?`, email).Scan(&studentID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "Student not found with this email", http.StatusNotFound)
@@ -330,49 +403,53 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var requestBody struct {
-		Selections map[string]interface{} `json:"selections"` // electiveKey -> courseID (int) or "NOT_OPTED" (string)
-		Semester   int                     `json:"semester"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Validate selections
-	if len(requestBody.Selections) == 0 {
-		http.Error(w, "No selections provided", http.StatusBadRequest)
-		return
-	}
-
-	// Get student's department_id and batch for finding hod_selection_id
-	var departmentID int
+	// Get current semester, department, batch
+	var currentSemester, departmentID int
 	var batch string
 	err = db.DB.QueryRow(`
-		SELECT s.department_id, ad.batch
+		SELECT ad.semester, s.department_id, ad.batch
 		FROM students s
 		INNER JOIN academic_details ad ON s.id = ad.student_id
 		WHERE s.id = ?
-	`, studentID).Scan(&departmentID, &batch)
-	
+	`, studentID).Scan(&currentSemester, &departmentID, &batch)
 	if err != nil {
-		log.Printf("Error fetching student department and batch: %v", err)
+		log.Printf("Error fetching student details: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	// Get current academic year (basic calculation, can be enhanced)
-	var academicYear string
-	err = db.DB.QueryRow(`
-		SELECT academic_year 
-		FROM academic_details 
-		WHERE student_id = ?
-	`, studentID).Scan(&academicYear)
-	
-	if err != nil {
-		log.Printf("Warning: Could not fetch academic year, using default: %v", err)
-		academicYear = "2024-2025" // Default fallback
+	// Get academic year + check elective selection window
+	var academicYear, winStart, winEnd string
+	_ = db.DB.QueryRow(`
+		SELECT
+			COALESCE(academic_year, ''),
+			COALESCE(DATE_FORMAT(elective_selection_start,'%Y-%m-%d'), ''),
+			COALESCE(DATE_FORMAT(elective_selection_end,  '%Y-%m-%d'), '')
+		FROM academic_calendar
+		WHERE current_semester = ? AND is_current = 1
+		LIMIT 1
+	`, currentSemester).Scan(&academicYear, &winStart, &winEnd)
+
+	if winStart != "" && winEnd != "" {
+		today := time.Now().Format("2006-01-02")
+		if today < winStart || today > winEnd {
+			log.Printf("Elective selection window closed for student %d (window: %s to %s, today: %s)", studentID, winStart, winEnd, today)
+			http.Error(w, fmt.Sprintf("Elective selection window is closed (open %s to %s)", winStart, winEnd), http.StatusForbidden)
+			return
+		}
+	}
+
+	var requestBody struct {
+		Selections map[string]interface{} `json:"selections"` // slotName -> hod_selection_id (int)
+		Semester   int                    `json:"semester"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(requestBody.Selections) == 0 {
+		http.Error(w, "No selections provided", http.StatusBadRequest)
+		return
 	}
 
 	// Start transaction
@@ -384,46 +461,47 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Delete existing selections for this student and semester (allow updates)
-	_, err = tx.Exec(`
-		DELETE FROM student_elective_choices 
-		WHERE student_id = ? AND semester = ?
-	`, studentID, requestBody.Semester)
+	// Delete existing PENDING selections for this student+semester (allow re-save during window)
+	_, err = tx.Exec(`DELETE FROM student_elective_choices WHERE student_id = ? AND semester = ?`, studentID, requestBody.Semester)
 	if err != nil {
 		log.Printf("Error deleting existing selections: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	// Insert new selections
-	// ONLY insert if course is in hod_elective_selections for this department, semester, and batch (or NULL batch)
-	// Also validate that the slot is active
-	stmt, err := tx.Prepare(`
-		INSERT INTO student_elective_choices 
-		(student_id, hod_selection_id, semester, academic_year, status) 
-		SELECT ?, hes.id, ?, ?, 'PENDING'
+	// Prepare: validate hod_selection_id belongs to this student's department/batch/semester
+	// and fetch the course_id so we can also record it in student_courses
+	validateStmt, err := tx.Prepare(`
+		SELECT hes.course_id
 		FROM hod_elective_selections hes
-		LEFT JOIN elective_semester_slots ess ON hes.slot_id = ess.id
-		WHERE hes.department_id = ? 
-		AND hes.course_id = ?
-		AND hes.semester = ?
-		AND (hes.batch = ? OR hes.batch IS NULL)
-		AND hes.status = 'ACTIVE'
-		AND (hes.slot_id IS NULL OR ess.is_active = 1)
+		INNER JOIN elective_semester_slots ess ON hes.slot_id = ess.id
+		WHERE hes.id = ?
+		  AND hes.department_id = ?
+		  AND hes.semester = ?
+		  AND (hes.batch = ? OR hes.batch IS NULL)
+		  AND hes.status = 'ACTIVE'
+		  AND ess.is_active = 1
 		LIMIT 1
 	`)
 	if err != nil {
-		log.Printf("Error preparing statement: %v", err)
+		log.Printf("Error preparing validate statement: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
-	defer stmt.Close()
+	defer validateStmt.Close()
 
-	// Prepare statement for inserting into student_courses table
-	courseStmt, err := tx.Prepare(`
-		INSERT IGNORE INTO student_courses (student_id, course_id)
-		VALUES (?, ?)
+	insertStmt, err := tx.Prepare(`
+		INSERT INTO student_elective_choices (student_id, hod_selection_id, semester, academic_year, status)
+		VALUES (?, ?, ?, ?, 'PENDING')
 	`)
+	if err != nil {
+		log.Printf("Error preparing insert statement: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer insertStmt.Close()
+
+	courseStmt, err := tx.Prepare(`INSERT IGNORE INTO student_courses (student_id, course_id) VALUES (?, ?)`)
 	if err != nil {
 		log.Printf("Error preparing student_courses statement: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -432,61 +510,57 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 	defer courseStmt.Close()
 
 	successCount := 0
-	for slotName, courseIDVal := range requestBody.Selections {
-		// Handle "NOT_OPTED" string or numeric courseID
-		var courseID int
-		
-		switch v := courseIDVal.(type) {
+	for slotName, val := range requestBody.Selections {
+		// Parse hod_selection_id (JSON numbers come as float64)
+		var hodSelID int
+		switch v := val.(type) {
 		case float64:
-			courseID = int(v) // JSON numbers are decoded as float64
+			hodSelID = int(v)
 		case string:
-			if v == "NOT_OPTED" {
-				log.Printf("Skipping NOT_OPTED selection for slot %s", slotName)
-				successCount++ // Count it as successful so the student can submit
-				continue
-			}
-			// Try to parse string as int
-			var parseErr error
-			courseID, parseErr = strconv.Atoi(v)
+			parsed, parseErr := strconv.Atoi(v)
 			if parseErr != nil {
-				log.Printf("Invalid course ID value for slot %s: %v", slotName, v)
+				log.Printf("Invalid hod_selection_id for slot %s: %v", slotName, v)
 				continue
 			}
+			hodSelID = parsed
 		default:
-			log.Printf("Invalid course ID type for slot %s: %T", slotName, v)
+			log.Printf("Unexpected type for slot %s: %T", slotName, v)
+			continue
+		}
+		if hodSelID == 0 {
+			log.Printf("Skipping zero hod_selection_id for slot %s", slotName)
 			continue
 		}
 
-		// Skip zero course IDs
-		if courseID == 0 {
-			log.Printf("Skipping zero course ID for slot %s", slotName)
-			continue
+		// Validate: ensure this hod_selection_id is valid for this student's dept/batch/semester
+		var courseID int
+		err := validateStmt.QueryRow(hodSelID, departmentID, requestBody.Semester, batch).Scan(&courseID)
+		if err == sql.ErrNoRows {
+			log.Printf("Invalid or unauthorised hod_selection_id %d for slot %s (dept %d, sem %d, batch %s)", hodSelID, slotName, departmentID, requestBody.Semester, batch)
+			http.Error(w, fmt.Sprintf("Invalid selection for slot '%s': course not available for your department/batch", slotName), http.StatusBadRequest)
+			return
+		} else if err != nil {
+			log.Printf("Error validating hod_selection_id %d: %v", hodSelID, err)
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
 		}
 
-		result, err := stmt.Exec(studentID, requestBody.Semester, academicYear, departmentID, courseID, requestBody.Semester, batch)
-		if err != nil {
-			log.Printf("Error inserting selection for course_id %d: %v", courseID, err)
+		// Insert into student_elective_choices
+		if _, err = insertStmt.Exec(studentID, hodSelID, requestBody.Semester, academicYear); err != nil {
+			log.Printf("Error inserting selection hod_sel_id=%d: %v", hodSelID, err)
 			http.Error(w, fmt.Sprintf("Failed to save selection: %v", err), http.StatusInternalServerError)
 			return
 		}
-		
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			log.Printf("Warning: No valid hod_selection found for course_id %d in department %d, batch %s (slot may be inactive)", courseID, departmentID, batch)
-		} else {
-			// If the elective choice was successfully inserted, also add to student_courses table
-			_, err = courseStmt.Exec(studentID, courseID)
-			if err != nil {
-				log.Printf("Error inserting into student_courses for course_id %d: %v", courseID, err)
-				http.Error(w, fmt.Sprintf("Failed to add course to student record: %v", err), http.StatusInternalServerError)
-				return
-			}
-			successCount++
-			log.Printf("Successfully added course_id %d to student_courses for student_id %d", courseID, studentID)
+		// Record in student_courses
+		if _, err = courseStmt.Exec(studentID, courseID); err != nil {
+			log.Printf("Error inserting student_courses course_id=%d: %v", courseID, err)
+			http.Error(w, fmt.Sprintf("Failed to add course to student record: %v", err), http.StatusInternalServerError)
+			return
 		}
+		successCount++
+		log.Printf("Saved slot=%s hod_sel_id=%d course_id=%d for student %d", slotName, hodSelID, courseID, studentID)
 	}
 
-	// Commit transaction
 	if err = tx.Commit(); err != nil {
 		log.Printf("Error committing transaction: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -494,7 +568,6 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Successfully saved %d elective selections for student_id %d", successCount, studentID)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":       "Selections saved successfully",
@@ -597,33 +670,29 @@ func GetStudentElectiveSelections(w http.ResponseWriter, r *http.Request) {
 func determineSlotType(slotName, category string) string {
 	slotNameLower := strings.ToLower(strings.TrimSpace(slotName))
 
-	log.Printf("Determining slot type for: '%s' (lowercase: '%s')", slotName, slotNameLower)
+	log.Printf("Determining slot type for: '%s' (category: '%s')", slotName, category)
 
-	// Check for honour/honor
+	// Check slot name — explicit slot names always win
 	if strings.Contains(slotNameLower, "honour") || strings.Contains(slotNameLower, "honor") {
 		log.Printf("  -> Detected as HONOR")
 		return "HONOR"
 	}
-
-	// Check for minor
 	if strings.Contains(slotNameLower, "minor") {
 		log.Printf("  -> Detected as MINOR")
 		return "MINOR"
 	}
-
-	// Check for addon/add-on
 	if strings.Contains(slotNameLower, "addon") || strings.Contains(slotNameLower, "add-on") || strings.Contains(slotNameLower, "add on") {
 		log.Printf("  -> Detected as ADDON")
 		return "ADDON"
 	}
-
-	// Check for open elective
 	if strings.Contains(slotNameLower, "open") {
 		log.Printf("  -> Detected as OPEN")
 		return "OPEN"
 	}
 
-	// Everything else (PE 1, PE 2, Professional Elective, elective, etc.) -> PROFESSIONAL
+	// Everything else defaults to PROFESSIONAL.
+	// Note: if all courses in the slot share a different category (e.g. Add-On),
+	// the caller reclassifies after all courses are loaded.
 	log.Printf("  -> Defaulting to PROFESSIONAL")
 	return "PROFESSIONAL"
 }

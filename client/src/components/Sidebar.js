@@ -271,7 +271,22 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin"],
+        roles: ["admin", "teacher"],
+      },
+      {
+        name: "Electives",
+        path: "/student/elective-selection",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3v-6"
+            />
+          </svg>
+        ),
+        roles: ["student"],
       },
       {
         name: "Mark Entry",
@@ -320,6 +335,21 @@ function Sidebar({ onExpandedChange }) {
           </svg>
         ),
         roles: ["admin", "coe"],
+      },
+      {
+        name: "Honour/Minor Import",
+        path: "/hod/honour-minor-eligibility",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 4v16m8-8H4"
+            />
+          </svg>
+        ),
+        roles: ["hod"],
       },
       {
         name: "Exam Absentees",
@@ -404,7 +434,22 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin", "hod"],
+        roles: ["admin", "hod", "hr"],
+      },
+      {
+        name: "Workload Appeals",
+        path: "/hr/appeals",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+            />
+          </svg>
+        ),
+        roles: ["admin", "hod", "hr"],
       },
     ];
 
@@ -551,7 +596,7 @@ function Sidebar({ onExpandedChange }) {
                 {item.icon}
               </div>
               {isSidebarExpanded && (
-                <span className="whitespace-nowrap overflow-hidden">
+                <span className="whitespace-nowrap overflow-hidden text-sm font-semibold">
                   {item.name}
                 </span>
               )}

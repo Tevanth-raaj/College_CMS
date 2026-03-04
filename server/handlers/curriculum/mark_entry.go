@@ -237,6 +237,8 @@ func GetMarkCategoriesForCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_ = allowedComponents // used for component filtering downstream
+
 	var courseCategory string
 	err = database.QueryRow(`SELECT COALESCE(category, '') FROM courses WHERE id = ?`, courseID).Scan(&courseCategory)
 	if err != nil {
@@ -389,16 +391,20 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
-
 	windowOpen, windowID, allowedComponents, err := resolveMarkEntryWindowWithSelection(saveRequest.CourseID, normalizedFacultyID, saveRequest.WindowID)
 	if err != nil {
 		log.Printf("Error resolving mark entry window: %v", err)
 		http.Error(w, "Failed to validate mark entry window", http.StatusInternalServerError)
 		return
 	}
-	if !windowOpen {
+	if !windowOpen || windowID == 0 {
 		http.Error(w, "Mark entry window is closed", http.StatusForbidden)
 		return
+	}
+
+	_, windowIDs, _, allWindowErr := resolveMarkEntryWindow(saveRequest.CourseID, normalizedFacultyID)
+	if allWindowErr != nil || len(windowIDs) == 0 {
+		windowIDs = []int{windowID}
 	}
 
 	// Get assigned student IDs for this user (if student-specific permissions exist)
@@ -443,17 +449,24 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Check absentee status — block mark entry if student is absent for this component in this window
-		log.Printf("[ABSENTEE CHECK] Checking: windowID=%d, courseID=%d, studentID=%d, componentID=%d", windowID, entry.CourseID, entry.StudentID, entry.AssessmentComponentID)
-		isAbsent, absentErr := IsStudentAbsentForComponent(windowID, entry.CourseID, entry.StudentID, entry.AssessmentComponentID)
-		if absentErr != nil {
-			log.Printf("[ABSENTEE CHECK] Error checking absentee status: %v", absentErr)
-		} else if isAbsent {
-			log.Printf("[ABSENTEE CHECK] ✗ BLOCKED - Student %d is absent for component %d in window %d", entry.StudentID, entry.AssessmentComponentID, windowID)
-			errors = append(errors, fmt.Sprintf("Student %d: marked absent for component %d — mark entry is blocked", entry.StudentID, entry.AssessmentComponentID))
+		// Check absentee status — block mark entry if student is absent for this component in ANY active window
+		absentBlocked := false
+		for _, wid := range windowIDs {
+			log.Printf("[ABSENTEE CHECK] Checking: windowID=%d, courseID=%d, studentID=%d, componentID=%d", wid, entry.CourseID, entry.StudentID, entry.AssessmentComponentID)
+			isAbsent, absentErr := IsStudentAbsentForComponent(wid, entry.CourseID, entry.StudentID, entry.AssessmentComponentID)
+			if absentErr != nil {
+				log.Printf("[ABSENTEE CHECK] Error checking absentee status: %v", absentErr)
+			} else if isAbsent {
+				log.Printf("[ABSENTEE CHECK] ✗ BLOCKED - Student %d is absent for component %d in window %d", entry.StudentID, entry.AssessmentComponentID, wid)
+				errors = append(errors, fmt.Sprintf("Student %d: marked absent for component %d — mark entry is blocked", entry.StudentID, entry.AssessmentComponentID))
+				absentBlocked = true
+				break
+			} else {
+				log.Printf("[ABSENTEE CHECK] ✓ PASSED - Student %d is NOT absent for component %d in window %d", entry.StudentID, entry.AssessmentComponentID, wid)
+			}
+		}
+		if absentBlocked {
 			continue
-		} else {
-			log.Printf("[ABSENTEE CHECK] ✓ PASSED - Student %d is NOT absent for component %d in window %d", entry.StudentID, entry.AssessmentComponentID, windowID)
 		}
 
 		// Validate student enrollment in course
@@ -684,4 +697,140 @@ func GetStudentMarks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(marks)
+}
+
+// SubmitMarks records a mark submission for a teacher+course into the mark_submissions table.
+// It inserts one row per active window that applies to the teacher+course.
+func SubmitMarks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var req struct {
+		TeacherID string `json:"teacher_id"`
+		CourseID  int    `json:"course_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TeacherID) == "" || req.CourseID == 0 {
+		http.Error(w, "teacher_id and course_id are required", http.StatusBadRequest)
+		return
+	}
+
+	database := db.DB
+	if database == nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Resolve active windows for this teacher+course
+	windowOpen, windowIDs, _, err := resolveMarkEntryWindow(req.CourseID, req.TeacherID)
+	if err != nil {
+		log.Printf("[SubmitMarks] Error resolving window: %v", err)
+		http.Error(w, "Failed to resolve mark entry window", http.StatusInternalServerError)
+		return
+	}
+	if !windowOpen || len(windowIDs) == 0 {
+		http.Error(w, "No active mark entry window for this course", http.StatusForbidden)
+		return
+	}
+
+	// Insert a submission record for each active window (ignore duplicates)
+	insertedCount := 0
+	for _, wid := range windowIDs {
+		_, err := database.Exec(`
+			INSERT INTO mark_submissions (window_id, teacher_id, course_id)
+			VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE submitted_at = CURRENT_TIMESTAMP
+		`, wid, req.TeacherID, req.CourseID)
+		if err != nil {
+			log.Printf("[SubmitMarks] Error inserting submission for window %d: %v", wid, err)
+		} else {
+			insertedCount++
+		}
+	}
+
+	log.Printf("[SubmitMarks] Recorded %d submission(s) for teacher=%s course=%d", insertedCount, req.TeacherID, req.CourseID)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Marks submitted for %d window(s)", insertedCount),
+	})
+}
+
+// CheckMarkSubmission checks whether a teacher has already submitted marks for a course
+// in any active window. Returns { submitted: true/false }.
+func CheckMarkSubmission(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	teacherID := strings.TrimSpace(r.URL.Query().Get("teacher_id"))
+	courseIDStr := strings.TrimSpace(r.URL.Query().Get("course_id"))
+	if teacherID == "" || courseIDStr == "" {
+		http.Error(w, "teacher_id and course_id are required", http.StatusBadRequest)
+		return
+	}
+	courseID, err := strconv.Atoi(courseIDStr)
+	if err != nil || courseID <= 0 {
+		http.Error(w, "Invalid course_id", http.StatusBadRequest)
+		return
+	}
+
+	database := db.DB
+	if database == nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Resolve active windows for this teacher+course
+	windowOpen, windowIDs, _, err := resolveMarkEntryWindow(courseID, teacherID)
+	if err != nil {
+		log.Printf("[CheckMarkSubmission] Error resolving window: %v", err)
+		http.Error(w, "Failed to resolve mark entry window", http.StatusInternalServerError)
+		return
+	}
+	if !windowOpen || len(windowIDs) == 0 {
+		// No active window — not submitted
+		json.NewEncoder(w).Encode(map[string]bool{"submitted": false})
+		return
+	}
+
+	// Check if there's a submission record for ANY of the active windows
+	placeholders := make([]string, len(windowIDs))
+	args := []interface{}{}
+	for i, wid := range windowIDs {
+		placeholders[i] = "?"
+		args = append(args, wid)
+	}
+	args = append(args, teacherID, courseID)
+
+	var exists bool
+	query := fmt.Sprintf(`
+		SELECT COUNT(*) > 0
+		FROM mark_submissions
+		WHERE window_id IN (%s) AND teacher_id = ? AND course_id = ?
+	`, strings.Join(placeholders, ","))
+
+	err = database.QueryRow(query, args...).Scan(&exists)
+	if err != nil {
+		log.Printf("[CheckMarkSubmission] Error checking submission: %v", err)
+		http.Error(w, "Failed to check submission status", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]bool{"submitted": exists})
 }
