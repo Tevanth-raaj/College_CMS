@@ -18,11 +18,22 @@ function HODMarkEntryDashboardPage() {
   const [error, setError] = useState('')
   const [summary, setSummary] = useState(null)
   const [rows, setRows] = useState([])
+  const [downloadingType, setDownloadingType] = useState('')
 
   const [selectedRow, setSelectedRow] = useState(null)
   const [students, setStudents] = useState([])
   const [studentsLoading, setStudentsLoading] = useState(false)
   const [componentModal, setComponentModal] = useState({ open: false, student: null })
+
+  const parseResponseBody = async (response) => {
+    const rawText = await response.text()
+    if (!rawText) return {}
+    try {
+      return JSON.parse(rawText)
+    } catch {
+      return { message: rawText }
+    }
+  }
 
   useEffect(() => {
     if (!canAccess) return
@@ -54,7 +65,7 @@ function HODMarkEntryDashboardPage() {
     try {
       const response = await fetch(`${API_BASE_URL}/mark-entry-windows`)
       if (!response.ok) throw new Error('Failed to fetch windows')
-      const data = await response.json()
+      const data = await parseResponseBody(response)
       setWindows(Array.isArray(data) ? data : [])
     } catch (err) {
       setWindows([])
@@ -78,7 +89,7 @@ function HODMarkEntryDashboardPage() {
       }
 
       const response = await fetch(`${endpoint}?${params.toString()}`)
-      const data = await response.json()
+      const data = await parseResponseBody(response)
       if (!response.ok) throw new Error(data.error || data.message || 'Failed to load monitor')
       setSummary(data.summary || null)
       setRows(Array.isArray(data.rows) ? data.rows : [])
@@ -103,7 +114,7 @@ function HODMarkEntryDashboardPage() {
       params.append('course_id', row.course_id)
       if (row.window_id) params.append('window_id', row.window_id)
       const response = await fetch(`${API_BASE_URL}/hod/mark-entry/teacher-students?${params.toString()}`)
-      const data = await response.json()
+      const data = await parseResponseBody(response)
       if (!response.ok) throw new Error(data.error || data.message || 'Failed to fetch students')
       setStudents(Array.isArray(data.students) ? data.students : [])
     } catch (err) {
@@ -111,6 +122,43 @@ function HODMarkEntryDashboardPage() {
       setError(err.message)
     } finally {
       setStudentsLoading(false)
+    }
+  }
+
+  const downloadReport = async (reportType) => {
+    if (!username) {
+      setError('Username not found. Please login again.')
+      return
+    }
+
+    setDownloadingType(reportType)
+    setError('')
+    try {
+      const params = new URLSearchParams()
+      params.append('username', username)
+      params.append('semester', semester)
+      params.append('report_type', reportType)
+      params.append('format', 'xlsx')
+
+      const response = await fetch(`${API_BASE_URL}/hod/mark-entry/download?${params.toString()}`)
+      if (!response.ok) {
+        const message = await response.text()
+        throw new Error(message || 'Failed to download report')
+      }
+
+      const blob = await response.blob()
+      const objectURL = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectURL
+      anchor.download = `mark_entry_${reportType}_sem${semester}.xlsx`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(objectURL)
+    } catch (err) {
+      setError(err.message || 'Failed to download report')
+    } finally {
+      setDownloadingType('')
     }
   }
 
@@ -157,6 +205,24 @@ function HODMarkEntryDashboardPage() {
           )}
 
           <button onClick={fetchMonitor} className="bg-primary text-white px-3 py-2 rounded-lg text-sm">Refresh</button>
+          {!isAdminMode && (
+            <>
+              <button
+                onClick={() => downloadReport('teacher')}
+                disabled={downloadingType !== ''}
+                className="border border-gray-300 px-3 py-2 rounded-lg text-sm disabled:opacity-60"
+              >
+                {downloadingType === 'teacher' ? 'Downloading...' : 'Teacher-wise XLSX'}
+              </button>
+              <button
+                onClick={() => downloadReport('course')}
+                disabled={downloadingType !== ''}
+                className="border border-gray-300 px-3 py-2 rounded-lg text-sm disabled:opacity-60"
+              >
+                {downloadingType === 'course' ? 'Downloading...' : 'Course-wise XLSX'}
+              </button>
+            </>
+          )}
         </div>
       }
     >
@@ -217,55 +283,61 @@ function HODMarkEntryDashboardPage() {
         </div>
 
         {selectedRow && (
-          <div className="bg-white border rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">
-              {selectedRow.teacher_name} • {selectedRow.course_code}
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="text-left px-3 py-2">Enrollment</th>
-                    <th className="text-left px-3 py-2">Student</th>
-                    <th className="text-right px-3 py-2">Total Marks</th>
-                    <th className="text-left px-3 py-2">Entered</th>
-                    <th className="text-left px-3 py-2">Components</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {studentsLoading ? (
-                    <tr><td colSpan="5" className="px-3 py-4 text-center text-gray-500">Loading...</td></tr>
-                  ) : students.length === 0 ? (
-                    <tr><td colSpan="5" className="px-3 py-4 text-center text-gray-500">No students found.</td></tr>
-                  ) : students.map((student) => {
-                    const components = Array.isArray(student.components) ? student.components : []
-                    const showInline = components.length > 0 && components.length <= 3
-                    return (
-                      <tr key={student.student_id} className="border-t">
-                        <td className="px-3 py-2">{student.enrollment_no || '-'}</td>
-                        <td className="px-3 py-2">{student.student_name}</td>
-                        <td className="px-3 py-2 text-right">{Number(student.total_marks || 0).toFixed(2)}</td>
-                        <td className="px-3 py-2">{student.has_mark_entry ? 'Yes' : 'No'}</td>
-                        <td className="px-3 py-2">
-                          {showInline ? (
-                            <div className="flex flex-wrap gap-1">
-                              {components.map((c) => (
-                                <span key={`${student.student_id}-${c.assessment_component_id}`} className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-700">
-                                  {c.assessment_component_name}: {Number(c.obtained_marks || 0).toFixed(2)}
-                                </span>
-                              ))}
-                            </div>
-                          ) : components.length > 0 ? (
-                            <button onClick={() => setComponentModal({ open: true, student })} className="text-primary hover:underline">View all ({components.length})</button>
-                          ) : (
-                            '-'
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+          <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-40 p-4" onClick={() => setSelectedRow(null)}>
+            <div className="bg-white rounded-lg w-full max-w-6xl p-4" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-sm font-semibold text-gray-900">
+                  {selectedRow.teacher_name} • {selectedRow.course_code}
+                </h3>
+                <button onClick={() => setSelectedRow(null)} className="text-gray-500 hover:text-gray-700">Close</button>
+              </div>
+
+              <div className="max-h-[70vh] overflow-auto border rounded-lg">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2">Enrollment</th>
+                      <th className="text-left px-3 py-2">Student</th>
+                      <th className="text-right px-3 py-2">Total Marks</th>
+                      <th className="text-left px-3 py-2">Entered</th>
+                      <th className="text-left px-3 py-2">Components</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {studentsLoading ? (
+                      <tr><td colSpan="5" className="px-3 py-4 text-center text-gray-500">Loading...</td></tr>
+                    ) : students.length === 0 ? (
+                      <tr><td colSpan="5" className="px-3 py-4 text-center text-gray-500">No students found.</td></tr>
+                    ) : students.map((student) => {
+                      const components = Array.isArray(student.components) ? student.components : []
+                      const showInline = components.length > 0 && components.length <= 3
+                      return (
+                        <tr key={student.student_id} className="border-t">
+                          <td className="px-3 py-2">{student.enrollment_no || '-'}</td>
+                          <td className="px-3 py-2">{student.student_name}</td>
+                          <td className="px-3 py-2 text-right">{Number(student.total_marks || 0).toFixed(2)}</td>
+                          <td className="px-3 py-2">{student.has_mark_entry ? 'Yes' : 'No'}</td>
+                          <td className="px-3 py-2">
+                            {showInline ? (
+                              <div className="flex flex-wrap gap-1">
+                                {components.map((c) => (
+                                  <span key={`${student.student_id}-${c.assessment_component_id}`} className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-700">
+                                    {c.assessment_component_name}: {Number(c.obtained_marks || 0).toFixed(2)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : components.length > 0 ? (
+                              <button onClick={() => setComponentModal({ open: true, student })} className="text-primary hover:underline">View all ({components.length})</button>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}

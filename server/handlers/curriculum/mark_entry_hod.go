@@ -67,7 +67,42 @@ type resultAnalysisRow struct {
 	MinimumMark      float64            `json:"minimum_mark"`
 	AverageMark      float64            `json:"average_mark"`
 	Ranges           map[string]int     `json:"ranges"`
+	Components       []resultComponent  `json:"components"`
 	StudentMarkItems []studentMarkTotal `json:"-"`
+}
+
+type resultComponent struct {
+	ComponentID   int     `json:"component_id"`
+	ComponentName string  `json:"component_name"`
+	Registered    int     `json:"registered"`
+	Appeared      int     `json:"appeared"`
+	Absent        int     `json:"absent"`
+	MaximumMark   float64 `json:"maximum_mark"`
+	MinimumMark   float64 `json:"minimum_mark"`
+	AverageMark   float64 `json:"average_mark"`
+	TotalMarks    float64 `json:"total_marks"`
+}
+
+func doesComponentMatchExamType(componentName string, examType string) bool {
+	rawFilter := strings.TrimSpace(examType)
+	examType = strings.ToUpper(rawFilter)
+	if examType == "" {
+		return true
+	}
+
+	name := strings.ToUpper(strings.TrimSpace(componentName))
+	switch examType {
+	case "PT1", "PT-1", "PERIODICAL TEST 1":
+		return strings.Contains(name, "PT1") || strings.Contains(name, "PT-1") || strings.Contains(name, "PERIODICAL TEST 1")
+	case "PT2", "PT-2", "PERIODICAL TEST 2":
+		return strings.Contains(name, "PT2") || strings.Contains(name, "PT-2") || strings.Contains(name, "PERIODICAL TEST 2")
+	case "MODEL", "MODEL EXAM":
+		return strings.Contains(name, "MODEL")
+	case "ENDSEM", "END SEM", "END-SEM", "SEE":
+		return strings.Contains(name, "END") || strings.Contains(name, "SEM") || strings.Contains(name, "SEE")
+	default:
+		return strings.EqualFold(strings.TrimSpace(componentName), rawFilter)
+	}
 }
 
 type studentMarkTotal struct {
@@ -1753,7 +1788,7 @@ func GetMarkEntryExtensionAnalytics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func buildResultAnalysis(departmentID int, semester int, window *selectedWindowContext) ([]resultAnalysisRow, error) {
+func buildResultAnalysis(departmentID int, semester int, window *selectedWindowContext, learningModeID *int, examType string) ([]resultAnalysisRow, error) {
 	assignments, err := getAssignmentsForWindowMonitor(semester, &departmentID)
 	if err != nil {
 		return nil, err
@@ -1761,13 +1796,6 @@ func buildResultAnalysis(departmentID int, semester int, window *selectedWindowC
 
 	courseMap := make(map[int]resultAnalysisRow)
 	courseAliasMap := make(map[int]map[string]bool)
-	allowedByWindow := map[int]bool{}
-	if window != nil && len(window.ComponentIDs) > 0 {
-		for _, componentID := range window.ComponentIDs {
-			allowedByWindow[componentID] = true
-		}
-	}
-
 	for _, assignment := range assignments {
 		if !doesWindowMatchAssignment(window, assignment) {
 			continue
@@ -1788,23 +1816,90 @@ func buildResultAnalysis(departmentID int, semester int, window *selectedWindowC
 
 	rows := make([]resultAnalysisRow, 0, len(courseMap))
 	for courseID, base := range courseMap {
+		courseTypeID, typeErr := getCourseTypeForCourse(courseID)
+		if typeErr != nil || courseTypeID == 0 {
+			continue
+		}
+
 		aliases := make([]string, 0, len(courseAliasMap[courseID]))
 		for alias := range courseAliasMap[courseID] {
 			aliases = append(aliases, alias)
 		}
 
-		studentRows, err := db.DB.Query(`
+		studentQuery := `
 			SELECT DISTINCT csta.student_id, s.student_name
 			FROM course_student_teacher_allocation csta
 			JOIN students s ON s.id = csta.student_id
 			WHERE csta.course_id = ? AND csta.status = 1
-		`, courseID)
+		`
+		studentArgs := []interface{}{courseID}
+		if learningModeID != nil {
+			studentQuery += ` AND COALESCE(s.learning_mode_id, 2) = ?`
+			studentArgs = append(studentArgs, *learningModeID)
+		}
+
+		studentRows, err := db.DB.Query(studentQuery, studentArgs...)
 		if err != nil {
 			return nil, err
 		}
 
+		studentIDs := make([]int, 0)
+		studentNameByID := make(map[int]string)
+		for studentRows.Next() {
+			var studentID int
+			var studentName string
+			if scanErr := studentRows.Scan(&studentID, &studentName); scanErr != nil {
+				continue
+			}
+			studentIDs = append(studentIDs, studentID)
+			studentNameByID[studentID] = studentName
+		}
+		studentRows.Close()
+
+		studentIDFilter := make(map[int]bool, len(studentIDs))
+		for _, studentID := range studentIDs {
+			studentIDFilter[studentID] = true
+		}
+
+		componentQuery := `
+			SELECT id, COALESCE(name, CONCAT('Component ', id))
+			FROM mark_category_types
+			WHERE course_type_id = ? AND status = 1
+		`
+		componentArgs := []interface{}{courseTypeID}
+		if learningModeID != nil {
+			componentQuery += ` AND learning_mode_id = ?`
+			componentArgs = append(componentArgs, *learningModeID)
+		}
+		componentQuery += ` ORDER BY position ASC, id ASC`
+
+		componentRows, componentErr := db.DB.Query(componentQuery, componentArgs...)
+		if componentErr != nil {
+			return nil, componentErr
+		}
+
+		expectedComponents := map[int]string{}
+		for componentRows.Next() {
+			var componentID int
+			var componentName string
+			if scanErr := componentRows.Scan(&componentID, &componentName); scanErr != nil {
+				continue
+			}
+			if !doesComponentMatchExamType(componentName, examType) {
+				continue
+			}
+			expectedComponents[componentID] = componentName
+		}
+		componentRows.Close()
+
 		enteredMarksByStudent := map[int]float64{}
 		appearedByStudent := map[int]bool{}
+		componentTotalsByStudent := map[int]map[int]float64{}
+		componentNames := map[int]string{}
+		for componentID, componentName := range expectedComponents {
+			componentTotalsByStudent[componentID] = map[int]float64{}
+			componentNames[componentID] = componentName
+		}
 		if len(aliases) > 0 {
 			placeholders := make([]string, len(aliases))
 			args := make([]interface{}, 0, len(aliases)+1)
@@ -1815,8 +1910,9 @@ func buildResultAnalysis(departmentID int, semester int, window *selectedWindowC
 			}
 
 			marksQuery := fmt.Sprintf(`
-				SELECT student_id, assessment_component_id, COALESCE(obtained_marks, 0)
-				FROM student_marks
+				SELECT sm.student_id, sm.assessment_component_id, COALESCE(mct.name, CONCAT('Component ', sm.assessment_component_id)), COALESCE(sm.obtained_marks, 0)
+				FROM student_marks sm
+				LEFT JOIN mark_category_types mct ON mct.id = sm.assessment_component_id
 				WHERE course_id = ? AND faculty_id IN (%s)
 			`, strings.Join(placeholders, ","))
 			markRows, markErr := db.DB.Query(marksQuery, args...)
@@ -1824,36 +1920,43 @@ func buildResultAnalysis(departmentID int, semester int, window *selectedWindowC
 				for markRows.Next() {
 					var studentID int
 					var componentID int
+					var componentName string
 					var marks float64
-					if scanErr := markRows.Scan(&studentID, &componentID, &marks); scanErr != nil {
+					if scanErr := markRows.Scan(&studentID, &componentID, &componentName, &marks); scanErr != nil {
 						continue
 					}
-					if len(allowedByWindow) > 0 && !allowedByWindow[componentID] {
+					if !doesComponentMatchExamType(componentName, examType) {
+						continue
+					}
+					if _, ok := expectedComponents[componentID]; !ok {
+						continue
+					}
+					if !studentIDFilter[studentID] {
 						continue
 					}
 					enteredMarksByStudent[studentID] += marks
 					appearedByStudent[studentID] = true
+					if _, ok := componentTotalsByStudent[componentID]; !ok {
+						componentTotalsByStudent[componentID] = map[int]float64{}
+					}
+					componentTotalsByStudent[componentID][studentID] += marks
+					if strings.TrimSpace(componentName) != "" {
+						componentNames[componentID] = componentName
+					}
 				}
 				markRows.Close()
 			}
 		}
 
-		studentTotals := make([]studentMarkTotal, 0)
-		for studentRows.Next() {
-			var studentID int
-			var studentName string
-			if scanErr := studentRows.Scan(&studentID, &studentName); scanErr != nil {
-				continue
-			}
-
+		studentTotals := make([]studentMarkTotal, 0, len(studentIDs))
+		for _, studentID := range studentIDs {
 			studentTotals = append(studentTotals, studentMarkTotal{
 				StudentID:   studentID,
-				StudentName: studentName,
+				StudentName: studentNameByID[studentID],
 				TotalMarks:  enteredMarksByStudent[studentID],
 				Appeared:    appearedByStudent[studentID],
 			})
 		}
-		studentRows.Close()
 
 		analysis := base
 		analysis.Registered = len(studentTotals)
@@ -1908,6 +2011,45 @@ func buildResultAnalysis(departmentID int, semester int, window *selectedWindowC
 			analysis.PassPercent = (float64(analysis.Passed) / float64(appeared)) * 100
 		}
 
+		components := make([]resultComponent, 0, len(componentTotalsByStudent))
+		for componentID, marksByStudent := range componentTotalsByStudent {
+			component := resultComponent{
+				ComponentID:   componentID,
+				ComponentName: componentNames[componentID],
+				Registered:    analysis.Registered,
+				Appeared:      len(marksByStudent),
+				Absent:        analysis.Registered - len(marksByStudent),
+			}
+
+			maxComponent := 0.0
+			minComponent := 0.0
+			totalComponent := 0.0
+			count := 0
+			for _, mark := range marksByStudent {
+				totalComponent += mark
+				if count == 0 || mark > maxComponent {
+					maxComponent = mark
+				}
+				if count == 0 || mark < minComponent {
+					minComponent = mark
+				}
+				count++
+			}
+
+			component.TotalMarks = totalComponent
+			component.MaximumMark = maxComponent
+			component.MinimumMark = minComponent
+			if count > 0 {
+				component.AverageMark = totalComponent / float64(count)
+			}
+
+			components = append(components, component)
+		}
+		sort.Slice(components, func(i, j int) bool {
+			return components[i].ComponentID < components[j].ComponentID
+		})
+		analysis.Components = components
+
 		rows = append(rows, analysis)
 	}
 
@@ -1938,6 +2080,24 @@ func GetResultAnalysis(w http.ResponseWriter, r *http.Request) {
 	if err != nil || semester <= 0 {
 		http.Error(w, "invalid semester", http.StatusBadRequest)
 		return
+	}
+
+	examType := strings.TrimSpace(r.URL.Query().Get("exam_type"))
+
+	learningModeStr := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("learning_mode")))
+	var learningModeID *int
+	if learningModeStr != "" {
+		mode := 0
+		switch learningModeStr {
+		case "PBL", "2":
+			mode = 2
+		case "UAL", "1":
+			mode = 1
+		default:
+			http.Error(w, "invalid learning_mode", http.StatusBadRequest)
+			return
+		}
+		learningModeID = &mode
 	}
 
 	departmentIDStr := strings.TrimSpace(r.URL.Query().Get("department_id"))
@@ -1983,7 +2143,7 @@ func GetResultAnalysis(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rows, err := buildResultAnalysis(departmentID, semester, selectedWindow)
+	rows, err := buildResultAnalysis(departmentID, semester, selectedWindow, learningModeID, examType)
 	if err != nil {
 		log.Printf("Error generating result analysis: %v", err)
 		http.Error(w, "failed to generate result analysis", http.StatusInternalServerError)
@@ -1994,7 +2154,8 @@ func GetResultAnalysis(w http.ResponseWriter, r *http.Request) {
 		"department_id":   departmentID,
 		"department_name": departmentName,
 		"semester":        semester,
-		"exam_type":       strings.TrimSpace(r.URL.Query().Get("exam_type")),
+		"exam_type":       examType,
+		"learning_mode":   learningModeStr,
 		"rows":            rows,
 	})
 }
@@ -2082,6 +2243,230 @@ func exportCourseWiseRows(departmentID int, semester int) ([][]string, error) {
 			row.WindowStatus,
 			strconv.FormatBool(row.Late),
 			row.ExtensionStatus,
+		})
+	}
+
+	return records, nil
+}
+
+type detailedMarkEntryRow struct {
+	DepartmentName string
+	Semester       int
+	TeacherID      string
+	TeacherName    string
+	CourseCode     string
+	CourseName     string
+	StudentID      int
+	EnrollmentNo   string
+	StudentName    string
+	ComponentID    int
+	ComponentName  string
+	Marks          float64
+}
+
+func buildDetailedMarkEntryRows(departmentID int, semester int) ([]detailedMarkEntryRow, error) {
+	overviewRows, err := buildMarkEntryOverview(departmentID, semester)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]detailedMarkEntryRow, 0)
+	for _, overview := range overviewRows {
+		aliases := getTeacherIdentifierAliases(overview.TeacherID)
+		if len(aliases) == 0 {
+			continue
+		}
+
+		aliasPlaceholders := make([]string, len(aliases))
+		aliasArgs := make([]interface{}, 0, len(aliases)+1)
+		aliasArgs = append(aliasArgs, overview.CourseID)
+		for index, alias := range aliases {
+			aliasPlaceholders[index] = "?"
+			aliasArgs = append(aliasArgs, alias)
+		}
+
+		studentQuery := fmt.Sprintf(`
+			SELECT DISTINCT csta.student_id, COALESCE(s.enrollment_no, ''), s.student_name
+			FROM course_student_teacher_allocation csta
+			JOIN students s ON s.id = csta.student_id
+			WHERE csta.course_id = ? AND csta.status = 1 AND csta.teacher_id IN (%s)
+		`, strings.Join(aliasPlaceholders, ","))
+
+		studentRows, studentErr := db.DB.Query(studentQuery, aliasArgs...)
+		if studentErr != nil {
+			continue
+		}
+
+		type studentMeta struct {
+			EnrollmentNo string
+			StudentName  string
+		}
+		studentInfo := make(map[int]studentMeta)
+		studentIDs := make([]int, 0)
+		for studentRows.Next() {
+			var studentID int
+			var enrollmentNo string
+			var studentName string
+			if scanErr := studentRows.Scan(&studentID, &enrollmentNo, &studentName); scanErr != nil {
+				continue
+			}
+			studentInfo[studentID] = studentMeta{EnrollmentNo: enrollmentNo, StudentName: studentName}
+			studentIDs = append(studentIDs, studentID)
+		}
+		studentRows.Close()
+
+		if len(studentIDs) == 0 {
+			continue
+		}
+
+		studentPlaceholders := make([]string, len(studentIDs))
+		markArgs := make([]interface{}, 0, 1+len(aliases)+len(studentIDs)+len(overview.AllowedComponentIDs))
+		markArgs = append(markArgs, overview.CourseID)
+		for _, alias := range aliases {
+			markArgs = append(markArgs, alias)
+		}
+		for index, studentID := range studentIDs {
+			studentPlaceholders[index] = "?"
+			markArgs = append(markArgs, studentID)
+		}
+
+		marksQuery := fmt.Sprintf(`
+			SELECT sm.student_id, sm.assessment_component_id, COALESCE(mct.name, CONCAT('Component ', sm.assessment_component_id)), COALESCE(sm.obtained_marks, 0)
+			FROM student_marks sm
+			LEFT JOIN mark_category_types mct ON mct.id = sm.assessment_component_id
+			WHERE sm.course_id = ? AND sm.faculty_id IN (%s) AND sm.student_id IN (%s)
+		`, strings.Join(aliasPlaceholders, ","), strings.Join(studentPlaceholders, ","))
+
+		if len(overview.AllowedComponentIDs) > 0 {
+			componentPlaceholders := make([]string, len(overview.AllowedComponentIDs))
+			for index, componentID := range overview.AllowedComponentIDs {
+				componentPlaceholders[index] = "?"
+				markArgs = append(markArgs, componentID)
+			}
+			marksQuery += fmt.Sprintf(" AND sm.assessment_component_id IN (%s)", strings.Join(componentPlaceholders, ","))
+		}
+
+		marksQuery += " ORDER BY sm.student_id, sm.assessment_component_id"
+		markRows, markErr := db.DB.Query(marksQuery, markArgs...)
+		if markErr != nil {
+			continue
+		}
+
+		for markRows.Next() {
+			var studentID int
+			var componentID int
+			var componentName string
+			var marks float64
+			if scanErr := markRows.Scan(&studentID, &componentID, &componentName, &marks); scanErr != nil {
+				continue
+			}
+
+			meta, exists := studentInfo[studentID]
+			if !exists {
+				continue
+			}
+
+			rows = append(rows, detailedMarkEntryRow{
+				DepartmentName: overview.DepartmentName,
+				Semester:       overview.Semester,
+				TeacherID:      overview.TeacherID,
+				TeacherName:    overview.TeacherName,
+				CourseCode:     overview.CourseCode,
+				CourseName:     overview.CourseName,
+				StudentID:      studentID,
+				EnrollmentNo:   meta.EnrollmentNo,
+				StudentName:    meta.StudentName,
+				ComponentID:    componentID,
+				ComponentName:  componentName,
+				Marks:          marks,
+			})
+		}
+		markRows.Close()
+	}
+
+	return rows, nil
+}
+
+func exportTeacherWiseMarkRows(departmentID int, semester int) ([][]string, error) {
+	detailedRows, err := buildDetailedMarkEntryRows(departmentID, semester)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(detailedRows, func(i, j int) bool {
+		if detailedRows[i].TeacherID != detailedRows[j].TeacherID {
+			return detailedRows[i].TeacherID < detailedRows[j].TeacherID
+		}
+		if detailedRows[i].CourseCode != detailedRows[j].CourseCode {
+			return detailedRows[i].CourseCode < detailedRows[j].CourseCode
+		}
+		if detailedRows[i].EnrollmentNo != detailedRows[j].EnrollmentNo {
+			return detailedRows[i].EnrollmentNo < detailedRows[j].EnrollmentNo
+		}
+		if detailedRows[i].ComponentID != detailedRows[j].ComponentID {
+			return detailedRows[i].ComponentID < detailedRows[j].ComponentID
+		}
+		return detailedRows[i].StudentID < detailedRows[j].StudentID
+	})
+
+	records := [][]string{{"Department", "Semester", "Teacher ID", "Teacher Name", "Course Code", "Course Name", "Student ID", "Enrollment No", "Student Name", "Component ID", "Component", "Marks"}}
+	for _, row := range detailedRows {
+		records = append(records, []string{
+			row.DepartmentName,
+			strconv.Itoa(row.Semester),
+			row.TeacherID,
+			row.TeacherName,
+			row.CourseCode,
+			row.CourseName,
+			strconv.Itoa(row.StudentID),
+			row.EnrollmentNo,
+			row.StudentName,
+			strconv.Itoa(row.ComponentID),
+			row.ComponentName,
+			fmt.Sprintf("%.2f", row.Marks),
+		})
+	}
+
+	return records, nil
+}
+
+func exportCourseWiseMarkRows(departmentID int, semester int) ([][]string, error) {
+	detailedRows, err := buildDetailedMarkEntryRows(departmentID, semester)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(detailedRows, func(i, j int) bool {
+		if detailedRows[i].CourseCode != detailedRows[j].CourseCode {
+			return detailedRows[i].CourseCode < detailedRows[j].CourseCode
+		}
+		if detailedRows[i].TeacherID != detailedRows[j].TeacherID {
+			return detailedRows[i].TeacherID < detailedRows[j].TeacherID
+		}
+		if detailedRows[i].EnrollmentNo != detailedRows[j].EnrollmentNo {
+			return detailedRows[i].EnrollmentNo < detailedRows[j].EnrollmentNo
+		}
+		if detailedRows[i].ComponentID != detailedRows[j].ComponentID {
+			return detailedRows[i].ComponentID < detailedRows[j].ComponentID
+		}
+		return detailedRows[i].StudentID < detailedRows[j].StudentID
+	})
+
+	records := [][]string{{"Department", "Semester", "Course Code", "Course Name", "Teacher ID", "Teacher Name", "Student ID", "Enrollment No", "Student Name", "Component ID", "Component", "Marks"}}
+	for _, row := range detailedRows {
+		records = append(records, []string{
+			row.DepartmentName,
+			strconv.Itoa(row.Semester),
+			row.CourseCode,
+			row.CourseName,
+			row.TeacherID,
+			row.TeacherName,
+			strconv.Itoa(row.StudentID),
+			row.EnrollmentNo,
+			row.StudentName,
+			strconv.Itoa(row.ComponentID),
+			row.ComponentName,
+			fmt.Sprintf("%.2f", row.Marks),
 		})
 	}
 
@@ -2206,12 +2591,19 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var records [][]string
-	if reportType == "student" {
-		records, err = exportStudentWiseRows(departmentID, semester)
-	} else if reportType == "course" {
+	normalizedReportType := reportType
+	switch reportType {
+	case "teacher", "teacher-wise", "teacher_wise", "student":
+		normalizedReportType = "teacher"
+		records, err = exportTeacherWiseMarkRows(departmentID, semester)
+	case "course", "course-wise", "course_wise":
+		normalizedReportType = "course"
+		records, err = exportCourseWiseMarkRows(departmentID, semester)
+	case "course-summary":
+		normalizedReportType = "course_summary"
 		records, err = exportCourseWiseRows(departmentID, semester)
-	} else {
-		http.Error(w, "report_type must be student or course", http.StatusBadRequest)
+	default:
+		http.Error(w, "report_type must be teacher or course", http.StatusBadRequest)
 		return
 	}
 
@@ -2221,7 +2613,7 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseName := fmt.Sprintf("mark_entry_%s_sem%d_dept%s", reportType, semester, strings.ReplaceAll(strings.ToLower(departmentName), " ", "_"))
+	baseName := fmt.Sprintf("mark_entry_%s_sem%d_dept%s", normalizedReportType, semester, strings.ReplaceAll(strings.ToLower(departmentName), " ", "_"))
 	switch format {
 	case "csv":
 		writeCSVAttachment(w, baseName+".csv", records)
@@ -2230,7 +2622,7 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to generate xlsx", http.StatusInternalServerError)
 		}
 	case "pdf":
-		title := fmt.Sprintf("Mark Entry %s Report - Semester %d - %s", strings.Title(reportType), semester, departmentName)
+		title := fmt.Sprintf("Mark Entry %s Report - Semester %d - %s", strings.Title(strings.ReplaceAll(normalizedReportType, "_", " ")), semester, departmentName)
 		if writeErr := writePDFAttachment(w, baseName+".pdf", title, records); writeErr != nil {
 			http.Error(w, "failed to generate pdf", http.StatusInternalServerError)
 		}

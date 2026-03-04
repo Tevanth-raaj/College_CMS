@@ -11,11 +11,11 @@ function ResultAnalysisPage() {
   const canAccess = isAdminMode || userRole === 'hod'
 
   const [semester, setSemester] = useState('4')
-  const [examType, setExamType] = useState('PT1')
-  const [windowId, setWindowId] = useState('')
+  const [examType, setExamType] = useState('ALL')
+  const [learningMode, setLearningMode] = useState('PBL')
   const [departmentId, setDepartmentId] = useState('')
+  const [markTypeOptions, setMarkTypeOptions] = useState([])
 
-  const [windows, setWindows] = useState([])
   const [departments, setDepartments] = useState([])
 
   const [loading, setLoading] = useState(false)
@@ -25,25 +25,18 @@ function ResultAnalysisPage() {
 
   useEffect(() => {
     if (!canAccess) return
-    fetchWindows()
     if (isAdminMode) fetchDepartments()
   }, [canAccess, isAdminMode])
 
   useEffect(() => {
     if (!canAccess) return
-    fetchAnalysis()
-  }, [semester, examType, windowId, departmentId, canAccess])
+    fetchMarkTypes()
+  }, [canAccess, learningMode])
 
-  const fetchWindows = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/mark-entry-windows`)
-      if (!response.ok) throw new Error('Failed to fetch windows')
-      const data = await response.json()
-      setWindows(Array.isArray(data) ? data : [])
-    } catch (err) {
-      setWindows([])
-    }
-  }
+  useEffect(() => {
+    if (!canAccess) return
+    fetchAnalysis()
+  }, [semester, examType, learningMode, departmentId, canAccess])
 
   const fetchDepartments = async () => {
     try {
@@ -68,9 +61,9 @@ function ResultAnalysisPage() {
     try {
       const params = new URLSearchParams()
       params.append('semester', semester)
-      params.append('exam_type', examType)
+      if (examType && examType !== 'ALL') params.append('exam_type', examType)
+      params.append('learning_mode', learningMode)
       params.append('role', userRole)
-      if (windowId) params.append('window_id', windowId)
 
       if (isAdminMode) {
         if (!departmentId) {
@@ -84,8 +77,15 @@ function ResultAnalysisPage() {
         params.append('username', username || '')
       }
 
-      const response = await fetch(`${API_BASE_URL}/hod/result-analysis?${params.toString()}`)
-      const data = await response.json()
+      const requestUrl = `${API_BASE_URL}/hod/result-analysis?${params.toString()}`
+      const response = await fetch(requestUrl)
+      const rawText = await response.text()
+      let data = {}
+      try {
+        data = rawText ? JSON.parse(rawText) : {}
+      } catch (parseError) {
+        data = {}
+      }
       if (!response.ok) throw new Error(data.error || data.message || 'Failed to load analysis')
 
       setRows(Array.isArray(data.rows) ? data.rows : [])
@@ -99,13 +99,44 @@ function ResultAnalysisPage() {
     }
   }
 
-  const windowOptions = useMemo(() => {
-    return windows
-      .filter((w) => !w.semester || String(w.semester) === String(semester))
-      .sort((a, b) => (b.id || 0) - (a.id || 0))
-  }, [windows, semester])
+  const fetchMarkTypes = async () => {
+    try {
+      const learningModeId = learningMode === 'UAL' ? '1' : '2'
+      const response = await fetch(`${API_BASE_URL}/mark-categories/by-learning-mode?learning_mode_id=${learningModeId}`)
+      const data = await response.json()
+      const options = Array.isArray(data) ? data : []
+      setMarkTypeOptions(options)
+
+      setExamType((previous) => {
+        if (previous === 'ALL') return 'ALL'
+        const exists = options.some((item) => (item?.name || '').trim() === previous)
+        return exists ? previous : 'ALL'
+      })
+    } catch (err) {
+      setMarkTypeOptions([])
+      setExamType('ALL')
+    }
+  }
 
   const columnHeaders = useMemo(() => rows.map((item) => item.course_code), [rows])
+
+  const componentMetrics = useMemo(() => {
+    const componentMap = new Map()
+    rows.forEach((row) => {
+      const components = Array.isArray(row.components) ? row.components : []
+      components.forEach((component) => {
+        const id = Number(component.component_id)
+        if (!Number.isFinite(id)) return
+        if (!componentMap.has(id)) {
+          componentMap.set(id, component.component_name || `Component ${id}`)
+        }
+      })
+    })
+
+    return Array.from(componentMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([id, name]) => ({ key: `component_avg_${id}`, label: `Component Avg: ${name}` }))
+  }, [rows])
 
   if (!canAccess) {
     return (
@@ -127,6 +158,13 @@ function ResultAnalysisPage() {
       case 'minimum_mark': return Number(row.minimum_mark || 0).toFixed(2)
       case 'average_mark': return Number(row.average_mark || 0).toFixed(2)
       default:
+        if (key.startsWith('component_avg_')) {
+          const componentID = Number(key.replace('component_avg_', ''))
+          const components = Array.isArray(row.components) ? row.components : []
+          const component = components.find((item) => Number(item.component_id) === componentID)
+          if (!component) return '-'
+          return Number(component.average_mark || 0).toFixed(2)
+        }
         if (key.startsWith('range_')) {
           const bucket = key.replace('range_', '')
           return row.ranges?.[bucket] || 0
@@ -145,20 +183,23 @@ function ResultAnalysisPage() {
     { key: 'maximum_mark', label: 'Maximum marks obtained' },
     { key: 'minimum_mark', label: 'Minimum marks obtained' },
     { key: 'average_mark', label: 'Average marks obtained' },
+    ...componentMetrics,
     ...RANGE_KEYS.map((bucket) => ({ key: `range_${bucket}`, label: `Range ${bucket}` })),
   ]
+
+  const examTypeLabel = examType === 'ALL' ? 'All' : examType
 
   return (
     <MainLayout
       title="Result Analysis"
-      subtitle={`Department: ${departmentName || '-'} • Semester: ${semester} • Exam: ${examType}`}
+      subtitle={`Department: ${departmentName || '-'} • Semester: ${semester} • Exam: ${examTypeLabel} • Mode: ${learningMode}`}
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <select value={examType} onChange={(e) => setExamType(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
-            <option value="PT1">PT1</option>
-            <option value="PT2">PT2</option>
-            <option value="Model">Model</option>
-            <option value="EndSem">EndSem</option>
+            <option value="ALL">All</option>
+            {markTypeOptions.map((item) => (
+              <option key={item.id} value={item.name}>{item.name}</option>
+            ))}
           </select>
 
           <select value={semester} onChange={(e) => setSemester(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
@@ -167,11 +208,9 @@ function ResultAnalysisPage() {
             ))}
           </select>
 
-          <select value={windowId} onChange={(e) => setWindowId(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm min-w-[220px]">
-            <option value="">All windows</option>
-            {windowOptions.map((w) => (
-              <option key={w.id} value={w.id}>Window #{w.id} ({w.start_at?.slice(0, 16)} - {w.end_at?.slice(0, 16)})</option>
-            ))}
+          <select value={learningMode} onChange={(e) => setLearningMode(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm min-w-[140px]">
+            <option value="PBL">PBL</option>
+            <option value="UAL">UAL</option>
           </select>
 
           {isAdminMode && (
