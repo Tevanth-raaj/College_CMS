@@ -180,6 +180,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/mark-entry/teacher-students", curriculum.GetTeacherEnteredStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/result-analysis", curriculum.GetResultAnalysis).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/download", curriculum.DownloadMarkEntryReport).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/mark-entry/download", curriculum.DownloadMarkEntryReport).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions/request", curriculum.CreateMarkEntryExtensionRequest).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions", curriculum.GetMarkEntryExtensionRequests).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions/{id}/approve", curriculum.UpdateMarkEntryExtensionRequestStatus).Methods("POST", "OPTIONS")
