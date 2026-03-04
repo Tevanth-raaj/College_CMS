@@ -6,6 +6,9 @@ module.exports = {
       colors: {
         primary: "#7D53F6",
         secondary: "#FBFAFF",
+        primary_light:"rgb(125 83 246 / 5%)",
+        primary_dim:"rgb(125 83 246 / 14%)",
+        primary_medium:"rgb(125 83 246 / 65%)",
         background: "rgb(238 241 249/1)",
         "sec-background": "#ECE8FE",
         "sec-dim": "rgb(253 253 253 / 75%)",
