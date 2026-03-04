@@ -195,8 +195,8 @@ func CreateSemester(w http.ResponseWriter, r *http.Request) {
 
 	query := "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, vertical_name) VALUES (?, ?, ?, ?)"
 	var verticalName interface{}
-	if card.CardType == "vertical" && card.VerticalName != "" {
-		verticalName = card.VerticalName
+	if card.CardType == "vertical" && strings.TrimSpace(card.VerticalName) != "" {
+		verticalName = strings.TrimSpace(card.VerticalName)
 	} else {
 		verticalName = nil
 	}
@@ -637,7 +637,7 @@ func AddCourseToSemester(w http.ResponseWriter, r *http.Request) {
 	fetchQuery := `SELECT id, course_code, course_name, course_type, category, credit, 
 	               lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, COALESCE(` + "`tw/sl`" + `, 0) as tw_sl,
 	               COALESCE(theory_total_hrs, 0), COALESCE(tutorial_total_hrs, 0), COALESCE(practical_total_hrs, 0), COALESCE(activity_total_hrs, 0), COALESCE(total_hrs, 0),
-	               cia_marks, see_marks, total_marks 
+	               cia_marks, see_marks, COALESCE(total_marks, 0) 
 	               FROM courses WHERE id = ?`
 	err = db.DB.QueryRow(fetchQuery, courseID).Scan(&fullCourse.CourseID, &fullCourse.CourseCode, &fullCourse.CourseName,
 		&fullCourse.CourseType, &fullCourse.Category, &fullCourse.Credit,

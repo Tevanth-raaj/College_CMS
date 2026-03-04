@@ -538,9 +538,16 @@ function MarkEntryPermissionsPage() {
       if (!res.ok) throw new Error('Failed to fetch windows')
       const data = await res.json()
       setExistingWindows(data || [])
+      return data || []
     } catch (error) {
       console.error('Error fetching windows:', error)
+      return []
     }
+  }
+
+  const fetchWindowById = async (windowId) => {
+    const allWindows = await fetchExistingWindows()
+    return (allWindows || []).find((window) => String(window.id) === String(windowId)) || null
   }
 
   const fetchUserAssignedWindows = async () => {
@@ -759,11 +766,13 @@ function MarkEntryPermissionsPage() {
   }
 
   const editWindow = async (win) => {
-    setEditingWindow(win)
-    setWindowName(win.window_name || '')
-    setWindowStartAt(formatDateTimeLocal(win.start_at))
-    setWindowEndAt(formatDateTimeLocal(win.end_at))
-    setWindowEnabled(win.enabled)
+    const latestWindow = (await fetchWindowById(win.id)) || win
+
+    setEditingWindow(latestWindow)
+    setWindowName(latestWindow.window_name || '')
+    setWindowStartAt(formatDateTimeLocal(latestWindow.start_at))
+    setWindowEndAt(formatDateTimeLocal(latestWindow.end_at))
+    setWindowEnabled(latestWindow.enabled)
 
     // Directly separate window's component_ids into PBL and UAL
     if (win.component_ids && win.component_ids.length > 0) {
@@ -800,19 +809,19 @@ function MarkEntryPermissionsPage() {
     }
 
     // Determine scope and set appropriate fields
-    if (win.teacher_id && win.course_id) {
+    if (latestWindow.teacher_id && latestWindow.course_id) {
       setWindowScope('teacher_course')
-      setSelectedTeacherId(win.teacher_id)
-      setSelectedCourseId(win.course_id.toString())
-    } else if (win.semester && win.course_id) {
+      setSelectedTeacherId(latestWindow.teacher_id)
+      setSelectedCourseId(latestWindow.course_id.toString())
+    } else if (latestWindow.semester && latestWindow.course_id) {
       setWindowScope('department_semester_course')
-      setWindowDepartmentId(win.department_id ? win.department_id.toString() : '0')
-      setWindowSemester(win.semester.toString())
-      setWindowCourseId(win.course_id.toString())
-    } else if (win.semester) {
+      setWindowDepartmentId(latestWindow.department_id ? latestWindow.department_id.toString() : '0')
+      setWindowSemester(latestWindow.semester.toString())
+      setWindowCourseId(latestWindow.course_id.toString())
+    } else if (latestWindow.semester) {
       setWindowScope('department_semester')
-      setWindowDepartmentId(win.department_id ? win.department_id.toString() : '0')
-      setWindowSemester(win.semester.toString())
+      setWindowDepartmentId(latestWindow.department_id ? latestWindow.department_id.toString() : '0')
+      setWindowSemester(latestWindow.semester.toString())
     }
 
     setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100)
@@ -845,7 +854,7 @@ function MarkEntryPermissionsPage() {
       if (!res.ok) throw new Error('Failed to update window')
       setMessage({ type: 'success', text: 'Window updated successfully.' })
       setEditingWindow(null)
-      fetchExistingWindows()
+      await fetchExistingWindows()
     } catch (error) {
       console.error('Error updating window:', error)
       setMessage({ type: 'error', text: 'Failed to update window.' })
