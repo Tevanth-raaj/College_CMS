@@ -356,12 +356,12 @@ const ElectiveSelectionPage = () => {
 
   // Slot type config — label, icon, colour accent
   const slotTypeConfig = {
-    PROFESSIONAL: { label: 'Professional Elective', icon: '📚', badge: 'bg-blue-100 text-blue-800', border: 'border-blue-300', required: true },
-    OPEN:         { label: 'Open Elective',          icon: '🌐', badge: 'bg-green-100 text-green-800', border: 'border-green-300', required: true },
-    MIXED:        { label: 'Professional + Open',    icon: '📚', badge: 'bg-purple-100 text-purple-800', border: 'border-purple-300', required: true },
-    HONOR:        { label: 'Honour Course',          icon: '🏆', badge: 'bg-yellow-100 text-yellow-800', border: 'border-yellow-300', required: false },
-    MINOR:        { label: 'Minor Course',           icon: '📖', badge: 'bg-orange-100 text-orange-800', border: 'border-orange-300', required: false },
-    ADDON:        { label: 'Add-On Course',          icon: '➕', badge: 'bg-gray-100 text-gray-700',   border: 'border-gray-300',   required: false },
+    PROFESSIONAL: { label: 'Professional Elective', icon: '📚', border: 'border-blue-300', required: true },
+    OPEN:         { label: 'Open Elective',          icon: '🌐', border: 'border-green-300', required: true },
+    MIXED:        { label: 'Professional + Open',    icon: '📚', border: 'border-purple-300', required: true },
+    HONOR:        { label: 'Honour Course',          icon: '🏆', border: 'border-yellow-300', required: false },
+    MINOR:        { label: 'Minor Course',           icon: '📖', border: 'border-orange-300', required: false },
+    ADDON:        { label: 'Add-On Course',          icon: '➕', border: 'border-gray-300',   required: false },
   };
 
   if (loading) {
@@ -459,7 +459,7 @@ const ElectiveSelectionPage = () => {
         <div className="px-4 pt-4 pb-3 bg-gray-50 border-b border-gray-100">
           <div className="flex items-center gap-2 mb-1">
             {/* <span className="text-sm">{cfg.icon}</span> */}
-            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${cfg.badge}`}>{cfg.label}</span>
+            <span className={"inline-flex items-center px-2 py-0.5 mb-1 rounded-full text-xs font-bold bg-background text-primary"}>{cfg.label}</span>
             <span className="text-xs text-red-500 font-semibold">Required</span>
           </div>
           <h2 className="text-sm font-bold text-gray-900">{slotName}</h2>
@@ -470,7 +470,7 @@ const ElectiveSelectionPage = () => {
               value={selectedValue}
               onChange={handleDropdownChange}
               disabled={isSubmitted || electiveData?.window_open === false}
-              className={`w-full appearance-none bg-white border-2 rounded-xl px-4 py-3 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 transition cursor-pointer ${
+              className={`w-full appearance-none bg-white border-2 rounded-md px-4 py-3 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 transition cursor-pointer ${
                 selectedValue ? 'border-gray-900 text-gray-800 focus:ring-gray-400' : 'border-gray-200 text-gray-400 focus:ring-blue-300'
               } disabled:opacity-60 disabled:cursor-not-allowed`}
             >
@@ -488,7 +488,7 @@ const ElectiveSelectionPage = () => {
             </div>
           </div>
           {selectedValue && selectedCourse && (
-            <div className="mt-3 flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl">
+            <div className="mt-3 flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
               <svg className="w-4 h-4 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
               </svg>
@@ -580,7 +580,7 @@ const ElectiveSelectionPage = () => {
           <div className="w-full bg-gray-100 rounded-full h-1.5 mb-5">
             <div
               className={`h-1.5 rounded-full transition-all duration-500 ${
-                progressPct === 100 ? 'bg-green-500' : 'bg-blue-500'
+                progressPct === 100 ? 'bg-green-500' : 'bg-primary'
               }`}
               style={{ width: `${progressPct}%` }}
             />
@@ -639,12 +639,12 @@ const ElectiveSelectionPage = () => {
             {optionalType && optionalType !== null && (
               <div>
                 <div className="flex items-center gap-2 mb-3 px-1">
-                  <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p className="text-sm font-semibold text-green-700">
+                  <p className="text-sm font-semibold text-emerald-800">
                     You are enrolled in all {optionalType === 'MINOR' ? 'Minor' : 'Honour'} courses below
-                    {totalCreditUsed > 0 && <span className="ml-2 text-green-600 font-bold">({totalCreditUsed} credits)</span>}
+                    {totalCreditUsed > 0 && <span className="ml-2 text-emerald-700 font-bold">({totalCreditUsed} credits)</span>}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -652,9 +652,9 @@ const ElectiveSelectionPage = () => {
                     const course = slotData.courses[0];
                     const cfg = slotTypeConfig[slotData.slot_type];
                     const colors = {
-                      HONOR: { border: 'border-amber-300', bg: 'bg-amber-50', divider: '#fcd34d', badge: 'bg-amber-200 text-amber-800' },
-                      MINOR: { border: 'border-orange-300', bg: 'bg-orange-50', divider: '#fdba74', badge: 'bg-orange-200 text-orange-800' },
-                      ADDON: { border: 'border-teal-300',   bg: 'bg-teal-50',   divider: '#99f6e4', badge: 'bg-teal-200 text-teal-800' },
+                      HONOR: { border: 'border-primary', bg: 'bg-background', divider: '#7D53F6', badge: 'bg-background text-primary' },
+                      MINOR: { border: 'border-primary', bg: 'bg-background', divider: '#7D53F6', badge: 'bg-background text-primary' },
+                      ADDON: { border: 'border-primary', bg: 'bg-background', divider: '#7D53F6', badge: 'bg-background text-primary' },
                     };
                     const c = colors[optionalType] || colors.ADDON;
                     return (
@@ -665,7 +665,7 @@ const ElectiveSelectionPage = () => {
                             <span className="text-sm">{cfg.icon}</span>
                             <span className="text-xs font-bold text-gray-700">{slotName}</span>
                           </div>
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600`}>Enrolled</span>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-green-700`}>Enrolled</span>
                         </div>
                         {course ? (
                           <div className="px-4 py-4">
@@ -717,8 +717,8 @@ const ElectiveSelectionPage = () => {
                         <span className="text-xs font-bold text-gray-700">{slotName}</span>
                       </div>
                       {isEnrolled
-                        ? <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Enrolled</span>
-                        : <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Not enrolled</span>
+                        ? <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-background text-green-600">Enrolled</span>
+                        : <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-background text-red-600">Not enrolled</span>
                       }
                     </div>
                     {course ? (
@@ -763,10 +763,10 @@ const ElectiveSelectionPage = () => {
               <button
                 onClick={handleSubmit}
                 disabled={!canSubmit || isSubmitting}
-                className={`w-full py-4 rounded-2xl text-white font-bold text-base tracking-wide transition-all shadow-sm ${
+                className={`w-full py-4 rounded-2xl font-bold text-base tracking-wide transition-all shadow-sm ${
                   !canSubmit || isSubmitting
                     ? 'bg-gray-200 cursor-not-allowed text-gray-400 shadow-none'
-                    : 'bg-gray-900 hover:bg-gray-700 active:scale-[0.98] shadow-md'
+                    : 'bg-primary text-white active:scale-[0.98] shadow-md'
                 }`}
               >
                 {isSubmitting

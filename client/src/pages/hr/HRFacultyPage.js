@@ -341,7 +341,7 @@ const HRFacultyPage = () => {
               <h1 className="text-4xl font-bold text-gray-900">Faculty Workload Management</h1>
               <p className="text-base text-gray-600 mt-2">Assign and manage course requirements for faculty members</p>
             </div>
-            <div className="text-right bg-gradient-to-br from-blue-50 to-indigo-50 px-6 py-4 rounded-xl border border-primary">
+            <div className="text-right bg-gradient-to-br from-blue-50 to-primary_dim px-6 py-4 rounded-xl border border-primary">
               <div className="text-3xl font-bold text-primary">{filteredFaculty.length}</div>
               <div className="text-xs text-primary uppercase tracking-wide font-semibold mt-1">Faculties Listed</div>
             </div>
@@ -510,7 +510,7 @@ const HRFacultyPage = () => {
                                     className="h-10 w-10 rounded-full mr-3 object-cover border-2 border-gray-200 shadow"
                                   />
                                 ) : (
-                                  <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center mr-3 shadow text-white font-bold text-sm">
+                                  <div className="h-10 w-10 rounded-full bg-gradient-to-br from-primary to-primary_medium flex items-center justify-center mr-3 shadow text-white font-bold text-sm">
                                     {f.name.charAt(0).toUpperCase()}
                                   </div>
                                 )}
@@ -532,7 +532,7 @@ const HRFacultyPage = () => {
                             <td className="px-6 py-5 whitespace-nowrap text-center">
                               <div className="flex justify-center gap-1">
                                 {(f.course_limits || []).map((limit, idx) => (
-                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold  text-indigo-700">
+                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold  text-primary">
                                     {limit.max_count}
                                   </span>
                                 ))}
