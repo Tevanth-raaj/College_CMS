@@ -139,10 +139,10 @@ func runMigrations() error {
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS teacher_course_limits (
 			id INT PRIMARY KEY AUTO_INCREMENT,
-			teacher_id BIGINT UNSIGNED NOT NULL,
+			teacher_id VARCHAR(50) NOT NULL,
 			course_type_id INT NOT NULL,
 			max_count INT DEFAULT 0,
-			UNIQUE KEY (teacher_id, course_type_id),
+			UNIQUE KEY uq_teacher_type (teacher_id, course_type_id),
 			FOREIGN KEY (course_type_id) REFERENCES course_type(id)
 		)
 	`)
@@ -1295,6 +1295,57 @@ func CreateMarkEntryStudentPermissionsTables() error {
 	}
 
 	fmt.Println("Successfully created mark_entry_student_permissions table!")
+	return nil
+}
+
+// MigrateTeacherCourseLimitsTeacherID alters teacher_course_limits.teacher_id from
+// BIGINT UNSIGNED to VARCHAR(50) so it correctly stores faculty_id.
+func MigrateTeacherCourseLimitsTeacherID() error {
+	// Check current data type
+	var dataType string
+	err := DB.QueryRow(`
+		SELECT DATA_TYPE
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME  = 'teacher_course_limits'
+		  AND COLUMN_NAME = 'teacher_id'
+	`).Scan(&dataType)
+	if err != nil {
+		// Table may not exist yet – skip
+		fmt.Println("MigrateTeacherCourseLimitsTeacherID: table not found, skipping")
+		return nil
+	}
+
+	if dataType == "varchar" {
+		fmt.Println("teacher_course_limits.teacher_id is already VARCHAR – no migration needed")
+		return nil
+	}
+
+	fmt.Printf("Migrating teacher_course_limits.teacher_id from %s to VARCHAR(50)...\n", dataType)
+
+	// Drop unique constraint – MySQL may name it 'uq_teacher_type' or 'teacher_id'.
+	DB.Exec(`ALTER TABLE teacher_course_limits DROP KEY uq_teacher_type`)
+	DB.Exec(`ALTER TABLE teacher_course_limits DROP KEY teacher_id`)
+
+	// Truncate stale numeric data – it cannot be mapped to varchar faculty_ids.
+	_, err = DB.Exec(`TRUNCATE TABLE teacher_course_limits`)
+	if err != nil {
+		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: truncate failed: %w", err)
+	}
+
+	// Alter the column type
+	_, err = DB.Exec(`ALTER TABLE teacher_course_limits MODIFY COLUMN teacher_id VARCHAR(50) NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: alter column failed: %w", err)
+	}
+
+	// Re-add unique constraint
+	_, err = DB.Exec(`ALTER TABLE teacher_course_limits ADD UNIQUE KEY uq_teacher_type (teacher_id, course_type_id)`)
+	if err != nil {
+		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: re-add unique key failed: %w", err)
+	}
+
+	fmt.Println("teacher_course_limits.teacher_id migrated to VARCHAR(50) successfully")
 	return nil
 }
 

@@ -64,12 +64,77 @@ type TeacherLimitExportRow struct {
 	Subject5CourseNature   string
 }
 
+// AllocationWindow represents a distinct allocation window from teacher_course_history.
+type AllocationWindow struct {
+	WindowStart  string `json:"window_start"`
+	WindowEnd    string `json:"window_end"`
+	SemesterType string `json:"semester_type"`
+	AcademicYear string `json:"academic_year"`
+	Label        string `json:"label"`
+}
+
+// GetTeacherLimitWindows returns distinct allocation windows from teacher_course_history.
+func GetTeacherLimitWindows(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	query := `
+		SELECT DISTINCT
+			DATE_FORMAT(window_start, '%Y-%m-%d') as window_start,
+			DATE_FORMAT(window_end,   '%Y-%m-%d') as window_end,
+			COALESCE(semester_type, '') as semester_type,
+			COALESCE(academic_year, '') as academic_year
+		FROM teacher_course_history
+		WHERE record_type = 'course'
+		ORDER BY window_start DESC
+	`
+
+	rows, err := db.DB.Query(query)
+	if err != nil {
+		log.Printf("❌ Error fetching allocation windows: %v\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to fetch windows"})
+		return
+	}
+	defer rows.Close()
+
+	var windows []AllocationWindow
+	for rows.Next() {
+		var win AllocationWindow
+		if err := rows.Scan(&win.WindowStart, &win.WindowEnd, &win.SemesterType, &win.AcademicYear); err != nil {
+			continue
+		}
+		label := win.AcademicYear
+		if win.SemesterType != "" {
+			label += " – " + win.SemesterType
+		}
+		if win.WindowStart != "" {
+			label += " (" + win.WindowStart + " → " + win.WindowEnd + ")"
+		}
+		win.Label = label
+		windows = append(windows, win)
+	}
+	if windows == nil {
+		windows = []AllocationWindow{}
+	}
+	json.NewEncoder(w).Encode(windows)
+}
+
 // ExportTeacherLimits generates Excel export of teacher assignments and limits
 func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+
+	// Optional window filter from query params
+	windowStart := r.URL.Query().Get("window_start")
+	windowEnd := r.URL.Query().Get("window_end")
 
 	// Fetch all active teachers
 	query := `
@@ -104,12 +169,12 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Limits come from teacher_course_history record_type='limit'
-		limitTheory := fetchTeacherLimit(facultyID, 1)    // theory
-		limitLab := fetchTeacherLimit(facultyID, 2)       // lab
-		limitTheoryLab := fetchTeacherLimit(facultyID, 3) // theory_with_lab
+		limitTheory := fetchTeacherLimit(facultyID, 1, windowStart, windowEnd)    // theory
+		limitLab := fetchTeacherLimit(facultyID, 2, windowStart, windowEnd)       // lab
+		limitTheoryLab := fetchTeacherLimit(facultyID, 3, windowStart, windowEnd) // theory_with_lab
 
 		// Core course assignments from teacher_course_history (non-special categories)
-		coreCourses, err := fetchCoreCourses(facultyID)
+		coreCourses, err := fetchCoreCourses(facultyID, windowStart, windowEnd)
 		if err != nil {
 			log.Printf("⚠️  Error fetching core courses for %s: %v\n", facultyID, err)
 		}
@@ -118,7 +183,7 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 		// semester resolved via hod_elective_selections for teacher's dept
 		var specialCourses []courseEntry
 		if dept != "" {
-			specialCourses, err = fetchSpecialCourses(facultyID, dept)
+			specialCourses, err = fetchSpecialCourses(facultyID, dept, windowStart, windowEnd)
 			if err != nil {
 				log.Printf("⚠️  Error fetching special courses for %s (dept=%s): %v\n", facultyID, dept, err)
 			}
@@ -297,17 +362,32 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 
 // fetchTeacherLimit returns the latest max_count from teacher_course_history
 // where record_type = 'limit' for the given teacher and course_type_id.
-func fetchTeacherLimit(facultyID string, courseTypeID int) int {
-	query := `
-		SELECT max_count
-		FROM teacher_course_history
-		WHERE teacher_id = ? AND course_type_id = ? AND record_type = 'limit'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
+// If windowStart/windowEnd are non-empty the query is scoped to that window.
+func fetchTeacherLimit(facultyID string, courseTypeID int, windowStart, windowEnd string) int {
 	var maxCount int
-	if err := db.DB.QueryRow(query, facultyID, courseTypeID).Scan(&maxCount); err != nil {
-		return 0
+	if windowStart != "" && windowEnd != "" {
+		query := `
+			SELECT max_count
+			FROM teacher_course_history
+			WHERE teacher_id = ? AND course_type_id = ? AND record_type = 'limit'
+			  AND window_start = ? AND window_end = ?
+			ORDER BY created_at DESC
+			LIMIT 1
+		`
+		if err := db.DB.QueryRow(query, facultyID, courseTypeID, windowStart, windowEnd).Scan(&maxCount); err != nil {
+			return 0
+		}
+	} else {
+		query := `
+			SELECT max_count
+			FROM teacher_course_history
+			WHERE teacher_id = ? AND course_type_id = ? AND record_type = 'limit'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`
+		if err := db.DB.QueryRow(query, facultyID, courseTypeID).Scan(&maxCount); err != nil {
+			return 0
+		}
 	}
 	return maxCount
 }
@@ -316,7 +396,15 @@ func fetchTeacherLimit(facultyID string, courseTypeID int) int {
 // teacher_course_history.  Special categories (elective / honour / minor / addon /
 // open elective) are excluded because their semester is sourced from hod_elective_selections.
 // Semester and department come from normal_cards → curriculum_courses → curriculum.
-func fetchCoreCourses(facultyID string) ([]courseEntry, error) {
+// If windowStart/windowEnd are provided, results are scoped to that allocation window.
+func fetchCoreCourses(facultyID, windowStart, windowEnd string) ([]courseEntry, error) {
+	windowFilter := ""
+	args := []interface{}{facultyID}
+	if windowStart != "" && windowEnd != "" {
+		windowFilter = " AND tch.window_start = ? AND tch.window_end = ?"
+		args = append(args, windowStart, windowEnd)
+	}
+
 	query := `
 		SELECT 
 			tch.course_code,
@@ -342,13 +430,13 @@ func fetchCoreCourses(facultyID string) ([]courseEntry, error) {
 		            'PE - Professional Elective', 'OE - Open Elective',
 		            'Elective', 'Open Elective', 'Honour', 'Minor', 'Addon'
 		        )
-		  )
+		  )` + windowFilter + `
 		GROUP BY tch.course_code, tch.course_name, c.category, ct.course_type
 		ORDER BY tch.course_code ASC
 		LIMIT 5
 	`
 
-	rows, err := db.DB.Query(query, facultyID)
+	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +465,15 @@ func fetchCoreCourses(facultyID string) ([]courseEntry, error) {
 // that are actually assigned to the teacher in teacher_course_history (record_type='course').
 // The semester is resolved from hod_elective_selections using the teacher's department_id
 // and the course_id from the history record.
-func fetchSpecialCourses(facultyID string, teacherDept string) ([]courseEntry, error) {
+// If windowStart/windowEnd are provided, results are scoped to that allocation window.
+func fetchSpecialCourses(facultyID string, teacherDept string, windowStart, windowEnd string) ([]courseEntry, error) {
+	windowFilter := ""
+	args := []interface{}{teacherDept, teacherDept, facultyID}
+	if windowStart != "" && windowEnd != "" {
+		windowFilter = " AND tch.window_start = ? AND tch.window_end = ?"
+		args = append(args, windowStart, windowEnd)
+	}
+
 	query := `
 		SELECT DISTINCT
 			tch.course_code,
@@ -398,12 +494,12 @@ func fetchSpecialCourses(facultyID string, teacherDept string) ([]courseEntry, e
 		  AND c.category IN (
 			'PE - Professional Elective', 'OE - Open Elective',
 			'Elective', 'Open Elective', 'Honour', 'Minor', 'Addon'
-		  )
+		  )` + windowFilter + `
 		ORDER BY hes.semester ASC, tch.course_code ASC
 		LIMIT 5
 	`
 
-	rows, err := db.DB.Query(query, teacherDept, teacherDept, facultyID)
+	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

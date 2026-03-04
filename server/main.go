@@ -102,6 +102,11 @@ func main() {
 		log.Fatal("Failed to add user_id to mark_entry_windows:", err)
 	}
 
+	// Migrate teacher_course_limits.teacher_id to VARCHAR(50) for faculty_id storage
+	if err := db.MigrateTeacherCourseLimitsTeacherID(); err != nil {
+		log.Fatal("Failed to migrate teacher_course_limits teacher_id column:", err)
+	}
+
 	// Start the allocation scheduler (auto-runs when teacher selection window closes)
 	scheduler.StartAllocationScheduler()
 
