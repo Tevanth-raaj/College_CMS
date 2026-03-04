@@ -107,6 +107,7 @@ type MarkEntryWindowRequest struct {
 	EndAt        string  `json:"end_at"`
 	Enabled      bool    `json:"enabled"`
 	ComponentIDs []int   `json:"component_ids,omitempty"` // Empty = all components allowed
+	WindowName   string  `json:"window_name,omitempty"`
 }
 
 // StudentMarkPermission represents student-specific mark entry permission
@@ -131,6 +132,7 @@ type CreateUserStudentWindowRequest struct {
 	EndAt        string `json:"end_at"`
 	ComponentIDs []int  `json:"component_ids,omitempty"` // PBL/UAL components
 	CreatedBy    string `json:"created_by,omitempty"`
+	WindowName   string `json:"window_name,omitempty"`
 }
 
 // CreateUserStudentWindowResponse represents the response after creating user-student window

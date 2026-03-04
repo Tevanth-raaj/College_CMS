@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
 
@@ -15,10 +15,12 @@ function MarkEntryPage() {
   const [learningMode, setLearningMode] = useState(null) // Will be auto-detected: 'PBL' or 'UAL'
   const [hasActiveWindow, setHasActiveWindow] = useState(true)
   const [showSubmitDialog, setShowSubmitDialog] = useState(false)
-  const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [markErrors, setMarkErrors] = useState({}) // key: `${studentId}_${categoryId}`
   const [absentees, setAbsentees] = useState([]) // [{student_id, mark_category_id}]
+  const [autoSaveStatus, setAutoSaveStatus] = useState('') // '', 'saving', 'saved', 'error'
+  const autoSaveTimerRef = useRef(null)
+  const pendingMarksRef = useRef({})
 
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
@@ -228,11 +230,19 @@ function MarkEntryPage() {
       // Also refresh absentees whenever marks are loaded
       loadAbsentees()
 
-      // If DB has no marks, reset the submitted flag — handles manual DB clears / testing
-      const key = `mark_submitted_${selectedCourse.course_id}_${facultyIdentifier}`
+      // If DB has no marks, re-check submission status from the DB
       if (!data || data.length === 0) {
-        localStorage.removeItem(key)
-        setIsSubmitted(false)
+        try {
+          const subRes = await fetch(
+            `${API_BASE_URL}/mark-submissions/check?teacher_id=${encodeURIComponent(facultyIdentifier)}&course_id=${selectedCourse.course_id}`
+          )
+          if (subRes.ok) {
+            const subData = await subRes.json()
+            setIsSubmitted(subData.submitted === true)
+          }
+        } catch (e) {
+          console.error('Error re-checking submission status:', e)
+        }
       }
     } catch (error) {
       console.error('Error loading existing marks:', error)
@@ -361,6 +371,114 @@ function MarkEntryPage() {
     }
   }
 
+  // Auto-save a single mark entry
+  const autoSaveSingleMark = async (studentId, categoryId, obtainedMarks) => {
+    const facultyId = facultyIdentifier
+    if (!selectedCourse || !facultyId) return
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/student-marks/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_id: selectedCourse.course_id,
+          faculty_id: facultyId,
+          mark_entries: [
+            {
+              student_id: studentId,
+              course_id: selectedCourse.course_id,
+              assessment_component_id: categoryId,
+              obtained_marks: obtainedMarks,
+            },
+          ],
+        }),
+      })
+
+      const result = await response.json()
+      if (response.ok && result.success) {
+        setAutoSaveStatus('saved')
+        setTimeout(() => setAutoSaveStatus(''), 2000)
+      } else {
+        setAutoSaveStatus('error')
+        setTimeout(() => setAutoSaveStatus(''), 3000)
+      }
+    } catch (error) {
+      console.error('Auto-save error:', error)
+      setAutoSaveStatus('error')
+      setTimeout(() => setAutoSaveStatus(''), 3000)
+    }
+  }
+
+  // Debounced auto-save handler
+  const triggerAutoSave = () => {
+    // Clear existing timer
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+    }
+
+    setAutoSaveStatus('saving')
+
+    // Set new timer for batch save (500ms debounce for fast response)
+    autoSaveTimerRef.current = setTimeout(async () => {
+      const pendingMarks = { ...pendingMarksRef.current }
+      pendingMarksRef.current = {}
+
+      if (Object.keys(pendingMarks).length === 0) {
+        setAutoSaveStatus('')
+        return
+      }
+
+      const facultyId = facultyIdentifier
+      if (!selectedCourse || !facultyId) {
+        setAutoSaveStatus('')
+        return
+      }
+
+      try {
+        const markEntries = []
+        for (const key in pendingMarks) {
+          const [studentId, categoryId] = key.split('_')
+          const obtainedMarks = pendingMarks[key]
+          if (obtainedMarks !== '' && obtainedMarks !== null && obtainedMarks !== undefined) {
+            markEntries.push({
+              student_id: parseInt(studentId),
+              course_id: selectedCourse.course_id,
+              assessment_component_id: parseInt(categoryId),
+              obtained_marks: parseFloat(obtainedMarks),
+            })
+          }
+        }
+
+        if (markEntries.length > 0) {
+          const response = await fetch(`${API_BASE_URL}/student-marks/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              course_id: selectedCourse.course_id,
+              faculty_id: facultyId,
+              mark_entries: markEntries,
+            }),
+          })
+
+          const result = await response.json()
+          if (response.ok && result.success) {
+            setAutoSaveStatus('saved')
+            setTimeout(() => setAutoSaveStatus(''), 2000)
+          } else {
+            setAutoSaveStatus('error')
+            setTimeout(() => setAutoSaveStatus(''), 3000)
+          }
+        } else {
+          setAutoSaveStatus('')
+        }
+      } catch (error) {
+        console.error('Auto-save error:', error)
+        setAutoSaveStatus('error')
+        setTimeout(() => setAutoSaveStatus(''), 3000)
+      }
+    }, 500) // 500ms debounce for fast auto-save
+  }
+
   const handleMarkChange = (studentId, categoryId, value) => {
     const category = markCategories.find((cat) => cat.id === categoryId)
     const maxMarks = category?.max_marks || 0
@@ -373,6 +491,9 @@ function MarkEntryPage() {
         [studentId]: { ...prev[studentId], [categoryId]: '' },
       }))
       setMarkErrors((prev) => { const n = { ...prev }; delete n[errorKey]; return n })
+      // Add to pending marks and trigger auto-save
+      pendingMarksRef.current[`${studentId}_${categoryId}`] = ''
+      triggerAutoSave()
       return
     }
 
@@ -388,6 +509,9 @@ function MarkEntryPage() {
       setMarkErrors((prev) => ({ ...prev, [errorKey]: `Max is ${maxMarks}` }))
     } else {
       setMarkErrors((prev) => { const n = { ...prev }; delete n[errorKey]; return n })
+      // Add to pending marks and trigger auto-save
+      pendingMarksRef.current[`${studentId}_${categoryId}`] = numValue
+      triggerAutoSave()
     }
   }
 
@@ -454,11 +578,23 @@ function MarkEntryPage() {
     return filteredMarkCategories.reduce((sum, cat) => sum + (cat.max_marks || 0), 0).toFixed(2)
   }
 
-  // Check submission status when course or faculty changes
+  // Check submission status from DB when course or faculty changes
   useEffect(() => {
     if (!selectedCourse || !facultyIdentifier) return
-    const key = `mark_submitted_${selectedCourse.course_id}_${facultyIdentifier}`
-    setIsSubmitted(localStorage.getItem(key) === 'true')
+    const checkSubmission = async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/mark-submissions/check?teacher_id=${encodeURIComponent(facultyIdentifier)}&course_id=${selectedCourse.course_id}`
+        )
+        if (res.ok) {
+          const data = await res.json()
+          setIsSubmitted(data.submitted === true)
+        }
+      } catch (err) {
+        console.error('Error checking submission status:', err)
+      }
+    }
+    checkSubmission()
   }, [selectedCourse, facultyIdentifier])
 
   // Build submission summary: all students across both modes with their marks status
@@ -469,25 +605,58 @@ function MarkEntryPage() {
         if (!modId) return true
         return cat.learning_mode_id === modId
       })
+      let absentCount = 0
       const missing = studentCategories.filter((cat) => {
+        // Absent cells are not "missing" — they're excused
+        if (isCellAbsent(student.student_id, cat.id)) {
+          absentCount++
+          return false
+        }
         const val = studentMarks[student.student_id]?.[cat.id]
         return val === '' || val === null || val === undefined
       })
-      return { student, total: studentCategories.length, missing: missing.length }
+      return { student, total: studentCategories.length, missing: missing.length, absent: absentCount }
     })
   }
 
   const handleConfirmSubmit = async () => {
-    // Save marks to DB first, then lock
-    const saved = await doSaveMarks()
-    if (saved) {
-      const key = `mark_submitted_${selectedCourse.course_id}_${facultyIdentifier}`
-      localStorage.setItem(key, 'true')
+    // Clear any pending auto-saves
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+    }
+
+    setSavingMarks(true)
+    try {
+      // Do a final save of all marks first
+      const saved = await doSaveMarks()
+      if (saved === false) {
+        // doSaveMarks already set an error message
+        return
+      }
+
+      // Record submission in the DB
+      const res = await fetch(`${API_BASE_URL}/mark-submissions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teacher_id: facultyIdentifier,
+          course_id: selectedCourse.course_id,
+        }),
+      })
+
+      if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(errText || 'Failed to record submission')
+      }
+
       setIsSubmitted(true)
       setShowSubmitDialog(false)
-      setMessage({ type: 'success', text: 'Marks saved and submitted successfully. You can no longer edit marks for this course.' })
-    } else {
-      setShowSubmitDialog(false)
+      setMessage({ type: 'success', text: 'Marks submitted successfully. You can no longer edit marks for this course.' })
+    } catch (error) {
+      console.error('Error submitting marks:', error)
+      setMessage({ type: 'error', text: error.message || 'Failed to submit marks. Please try again.' })
+    } finally {
+      setSavingMarks(false)
     }
   }
 
@@ -554,14 +723,7 @@ function MarkEntryPage() {
     }
   }
 
-  const handleSaveMarks = () => {
-    setShowSaveDialog(true)
-  }
 
-  const handleConfirmSave = async () => {
-    setShowSaveDialog(false)
-    await doSaveMarks()
-  }
 
   if (loading) {
     return (
@@ -700,13 +862,33 @@ function MarkEntryPage() {
                     </span>
                   ) : (
                     <>
-                      <button
-                        onClick={handleSaveMarks}
-                        disabled={savingMarks}
-                        className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {savingMarks ? 'Saving...' : 'Save'}
-                      </button>
+                      {/* Auto-save status indicator */}
+                      {autoSaveStatus && (
+                        <div className="flex items-center gap-2 text-sm">
+                          {autoSaveStatus === 'saving' && (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                              <span className="text-blue-600 font-medium">Saving...</span>
+                            </>
+                          )}
+                          {autoSaveStatus === 'saved' && (
+                            <>
+                              <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
+                              </svg>
+                              <span className="text-green-600 font-medium">Saved</span>
+                            </>
+                          )}
+                          {autoSaveStatus === 'error' && (
+                            <>
+                              <svg className="w-4 h-4 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"/>
+                              </svg>
+                              <span className="text-red-600 font-medium">Error saving</span>
+                            </>
+                          )}
+                        </div>
+                      )}
                       <button
                         onClick={() => setShowSubmitDialog(true)}
                         disabled={!allMarksFilled || Object.keys(markErrors).length > 0}
@@ -858,82 +1040,6 @@ function MarkEntryPage() {
           </div>
         )}
 
-        {/* Save Preview Dialog */}
-        {showSaveDialog && (() => {
-          const summary = buildSubmitSummary()
-          const filledCount = summary.filter(s => s.missing === 0).length
-          const totalStudents = summary.length
-          return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden">
-                {/* Dialog Header */}
-                <div className="px-6 pt-6 pb-4 border-b border-blue-200 bg-blue-50">
-                  <div className="flex items-start gap-4">
-                    <div className="flex-shrink-0 w-12 h-12 rounded-full bg-blue-100 border-2 border-blue-300 flex items-center justify-center">
-                      <svg className="w-6 h-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-bold text-gray-900">Save Marks — {selectedCourse.course_code}</h3>
-                      <p className="text-sm text-gray-600 mt-1">{filledCount} / {totalStudents} students fully filled</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Summary */}
-                <div className="px-6 py-4 max-h-80 overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-2 text-xs font-semibold text-gray-600 uppercase">Student</th>
-                        <th className="text-center py-2 text-xs font-semibold text-gray-600 uppercase">Components</th>
-                        <th className="text-center py-2 text-xs font-semibold text-gray-600 uppercase">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {summary.map(({ student, total, missing }) => (
-                        <tr key={student.student_id} className={missing > 0 ? 'bg-yellow-50' : ''}>
-                          <td className="py-2 pr-4">
-                            <div className="font-medium text-gray-800 text-xs">{student.student_name}</div>
-                            <div className="text-xs text-gray-400">{student.enrollment_no || student.register_no || ''}</div>
-                          </td>
-                          <td className="py-2 text-center text-xs text-gray-600">{total - missing} / {total} filled</td>
-                          <td className="py-2 text-center">
-                            {missing === 0 ? (
-                              <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700">
-                                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
-                                Complete
-                              </span>
-                            ) : (
-                              <span className="text-xs font-semibold text-yellow-600">{missing} missing</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Dialog Footer */}
-                <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
-                  <button
-                    onClick={() => setShowSaveDialog(false)}
-                    className="px-5 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleConfirmSave}
-                    disabled={savingMarks}
-                    className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {savingMarks ? 'Saving...' : 'Confirm Save'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )
-        })()}
-
         {/* Submit Confirmation Dialog */}
         {showSubmitDialog && (() => {
           const summary = buildSubmitSummary()
@@ -974,18 +1080,28 @@ function MarkEntryPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {summary.map(({ student, total, missing }) => (
-                        <tr key={student.student_id} className={missing > 0 ? 'bg-yellow-50' : ''}>
+                      {summary.map(({ student, total, missing, absent }) => (
+                        <tr key={student.student_id} className={missing > 0 ? 'bg-yellow-50' : absent > 0 ? 'bg-orange-50' : ''}>
                           <td className="py-2 pr-4">
                             <div className="font-medium text-gray-800 text-xs">{student.student_name}</div>
                             <div className="text-xs text-gray-400">{student.enrollment_no || student.register_no || ''}</div>
                           </td>
-                          <td className="py-2 text-center text-xs text-gray-600">{total - missing} / {total} filled</td>
+                          <td className="py-2 text-center text-xs text-gray-600">
+                            {total - missing - absent} / {total} filled
+                            {absent > 0 && (
+                              <span className="ml-1 text-orange-600">({absent} absent)</span>
+                            )}
+                          </td>
                           <td className="py-2 text-center">
-                            {missing === 0 ? (
+                            {missing === 0 && absent === 0 ? (
                               <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700">
                                 <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
                                 Complete
+                              </span>
+                            ) : missing === 0 && absent > 0 ? (
+                              <span className="inline-flex items-center gap-1 text-xs font-semibold text-orange-600">
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+                                Absent
                               </span>
                             ) : (
                               <span className="text-xs font-semibold text-yellow-600">{missing} missing</span>

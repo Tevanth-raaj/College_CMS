@@ -1,11 +1,14 @@
 package curriculum
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
 	"server/db"
 	"server/models"
+	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -187,10 +190,17 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT 
 			ca.id, ca.course_id, c.course_code, c.course_name, ct.course_type, 
-			c.credit, COALESCE(c.category, 'General')
+			c.credit, COALESCE(c.category, 'General'),
+			cc.curriculum_id, nc.semester_number,
+			cur.name as curriculum_name,
+			dc.department_id
 		FROM teacher_course_allocation ca
 		JOIN courses c ON ca.course_id = c.id
 		LEFT JOIN course_type ct ON c.course_type = ct.id
+		LEFT JOIN curriculum_courses cc ON c.id = cc.course_id
+		LEFT JOIN normal_cards nc ON cc.semester_id = nc.id
+		LEFT JOIN curriculum cur ON cc.curriculum_id = cur.id
+		LEFT JOIN department_curriculum dc ON cur.id = dc.curriculum_id
 		WHERE ca.teacher_id = ?
 		ORDER BY c.course_code
 	`
@@ -210,15 +220,30 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		LearningModeID *int   `json:"learning_mode_id"`
 	}
 
+	type MarkEntryWindow struct {
+		ID             int       `json:"id"`
+		DepartmentName string    `json:"department_name"`
+		Semester       *int      `json:"semester"`
+		StartAt        time.Time `json:"start_at"`
+		EndAt          time.Time `json:"end_at"`
+		ComponentNames []string  `json:"component_names"`
+	}
+
 	type TeacherCourse struct {
-		ID          int                 `json:"id"`
-		CourseID    int                 `json:"course_id"`
-		CourseCode  string              `json:"course_code"`
-		CourseName  string              `json:"course_name"`
-		CourseType  string              `json:"course_type"`
-		Credit      int                 `json:"credit"`
-		Category    string              `json:"category"`
-		Enrollments []StudentEnrollment `json:"enrollments"`
+		ID             int                 `json:"id"`
+		CourseID       int                 `json:"course_id"`
+		CourseCode     string              `json:"course_code"`
+		CourseName     string              `json:"course_name"`
+		CourseType     string              `json:"course_type"`
+		Credit         int                 `json:"credit"`
+		Category       string              `json:"category"`
+		CurriculumID   *int                `json:"curriculum_id"`
+		Semester       *int                `json:"semester"`
+		CurriculumName string              `json:"curriculum_name"`
+		DepartmentID   *int                `json:"department_id"`
+		Enrollments    []StudentEnrollment `json:"enrollments"`
+		HasWindow      bool                `json:"has_window"`
+		Window         *MarkEntryWindow    `json:"window"`
 	}
 
 	var courses []TeacherCourse
@@ -226,14 +251,169 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	courseCount := 0
 	for rows.Next() {
 		var course TeacherCourse
+		var curriculumID, semester, departmentID sql.NullInt64
+		var curriculumName sql.NullString
 		err := rows.Scan(&course.ID, &course.CourseID, &course.CourseCode, &course.CourseName,
-			&course.CourseType, &course.Credit, &course.Category)
+			&course.CourseType, &course.Credit, &course.Category,
+			&curriculumID, &semester, &curriculumName, &departmentID)
 		if err != nil {
 			log.Printf("Error scanning course row: %v", err)
 			continue
 		}
+		if curriculumID.Valid {
+			id := int(curriculumID.Int64)
+			course.CurriculumID = &id
+		}
+		if semester.Valid {
+			sem := int(semester.Int64)
+			course.Semester = &sem
+		}
+		if curriculumName.Valid {
+			course.CurriculumName = curriculumName.String
+		}
+		if departmentID.Valid {
+			deptId := int(departmentID.Int64)
+			course.DepartmentID = &deptId
+		}
 		courseCount++
-		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s", courseCount, course.CourseID, course.CourseCode, course.CourseName)
+		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s, Dept=%v, Sem=%v", courseCount, course.CourseID, course.CourseCode, course.CourseName, course.DepartmentID, course.Semester)
+
+		// Check if there's an active mark entry window for this course
+		windowOpen, windowIDs, windowComponents, err := resolveMarkEntryWindow(course.CourseID, facultyID)
+		if err != nil {
+			log.Printf("Error checking mark entry window for course %d: %v", course.CourseID, err)
+		} else if windowOpen && len(windowIDs) > 0 {
+			course.HasWindow = true
+
+			// Fetch full window details from the first window (for display)
+			windowID := windowIDs[0]
+			var startAt, endAt time.Time
+			var deptName sql.NullString
+			var semester sql.NullInt64
+			windowQuery := `
+				SELECT w.start_at, w.end_at, d.department_name, w.semester
+				FROM mark_entry_windows w
+				LEFT JOIN departments d ON w.department_id = d.id
+				WHERE w.id = ?
+			`
+			err := db.DB.QueryRow(windowQuery, windowID).Scan(&startAt, &endAt, &deptName, &semester)
+
+			// If multiple windows, find the widest time range
+			if err == nil && len(windowIDs) > 1 {
+				for _, wid := range windowIDs[1:] {
+					var s, e time.Time
+					var dn sql.NullString
+					var sem sql.NullInt64
+					if err2 := db.DB.QueryRow(windowQuery, wid).Scan(&s, &e, &dn, &sem); err2 == nil {
+						if s.Before(startAt) {
+							startAt = s
+						}
+						if e.After(endAt) {
+							endAt = e
+						}
+					}
+				}
+			}
+			if err != nil {
+				log.Printf("Error fetching window details for window %d: %v", windowID, err)
+			} else {
+				windowDetails := &MarkEntryWindow{
+					ID:      windowID,
+					StartAt: startAt,
+					EndAt:   endAt,
+				}
+				if deptName.Valid {
+					windowDetails.DepartmentName = deptName.String
+				}
+				if semester.Valid {
+					sem := int(semester.Int64)
+					windowDetails.Semester = &sem
+				}
+
+				// Fetch component names from mark_category_types
+				if len(windowComponents) > 0 {
+					componentNames := []string{}
+					seenPT1 := false
+					seenPT2 := false
+
+					log.Printf("Processing %d window components for course %s", len(windowComponents), course.CourseCode)
+
+					for _, compID := range windowComponents {
+						var name string
+						compQuery := `SELECT name FROM mark_category_types WHERE id = ?`
+						err := db.DB.QueryRow(compQuery, compID).Scan(&name)
+						if err == nil {
+							log.Printf("Component ID %d: name = '%s'", compID, name)
+
+							// Normalize for comparison
+							nameUpper := strings.ToUpper(strings.TrimSpace(name))
+
+							// Check for "Periodical Test 1" or "PT-1" or "PT - 1" or "PT 1"
+							// Examples: "Periodical Test 1 -> CO - 1", "PT - 1 - CO 1", "PT-1-CO1", etc.
+							isPT1 := strings.Contains(nameUpper, "PERIODICAL TEST 1") ||
+								strings.Contains(nameUpper, "PERIODICALTEST1") ||
+								(strings.Contains(nameUpper, "PERIODICAL") && strings.Contains(nameUpper, "TEST") && strings.Contains(nameUpper, "1") && !strings.Contains(nameUpper, "2"))
+
+							// Also check for PT-1 format
+							if !isPT1 {
+								normalized := strings.ReplaceAll(nameUpper, " ", "")
+								isPT1 = strings.HasPrefix(normalized, "PT-1") || strings.HasPrefix(normalized, "PT1")
+							}
+
+							if isPT1 {
+								if !seenPT1 {
+									componentNames = append(componentNames, "PT - 1")
+									seenPT1 = true
+									log.Printf("✓ Grouped as PT - 1")
+								} else {
+									log.Printf("✓ Skipped duplicate PT - 1")
+								}
+								continue
+							}
+
+							// Check for "Periodical Test 2" or "PT-2" or "PT - 2" or "PT 2"
+							isPT2 := strings.Contains(nameUpper, "PERIODICAL TEST 2") ||
+								strings.Contains(nameUpper, "PERIODICALTEST2") ||
+								(strings.Contains(nameUpper, "PERIODICAL") && strings.Contains(nameUpper, "TEST") && strings.Contains(nameUpper, "2"))
+
+							// Also check for PT-2 format
+							if !isPT2 {
+								normalized := strings.ReplaceAll(nameUpper, " ", "")
+								isPT2 = strings.HasPrefix(normalized, "PT-2") || strings.HasPrefix(normalized, "PT2")
+							}
+
+							if isPT2 {
+								if !seenPT2 {
+									componentNames = append(componentNames, "PT - 2")
+									seenPT2 = true
+									log.Printf("✓ Grouped as PT - 2")
+								} else {
+									log.Printf("✓ Skipped duplicate PT - 2")
+								}
+								continue
+							}
+
+							// For all other components, show the full name
+							componentNames = append(componentNames, name)
+							log.Printf("→ Added full name: '%s'", name)
+						} else {
+							log.Printf("Error fetching component name for ID %d: %v", compID, err)
+						}
+					}
+
+					log.Printf("Final component names for course %s: %v", course.CourseCode, componentNames)
+					windowDetails.ComponentNames = componentNames
+				} else {
+					windowDetails.ComponentNames = []string{}
+				}
+
+				course.Window = windowDetails
+				log.Printf("Window details for course %s: ID=%d, Start=%s, End=%s, Components=%v",
+					course.CourseCode, windowID, startAt, endAt, windowDetails.ComponentNames)
+			}
+		} else {
+			course.HasWindow = false
+		}
 
 		// Fetch allocated students for this course and teacher
 		studentQuery := `
