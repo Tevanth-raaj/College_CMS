@@ -90,8 +90,8 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		FROM teacher_course_tracking
 		WHERE window_start IS NOT NULL
 		AND window_end IS NOT NULL
-		AND window_start <= DATE(NOW())
-		AND window_end >= DATE(NOW())
+		AND DATE(window_start) <= DATE(NOW())
+		AND DATE(window_end) >= DATE(NOW())
 	`).Scan(&activeCount)
 	if err != nil {
 		log.Printf("❌ Failed to check active windows: %v", err)
@@ -113,7 +113,7 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		SELECT academic_year, COALESCE(current_semester_type, 'even') as semester_type, window_start, window_end
 		FROM teacher_course_tracking
 		WHERE window_end IS NOT NULL
-		AND window_end < DATE(NOW())
+		AND DATE(window_end) < DATE(NOW())
 		ORDER BY window_end DESC
 		LIMIT 1
 	`).Scan(&windowAcademicYear, &currentSemesterType, &windowStart, &windowEnd)
@@ -176,26 +176,70 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 	log.Printf("\n🚀 STARTING AUTO ALLOCATION")
 	log.Printf("   Allocating for semesters: %v in %s (extra courses year: %s)", semestersToAllocate, allocationYear, extraCourseYear)
 
-	// Step 0: Fetch Active Teacher Preferences globally
-	prefRows, err := db.DB.Query(`SELECT teacher_id, course_id FROM teacher_course_preferences WHERE is_active = 1`)
+	// Step 0: Fetch Active Teacher Preferences globally, keyed by faculty_id.
+	// teacher_course_preferences.teacher_id stores faculty_id (varchar) directly.
+	// Scoped to the closed window's academic_year + current_semester_type so preferences from
+	// previous or future windows don't bleed in.
+	prefRows, err := db.DB.Query(`
+		SELECT tcp.teacher_id, tcp.course_id
+		FROM teacher_course_preferences tcp
+		WHERE tcp.is_active = 1
+		  AND tcp.academic_year = ?
+		  AND tcp.current_semester_type = ?
+	`, allocationYear, currentSemesterType)
 	teacherPrefs := make(map[string]map[string]bool)
 	if err == nil {
 		defer prefRows.Close()
 		for prefRows.Next() {
-			var tID, cID string
-			if err := prefRows.Scan(&tID, &cID); err == nil {
-				if teacherPrefs[tID] == nil {
-					teacherPrefs[tID] = make(map[string]bool)
+			var facultyID, cID string
+			if err := prefRows.Scan(&facultyID, &cID); err == nil {
+				if teacherPrefs[facultyID] == nil {
+					teacherPrefs[facultyID] = make(map[string]bool)
 				}
-				teacherPrefs[tID][cID] = true
+				teacherPrefs[facultyID][cID] = true
 			}
 		}
 	} else {
 		log.Printf("⚠️  Could not fetch preferences: %v", err)
 	}
+	log.Printf("   Loaded preferences for %d teachers (allocationYear: %s, semType: %s)", len(teacherPrefs), allocationYear, currentSemesterType)
 
 	allocationResults := []map[string]interface{}{}
 	allAllocatedCourses := []CourseAllocationDetail{}
+
+	// Step 0.5: Snapshot current teacher_course_limits into teacher_course_history
+	// with record_type='limit' for this window. This is the source of truth for
+	// exports after the limits table is reset to 0 post-allocation.
+	log.Printf("📸 Snapshotting teacher limits into history for window %s → %s (%s %s)",
+		windowStart.Format("2006-01-02"), windowEnd.Format("2006-01-02"), allocationYear, targetSemesterType)
+
+	snapshotResult, snapshotErr := db.DB.Exec(`
+		INSERT INTO teacher_course_history
+			(teacher_id, course_type_id, max_count, allocated_count,
+			 window_start, window_end, semester_type, academic_year, record_type, created_at)
+		SELECT
+			tcl.teacher_id,
+			tcl.course_type_id,
+			tcl.max_count,
+			0,
+			?, ?, ?, ?, 'limit', NOW()
+		FROM teacher_course_limits tcl
+		WHERE NOT EXISTS (
+			SELECT 1 FROM teacher_course_history h
+			WHERE h.teacher_id  = tcl.teacher_id
+			  AND h.course_type_id = tcl.course_type_id
+			  AND h.window_start   = ?
+			  AND h.window_end     = ?
+			  AND h.record_type    = 'limit'
+		)
+	`, windowStart, windowEnd, targetSemesterType, allocationYear,
+		windowStart, windowEnd)
+	if snapshotErr != nil {
+		log.Printf("⚠️  Could not snapshot limits into history: %v", snapshotErr)
+	} else {
+		snapshotCount, _ := snapshotResult.RowsAffected()
+		log.Printf("   ✅ Snapshotted %d limit rows into teacher_course_history", snapshotCount)
+	}
 
 	// Step 1: Get all departments that have a current_curriculum_id set.
 	// departments.current_curriculum_id is the direct FK → curriculum.id
@@ -244,13 +288,14 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		coreQuery := fmt.Sprintf(`
 			SELECT DISTINCT
 				c.id, c.course_code, c.course_name,
-				COALESCE(c.course_type, 1) AS course_type_id,
+				COALESCE(ctype.id, 1) AS course_type_id,
 				COALESCE(sc_counts.student_count, 0) AS student_count
 			FROM curriculum_courses cc
 			JOIN normal_cards nc ON nc.id = cc.semester_id
 			JOIN courses c ON c.id = cc.course_id
 			INNER JOIN curriculum cur ON cur.id = nc.curriculum_id
 			INNER JOIN departments d ON d.current_curriculum_id = cur.id
+			LEFT JOIN course_type ctype ON ctype.course_type = c.course_type
 			LEFT JOIN (
 				SELECT sc.course_id, COUNT(DISTINCT s.id) AS student_count
 				FROM student_courses sc
@@ -266,7 +311,7 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 			        'PE - Professional Elective', 'OE - Open Elective',
 			        'Elective', 'Open Elective', 'Honour', 'Minor', 'Addon'
 			      )
-			GROUP BY c.id, c.course_code, c.course_name, c.course_type
+			GROUP BY c.id, c.course_code, c.course_name, c.course_type, ctype.id
 			ORDER BY c.course_code
 		`, semInClause)
 		coreArgs := make([]interface{}, 0, 2+len(semArgs))
@@ -293,15 +338,16 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		extraQuery := fmt.Sprintf(`
 			SELECT
 				c.id, c.course_code, c.course_name,
-				COALESCE(c.course_type, 1) AS course_type_id,
+				COALESCE(ctype.id, 1) AS course_type_id,
 				COUNT(DISTINCT sec.student_id) AS student_count
 			FROM hod_elective_selections hes
 			JOIN courses c ON c.id = hes.course_id
+			LEFT JOIN course_type ctype ON ctype.course_type = c.course_type
 			LEFT JOIN student_elective_choices sec ON sec.hod_selection_id = hes.id
 			WHERE hes.department_id = ?
 			  AND hes.semester IN %s
 			  AND hes.academic_year = ?
-			GROUP BY hes.id, c.id, c.course_code, c.course_name, c.course_type
+			GROUP BY hes.id, c.id, c.course_code, c.course_name, c.course_type, ctype.id
 			HAVING COUNT(DISTINCT sec.student_id) > 0
 			ORDER BY c.course_code
 		`, semInClause)
@@ -328,13 +374,20 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Fetch Teachers
+		// Only include teachers who submitted active preferences for this exact window
+		// (matching academic_year + current_semester_type). Teachers from other cycles
+		// or who never submitted preferences are excluded.
+		// teacher_course_preferences.teacher_id stores faculty_id (varchar).
 		teacherRows, err := db.DB.Query(`
 			SELECT DISTINCT t.id, t.faculty_id, t.name
 			FROM teachers t
+			INNER JOIN teacher_course_preferences tcp ON tcp.teacher_id = t.faculty_id
+				AND tcp.is_active = 1
+				AND tcp.academic_year = ?
+				AND tcp.current_semester_type = ?
 			WHERE t.dept = ? AND t.status = 1
 			ORDER BY t.faculty_id
-		`, deptID)
+		`, allocationYear, currentSemesterType, deptID)
 		
 		if err != nil {
 			continue
@@ -360,50 +413,49 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Fetch teacher limits from teacher_course_history WHERE record_type='limit'.
-		// Use windowAcademicYear — that is when teachers submitted their limits.
-		// allocationYear may differ (e.g. odd window → even sems allocated in next year).
-		// Ordered by created_at DESC so we take the most recent limit per course_type.
-		teacherLimits := make(map[string]map[int]int)     // [faculty_id][course_type_id] = max_count
-		teacherAllocations := make(map[string]map[int]int) // [faculty_id][course_type_id] = allocated_count
+		// Fetch teacher limits from teacher_course_limits — the LIVE table where
+		// teachers submit their per-type max counts during the selection window.
+		// A snapshot of these values has already been written to teacher_course_history
+		// (record_type='limit') above, so exports continue to work after the limits
+		// table is reset to 0 post-allocation.
+		teacherLimits := make(map[string]map[int]int)      // [faculty_id][course_type_id] = max_count
+		teacherAllocations := make(map[string]map[int]int) // [faculty_id][course_type_id] = allocated so far
 
 		for _, facultyID := range teacherList {
 			limitRows, limitErr := db.DB.Query(`
 				SELECT course_type_id, max_count
-				FROM teacher_course_history
+				FROM teacher_course_limits
 				WHERE teacher_id = ?
-				  AND record_type = 'limit'
-				  AND academic_year = ?
-				ORDER BY course_type_id, created_at DESC
-			`, facultyID, windowAcademicYear)
+				ORDER BY course_type_id
+			`, facultyID)
 
 			if limitErr == nil {
-				seenType := make(map[int]bool)
 				for limitRows.Next() {
 					var courseTypeID, maxCount int
 					if err := limitRows.Scan(&courseTypeID, &maxCount); err == nil {
-						if seenType[courseTypeID] {
-							continue // already captured the latest row for this type
-						}
-						seenType[courseTypeID] = true
 						if teacherLimits[facultyID] == nil {
 							teacherLimits[facultyID] = make(map[int]int)
 							teacherAllocations[facultyID] = make(map[int]int)
 						}
 						teacherLimits[facultyID][courseTypeID] = maxCount
 						teacherAllocations[facultyID][courseTypeID] = 0
-						log.Printf("   📊 Teacher %s - Year %s - Type %d: Limit=%d", facultyID, windowAcademicYear, courseTypeID, maxCount)
+						log.Printf("   📊 Teacher %s - Type %d: Limit=%d", facultyID, courseTypeID, maxCount)
 					}
 				}
 				limitRows.Close()
 			}
 
-			// If teacher has no limit records at all, give a default capacity of 3 per type
-			// so allocation isn't completely blocked for teachers who haven't set limits yet.
+			// If teacher has no limit records at all, treat all limits as 0 — skip allocation.
 			if teacherLimits[facultyID] == nil {
-				teacherLimits[facultyID] = map[int]int{1: 3, 2: 3, 3: 3}
+				teacherLimits[facultyID] = map[int]int{1: 0, 2: 0, 3: 0}
 				teacherAllocations[facultyID] = map[int]int{1: 0, 2: 0, 3: 0}
-				log.Printf("   📊 Teacher %s - no limits set, using default capacity 3 per type", facultyID)
+				log.Printf("   ⛔ Teacher %s - NO limit records found in teacher_course_limits (0 for all types), will be SKIPPED", facultyID)
+			} else {
+				log.Printf("   📊 Teacher %s limits: theory=%d, lab=%d, theory_with_lab=%d",
+					facultyID,
+					teacherLimits[facultyID][1],
+					teacherLimits[facultyID][2],
+					teacherLimits[facultyID][3])
 			}
 		}
 		
@@ -413,8 +465,9 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 				if limit, exists := limits[courseTypeID]; exists {
 					return limit
 				}
-				// Limit record exists for this teacher but not this type — use default
-				return 3
+				// Teacher has records but not for this type →
+				// they didn't volunteer for this type, treat as 0.
+				return 0
 			}
 			return 0
 		}
@@ -481,8 +534,12 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 			course := &courses[courseIdx]
 			courseStrID := fmt.Sprintf("%d", course.CourseID)
 			remainingSlots := course.RequiredTeachers - len(course.AllocatedTeachers)
+			if remainingSlots > 0 {
+				log.Printf("   [1B] %s (type %d): need %d more teachers", course.CourseCode, course.CourseTypeID, remainingSlots)
+			}
 
 			for j := 0; j < remainingSlots; j++ {
+				slotFilled := false
 				for _, facultyID := range teacherList {
 					teacher := teachers[facultyID]
 					
@@ -505,10 +562,15 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 								teacherAllocations[facultyID] = make(map[int]int)
 							}
 							teacherAllocations[facultyID][course.CourseTypeID]++
-							log.Printf("   ⭐ Preference Allocated %s to %s (Type: %d, Limit: %d)", course.CourseCode, facultyID, course.CourseTypeID, teacherLimit)
+							log.Printf("   ⭐ [1B] Preference Allocated %s to %s (Type: %d, Limit: %d)", course.CourseCode, facultyID, course.CourseTypeID, teacherLimit)
+							slotFilled = true
 							break
 						}
 					}
+				}
+				if !slotFilled {
+					log.Printf("   ⚠️  [1B] No preferred teacher with capacity for slot %d of %s (type %d)", j+1, course.CourseCode, course.CourseTypeID)
+					break // no point trying further slots if no one has capacity
 				}
 			}
 		}
@@ -573,24 +635,41 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 	// ==========================================
 	// CLEANUP: Preferences & Limits
 	// ==========================================
-	log.Printf("🧹 Cleaning up preferences and resetting limits to 0...")
+	if saveSuccess > 0 {
+		log.Printf("🧹 Cleaning up preferences and resetting limits to 0...")
 
-	// 1. Deactivate utilized preferences
-	db.DB.Exec(`UPDATE teacher_course_preferences SET is_active = 0 WHERE is_active = 1`)
+		// Collect faculty IDs that were actually allocated
+		allocatedFacultyIDs := make(map[string]bool)
+		for _, course := range allAllocatedCourses {
+			for _, teacherMap := range course.AllocatedTeachers {
+				if fid, ok := teacherMap["faculty_id"].(string); ok {
+					allocatedFacultyIDs[fid] = true
+				}
+			}
+		}
 
-	// 2. Set limits to 0 for course types 1, 2, 3 and insert missing limits as 0
-	db.DB.Exec(`
-		INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count, academic_year, updated_at)
-		SELECT t.faculty_id, ct.course_type_id, 0, ?, NOW()
-		FROM teachers t
-		CROSS JOIN (
-			SELECT 1 AS course_type_id
-			UNION ALL SELECT 2
-			UNION ALL SELECT 3
-		) ct
-		WHERE t.status = 1
-		ON DUPLICATE KEY UPDATE max_count = 0, updated_at = NOW()
-	`, allocationYear)
+		// 1. Deactivate ONLY the preferences of teachers who were allocated
+		for fid := range allocatedFacultyIDs {
+			db.DB.Exec(`UPDATE teacher_course_preferences SET is_active = 0 WHERE teacher_id = ? AND is_active = 1`, fid)
+		}
+		log.Printf("   Deactivated preferences for %d allocated teachers", len(allocatedFacultyIDs))
+
+		// 2. Set limits to 0 for course types 1, 2, 3 and insert missing limits as 0
+		db.DB.Exec(`
+			INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count, academic_year, updated_at)
+			SELECT t.faculty_id, ct.course_type_id, 0, ?, NOW()
+			FROM teachers t
+			CROSS JOIN (
+				SELECT 1 AS course_type_id
+				UNION ALL SELECT 2
+				UNION ALL SELECT 3
+			) ct
+			WHERE t.status = 1
+			ON DUPLICATE KEY UPDATE max_count = 0, updated_at = NOW()
+		`, allocationYear)
+	} else {
+		log.Printf("⚠️  No allocations saved — skipping preference/limit cleanup to preserve data for retry")
+	}
 
 	executionTime := time.Since(startTime).Seconds()
 	log.Printf("✅ AUTO ALLOCATION COMPLETE (Time: %.2f seconds)\n", executionTime)

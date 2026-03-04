@@ -32,7 +32,7 @@ func StartAllocationScheduler() {
 func checkAndRunAllocations() {
 	log.Printf("⏰ [%s] Checking for closed teacher selection windows...", time.Now().Format("2006-01-02 15:04:05"))
 
-	// Skip if any window is currently active
+	// Skip if any window is currently active (end date is today or future)
 	var activeCount int
 	err := db.DB.QueryRow(`
 		SELECT COUNT(*)
@@ -40,8 +40,8 @@ func checkAndRunAllocations() {
 		WHERE is_active = 1
 		AND window_start IS NOT NULL
 		AND window_end IS NOT NULL
-		AND window_start <= DATE(NOW())
-		AND window_end >= DATE(NOW())
+		AND DATE(window_start) <= DATE(NOW())
+		AND DATE(window_end) >= DATE(NOW())
 	`).Scan(&activeCount)
 	if err != nil {
 		log.Printf("⚠️  Failed to check active windows: %v", err)
@@ -52,13 +52,13 @@ func checkAndRunAllocations() {
 		return
 	}
 
-	// Find the most recent closed window (that is still active)
+	// Find the most recent closed window (end date strictly before today)
 	query := `
 		SELECT academic_year, current_semester_type, window_start, window_end
 		FROM teacher_course_tracking
 		WHERE is_active = 1
 		AND window_end IS NOT NULL
-		AND window_end < DATE(NOW())
+		AND DATE(window_end) < DATE(NOW())
 		ORDER BY window_end DESC
 		LIMIT 1
 	`

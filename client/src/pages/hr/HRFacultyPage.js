@@ -105,7 +105,7 @@ const HRFacultyPage = () => {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            faculty_id: String(selectedFaculty.id),
+            faculty_id: selectedFaculty.faculty_id,
             course_limits: courseLimits
           })
         }
@@ -246,7 +246,7 @@ const HRFacultyPage = () => {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                faculty_id: String(f.id),
+                faculty_id: f.faculty_id,
                 course_limits: limits
               })
             }

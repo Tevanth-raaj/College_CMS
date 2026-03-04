@@ -397,9 +397,14 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if current time is within window range
+	// Extend window_end to end-of-day (23:59:59) in the stored time's own timezone,
+	// so a date-only value like "2026-03-04 00:00:00 IST" becomes "2026-03-04 23:59:59 IST"
 	now := time.Now()
-	if now.Before(windowStart.Time) || now.After(windowEnd.Time) {
-		log.Printf("[SAVE_VALIDATION] Outside window dates - now: %v, start: %v, end: %v", now, windowStart.Time, windowEnd.Time)
+	weLoc := windowEnd.Time.Location()
+	weYear, weMonth, weDay := windowEnd.Time.In(weLoc).Date()
+	windowEndEOD := time.Date(weYear, weMonth, weDay, 23, 59, 59, 999999999, weLoc)
+	if now.Before(windowStart.Time) || now.After(windowEndEOD) {
+		log.Printf("[SAVE_VALIDATION] Outside window dates - now: %v, start: %v, end (EOD): %v", now, windowStart.Time, windowEndEOD)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -409,7 +414,7 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	log.Printf("[SAVE_VALIDATION] Window is active and dates valid - now: %v (between %v and %v)", now, windowStart.Time, windowEnd.Time)
+	log.Printf("[SAVE_VALIDATION] Window is active and dates valid - now: %v (between %v and %v)", now, windowStart.Time, windowEndEOD)
 
 	// Convert numeric teacher ID to alphanumeric faculty_id for teacher_course_limits query
 	var facultyID string

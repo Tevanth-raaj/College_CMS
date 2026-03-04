@@ -45,8 +45,8 @@ func GetTeacherCourseWindow(w http.ResponseWriter, r *http.Request) {
 			AND is_active = 1
 			AND window_start IS NOT NULL
 			AND window_end IS NOT NULL
-			AND window_start <= CURDATE()
-			AND window_end >= CURDATE()
+			AND DATE(window_start) <= CURDATE()
+			AND DATE(window_end) >= CURDATE()
 			ORDER BY updated_at DESC, id DESC
 			LIMIT 1
 		`, academicYear).Scan(&windowStart, &windowEnd, &currentSemesterType)
@@ -68,8 +68,8 @@ func GetTeacherCourseWindow(w http.ResponseWriter, r *http.Request) {
 			WHERE academic_year = ?
 			AND window_start IS NOT NULL
 			AND window_end IS NOT NULL
-			AND window_start <= CURDATE()
-			AND window_end >= CURDATE()
+			AND DATE(window_start) <= CURDATE()
+			AND DATE(window_end) >= CURDATE()
 			ORDER BY updated_at DESC, id DESC
 			LIMIT 1
 		`, academicYear).Scan(&windowStart, &windowEnd, &currentSemesterType)
@@ -126,13 +126,13 @@ func GetTeacherCourseWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if windowStart.Valid {
-		response["window_start"] = windowStart.Time.Format("2006-01-02")
+		response["window_start"] = windowStart.Time.Local().Format("2006-01-02")
 	} else {
 		response["window_start"] = nil
 	}
 
 	if windowEnd.Valid {
-		response["window_end"] = windowEnd.Time.Format("2006-01-02")
+		response["window_end"] = windowEnd.Time.Local().Format("2006-01-02")
 	} else {
 		response["window_end"] = nil
 	}
