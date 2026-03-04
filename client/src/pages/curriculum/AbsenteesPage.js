@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import * as XLSX from 'xlsx'
 import { API_BASE_URL } from '../../config'
 
 const LEARNING_MODES = [
@@ -199,6 +200,17 @@ function AbsenteesContent() {
   const canPreview = file && selectedGroupIds && step === 'idle'
   const canConfirm = step === 'previewing' && previewRows.length > 0
 
+  const handleDownloadTemplate = () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['exam_id', 'course_id', 'student_id'],
+    ])
+    // Set column widths for readability
+    ws['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 16 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Absentees Template')
+    XLSX.writeFile(wb, 'exam_absentees_report.xlsx')
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       {/* ── header ── */}
@@ -211,7 +223,18 @@ function AbsenteesContent() {
 
       {/* ── Upload card ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
-        <h2 className="text-base font-semibold text-gray-800 mb-5">Upload Absentees</h2>
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-base font-semibold text-gray-800">Upload Absentees</h2>
+          <button
+            onClick={handleDownloadTemplate}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200 rounded-lg transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Download Template
+          </button>
+        </div>
 
         {/* Controls row */}
         <div className="flex flex-wrap items-end gap-6">
@@ -358,23 +381,70 @@ function AbsenteesContent() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
-                    {previewRows.map((row, idx) => (
-                      <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-4 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
-                        <td className="px-4 py-2.5 font-mono text-gray-700">{row.exam_id}</td>
-                        <td className="px-4 py-2.5">
-                          <div className="font-medium text-gray-800">{row.course_code}</div>
-                          <div className="text-xs text-gray-400">{row.course_name}</div>
-                        </td>
-                        <td className="px-4 py-2.5 text-gray-700">{row.student_name}</td>
-                        <td className="px-4 py-2.5 font-mono text-gray-600 text-xs">{row.register_no}</td>
-                        <td className="px-4 py-2.5">
-                          <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
-                            {row.category_name}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      // Group preview rows by student + course + PT type
+                      const groupMap = new Map()
+
+                      previewRows.forEach(row => {
+                        const nameUpper = (row.category_name || '').toUpperCase()
+                        
+                        // Detect PT-2 first to avoid false matches with PT-1
+                        const isPT2 = nameUpper.includes('PERIODICAL TEST 2') ||
+                                      nameUpper.includes('PERIODICALTEST2') ||
+                                      nameUpper.includes('TEST 2') ||
+                                      (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*2/))
+                        
+                        // Detect PT-1 variants (exclude PT-2)
+                        const isPT1 = !isPT2 && (
+                                      nameUpper.includes('PERIODICAL TEST 1') ||
+                                      nameUpper.includes('PERIODICALTEST1') ||
+                                      nameUpper.includes('TEST 1') ||
+                                      (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*1/))
+                                    )
+                        
+                        let groupKey
+                        let displayName
+                        
+                        if (isPT1) {
+                          groupKey = `${row.register_no}_${row.course_code}_PT1`
+                          displayName = 'PT - 1'
+                        } else if (isPT2) {
+                          groupKey = `${row.register_no}_${row.course_code}_PT2`
+                          displayName = 'PT - 2'
+                        } else {
+                          // Non-PT components: keep separate
+                          groupKey = `${row.register_no}_${row.course_code}_${row.category_name}`
+                          displayName = row.category_name
+                        }
+
+                        if (!groupMap.has(groupKey)) {
+                          groupMap.set(groupKey, {
+                            ...row,
+                            displayName,
+                          })
+                        }
+                      })
+
+                      const groupedRows = Array.from(groupMap.values())
+
+                      return groupedRows.map((row, idx) => (
+                        <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-4 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
+                          <td className="px-4 py-2.5 font-mono text-gray-700">{row.exam_id}</td>
+                          <td className="px-4 py-2.5">
+                            <div className="font-medium text-gray-800">{row.course_code}</div>
+                            <div className="text-xs text-gray-400">{row.course_name}</div>
+                          </td>
+                          <td className="px-4 py-2.5 text-gray-700">{row.student_name}</td>
+                          <td className="px-4 py-2.5 font-mono text-gray-600 text-xs">{row.register_no}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
+                              {row.displayName}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -457,12 +527,14 @@ function RecordedAbsenteesSection({
         map.set(key, {
           key,
           window_id: a.window_id,
+          window_name: a.window_name || '',
           earliest: a.created_at,
           window_end_at: a.window_end_at || null,
           rows: [],
         })
       }
       const g = map.get(key)
+      if (a.window_name && !g.window_name) g.window_name = a.window_name
       g.rows.push(a)
       if (new Date(a.created_at) < new Date(g.earliest)) g.earliest = a.created_at
       // Keep the latest window_end_at across rows
@@ -522,8 +594,45 @@ function RecordedAbsenteesSection({
               group.rows.map(r => [r.course_id, { code: r.course_code, name: r.course_name }])
             ).values()]
 
-            /* unique components */
-            const componentSet = [...new Set(group.rows.map(r => r.category_name).filter(Boolean))]
+            /* unique components with PT-1/PT-2 grouping */
+            const allComponents = group.rows.map(r => r.category_name).filter(Boolean)
+            const componentSet = (() => {
+              const grouped = []
+              let seenPT1 = false
+              let seenPT2 = false
+
+              allComponents.forEach(name => {
+                const nameUpper = name.toUpperCase()
+                
+                // Detect PT-1 variants (must check PT-2 first to avoid false matches)
+                const isPT2 = nameUpper.includes('PERIODICAL TEST 2') ||
+                              nameUpper.includes('PERIODICALTEST2') ||
+                              nameUpper.includes('TEST 2') ||
+                              (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*2/))
+                
+                const isPT1 = !isPT2 && (
+                              nameUpper.includes('PERIODICAL TEST 1') ||
+                              nameUpper.includes('PERIODICALTEST1') ||
+                              nameUpper.includes('TEST 1') ||
+                              (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*1/))
+                            )
+                
+                if (isPT1 && !seenPT1) {
+                  grouped.push('PT - 1')
+                  seenPT1 = true
+                } else if (isPT2 && !seenPT2) {
+                  grouped.push('PT - 2')
+                  seenPT2 = true
+                } else if (!isPT1 && !isPT2) {
+                  // Only add non-PT components if not already included
+                  if (!grouped.includes(name)) {
+                    grouped.push(name)
+                  }
+                }
+              })
+
+              return grouped
+            })()
 
             /* unique modes */
             const modeSet = [...new Set(group.rows.map(r => r.learning_mode_id))]
@@ -561,6 +670,9 @@ function RecordedAbsenteesSection({
 
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
+                    {group.window_name && (
+                      <p className="text-sm font-semibold text-gray-800 mb-1 truncate">{group.window_name}</p>
+                    )}
                     <div className="flex items-center gap-2 flex-wrap">
                       {isExamOver && (
                         <span className="px-2.5 py-0.5 bg-gray-200 text-gray-600 text-xs font-bold rounded-full uppercase tracking-wide">
@@ -609,59 +721,115 @@ function RecordedAbsenteesSection({
                 </button>
 
                 {/* ── Expanded detail ── */}
-                {isOpen && (
-                  <div className="border-t border-gray-100 px-5 pb-5 pt-4">
-                    <div className="overflow-x-auto rounded-xl border border-gray-200">
-                      <table className="w-full text-sm divide-y divide-gray-200">
-                        <thead className="bg-violet-50">
-                          <tr>
-                            {['#', 'Course', 'Student', 'Register No', 'Component', 'Mode', 'Recorded At', ''].map(h => (
-                              <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-violet-700 uppercase tracking-wider">
-                                {h}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-100">
-                          {group.rows.map((a, idx) => (
-                            <tr key={a.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <td className="px-4 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
-                              <td className="px-4 py-2.5">
-                                <div className="font-medium text-gray-800">{a.course_code}</div>
-                                <div className="text-xs text-gray-400">{a.course_name}</div>
-                              </td>
-                              <td className="px-4 py-2.5 text-gray-700">{a.student_name || '—'}</td>
-                              <td className="px-4 py-2.5 font-mono text-gray-600 text-xs">{a.register_no}</td>
-                              <td className="px-4 py-2.5">
-                                <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
-                                  {a.category_name}
-                                </span>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
-                                  a.learning_mode_id === 2 ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
-                                }`}>
-                                  {a.learning_mode_id === 2 ? 'PBL' : 'UAL'}
-                                </span>
-                              </td>
-                              <td className="px-4 py-2.5 text-gray-400 text-xs">
-                                {new Date(a.created_at).toLocaleString()}
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <button
-                                  onClick={() => handleDelete(a.id)}
-                                  className="text-red-500 hover:text-red-700 text-xs font-medium hover:underline transition-colors"
-                                >
-                                  Remove
-                                </button>
-                              </td>
+                {isOpen && (() => {
+                  // Group rows by student + course + PT type
+                  const groupedRows = []
+                  const groupMap = new Map()
+
+                  group.rows.forEach(row => {
+                    const nameUpper = (row.category_name || '').toUpperCase()
+                    
+                    // Detect PT-2 first to avoid false matches with PT-1
+                    const isPT2 = nameUpper.includes('PERIODICAL TEST 2') ||
+                                  nameUpper.includes('PERIODICALTEST2') ||
+                                  nameUpper.includes('TEST 2') ||
+                                  (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*2/))
+                    
+                    // Detect PT-1 variants (exclude PT-2)
+                    const isPT1 = !isPT2 && (
+                                  nameUpper.includes('PERIODICAL TEST 1') ||
+                                  nameUpper.includes('PERIODICALTEST1') ||
+                                  nameUpper.includes('TEST 1') ||
+                                  (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*1/))
+                                )
+                    
+                    let groupKey
+                    let displayName
+                    
+                    if (isPT1) {
+                      groupKey = `${row.student_id}_${row.course_id}_PT1`
+                      displayName = 'PT - 1'
+                    } else if (isPT2) {
+                      groupKey = `${row.student_id}_${row.course_id}_PT2`
+                      displayName = 'PT - 2'
+                    } else {
+                      // Non-PT components: keep separate
+                      groupKey = `${row.student_id}_${row.course_id}_${row.mark_category_id}`
+                      displayName = row.category_name
+                    }
+
+                    if (!groupMap.has(groupKey)) {
+                      groupMap.set(groupKey, {
+                        ...row,
+                        displayName,
+                        originalIds: [row.id],
+                      })
+                    } else {
+                      // Add this ID to the group for batch deletion
+                      groupMap.get(groupKey).originalIds.push(row.id)
+                    }
+                  })
+
+                  groupedRows.push(...groupMap.values())
+
+                  return (
+                    <div className="border-t border-gray-100 px-5 pb-5 pt-4">
+                      <div className="overflow-x-auto rounded-xl border border-gray-200">
+                        <table className="w-full text-sm divide-y divide-gray-200">
+                          <thead className="bg-violet-50">
+                            <tr>
+                              {['#', 'Course', 'Student', 'Register No', 'Component', 'Mode', 'Recorded At', ''].map(h => (
+                                <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-violet-700 uppercase tracking-wider">
+                                  {h}
+                                </th>
+                              ))}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-100">
+                            {groupedRows.map((a, idx) => (
+                              <tr key={a.originalIds.join('_')} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                <td className="px-4 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
+                                <td className="px-4 py-2.5">
+                                  <div className="font-medium text-gray-800">{a.course_code}</div>
+                                  <div className="text-xs text-gray-400">{a.course_name}</div>
+                                </td>
+                                <td className="px-4 py-2.5 text-gray-700">{a.student_name || '—'}</td>
+                                <td className="px-4 py-2.5 font-mono text-gray-600 text-xs">{a.register_no}</td>
+                                <td className="px-4 py-2.5">
+                                  <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
+                                    {a.displayName}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                                    a.learning_mode_id === 2 ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
+                                  }`}>
+                                    {a.learning_mode_id === 2 ? 'PBL' : 'UAL'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-2.5 text-gray-400 text-xs">
+                                  {new Date(a.created_at).toLocaleString()}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <button
+                                    onClick={() => {
+                                      // Delete all records in this group
+                                      a.originalIds.forEach(id => handleDelete(id))
+                                    }}
+                                    className="text-red-500 hover:text-red-700 text-xs font-medium hover:underline transition-colors"
+                                    title={a.originalIds.length > 1 ? `Remove ${a.originalIds.length} grouped records` : 'Remove'}
+                                  >
+                                    Remove
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )
+                })()}
               </div>
             )
           })}

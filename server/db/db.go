@@ -1261,6 +1261,10 @@ func RemoveNameColumnFromNormalCards() error {
 	// Drop the name column
 	_, err = DB.Exec("ALTER TABLE normal_cards DROP COLUMN name")
 	if err != nil {
+		if mysqlErr, ok := err.(*mysql.MySQLError); ok && mysqlErr.Number == 1091 {
+			log.Println("Name column already removed from normal_cards, skipping")
+			return nil
+		}
 		return fmt.Errorf("failed to drop name column from normal_cards: %w", err)
 	}
 
@@ -1381,5 +1385,37 @@ func AddUserIdToMarkEntryWindows() error {
 	}
 
 	fmt.Println("Successfully added user_id column to mark_entry_windows!")
+	return nil
+}
+
+// AddWindowNameToMarkEntryWindows adds window_name column to mark_entry_windows
+func AddWindowNameToMarkEntryWindows() error {
+	var columnExists bool
+	err := DB.QueryRow(`
+		SELECT COUNT(*) > 0 
+		FROM information_schema.columns 
+		WHERE table_schema = DATABASE() 
+		AND table_name = 'mark_entry_windows' 
+		AND column_name = 'window_name'
+	`).Scan(&columnExists)
+
+	if err != nil {
+		return fmt.Errorf("failed to check if window_name column exists: %w", err)
+	}
+
+	if columnExists {
+		fmt.Println("window_name column already exists in mark_entry_windows")
+		return nil
+	}
+
+	_, err = DB.Exec(`
+		ALTER TABLE mark_entry_windows 
+		ADD COLUMN window_name VARCHAR(500) NULL AFTER enabled
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to add window_name column to mark_entry_windows: %w", err)
+	}
+
+	fmt.Println("Successfully added window_name column to mark_entry_windows!")
 	return nil
 }

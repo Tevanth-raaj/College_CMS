@@ -35,6 +35,7 @@ function MarkEntryPermissionsPage() {
   const [windowEndAt, setWindowEndAt] = useState('')
   const [windowEnabled, setWindowEnabled] = useState(true)
   const [windowLoading, setWindowLoading] = useState(false)
+  const [windowName, setWindowName] = useState('')
   const [windowComponents, setWindowComponents] = useState([])
   const [selectedPBLComponents, setSelectedPBLComponents] = useState([])
   const [selectedUALComponents, setSelectedUALComponents] = useState([])
@@ -62,6 +63,26 @@ function MarkEntryPermissionsPage() {
   })
   const [assignmentLoading, setAssignmentLoading] = useState(false)
   const [userAssignedWindows, setUserAssignedWindows] = useState([])
+
+  // Window Extension States
+  const [pendingWindows, setPendingWindows] = useState([])
+  const [loadingPendingWindows, setLoadingPendingWindows] = useState(false)
+  const [expandedWindowId, setExpandedWindowId] = useState(null)
+  const [closedPendingWindows, setClosedPendingWindows] = useState([])
+  const [loadingClosedWindows, setLoadingClosedWindows] = useState(false)
+  const [expandedClosedWindowId, setExpandedClosedWindowId] = useState(null)
+  const [closedWindowView, setClosedWindowView] = useState({}) // { [windowId]: 'pending' | 'completed' }
+  const [activeWindowView, setActiveWindowView] = useState({}) // { [windowId]: 'pending' | 'completed' }
+
+  // Search/filter state for window lists
+  const [existingWindowSearch, setExistingWindowSearch] = useState('')
+  const [existingUserWindowSearch, setExistingUserWindowSearch] = useState('')
+  const [activePendingSearch, setActivePendingSearch] = useState('')
+  const [closedPendingSearch, setClosedPendingSearch] = useState('')
+  const [selectedTeachers, setSelectedTeachers] = useState({}) // { [windowId]: Set of "teacherId|courseId" }
+  const [extensionModal, setExtensionModal] = useState(null) // { windowId, teachers: [{teacher_id, course_id}] }
+  const [extensionEndDate, setExtensionEndDate] = useState('')
+  const [extensionLoading, setExtensionLoading] = useState(false)
 
   // Check if user has COE or admin role
   useEffect(() => {
@@ -115,6 +136,15 @@ function MarkEntryPermissionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, windowCourseId, learningMode])
 
+  // Fetch pending submissions when extension tab is opened
+  useEffect(() => {
+    if (mainTab === 'extension') {
+      fetchPendingWindows()
+      fetchClosedPendingWindows()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainTab])
+
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (showTeacherDropdown && !event.target.closest('.teacher-search-container')) {
@@ -163,7 +193,10 @@ function MarkEntryPermissionsPage() {
   }, [windowScope, windowDepartmentId, windowSemester])
 
   useEffect(() => {
-    loadWindowRule()
+    // Skip loadWindowRule when editing - editWindow directly populates selections
+    if (!editingWindow) {
+      loadWindowRule()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [windowScope, selectedTeacherId, selectedCourseId, windowDepartmentId, windowSemester, windowCourseId])
 
@@ -427,6 +460,10 @@ function MarkEntryPermissionsPage() {
 
 
   const saveWindowRule = async () => {
+    if (!windowName.trim()) {
+      setMessage({ type: 'error', text: 'Window name is required.' })
+      return
+    }
     if (!windowStartAt || !windowEndAt) {
       setMessage({ type: 'error', text: 'Start and end dates are required.' })
       return
@@ -501,9 +538,16 @@ function MarkEntryPermissionsPage() {
       if (!res.ok) throw new Error('Failed to fetch windows')
       const data = await res.json()
       setExistingWindows(data || [])
+      return data || []
     } catch (error) {
       console.error('Error fetching windows:', error)
+      return []
     }
+  }
+
+  const fetchWindowById = async (windowId) => {
+    const allWindows = await fetchExistingWindows()
+    return (allWindows || []).find((window) => String(window.id) === String(windowId)) || null
   }
 
   const fetchUserAssignedWindows = async () => {
@@ -514,6 +558,111 @@ function MarkEntryPermissionsPage() {
       setUserAssignedWindows(data || [])
     } catch (error) {
       console.error('Error fetching user-assigned windows:', error)
+    }
+  }
+
+  const fetchPendingWindows = async () => {
+    setLoadingPendingWindows(true)
+    try {
+      const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?status=active`)
+      if (!res.ok) throw new Error('Failed to fetch pending submissions')
+      const data = await res.json()
+      setPendingWindows(data || [])
+    } catch (error) {
+      console.error('Error fetching pending submissions:', error)
+      setPendingWindows([])
+    } finally {
+      setLoadingPendingWindows(false)
+    }
+  }
+
+  const fetchClosedPendingWindows = async () => {
+    setLoadingClosedWindows(true)
+    try {
+      const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?status=closed`)
+      if (!res.ok) throw new Error('Failed to fetch closed window submissions')
+      const data = await res.json()
+      setClosedPendingWindows(data || [])
+    } catch (error) {
+      console.error('Error fetching closed window submissions:', error)
+      setClosedPendingWindows([])
+    } finally {
+      setLoadingClosedWindows(false)
+    }
+  }
+
+  // Toggle teacher selection in a closed window's pending list
+  const toggleTeacherSelection = (windowId, teacherId, courseId) => {
+    const key = `${teacherId}|${courseId}`
+    setSelectedTeachers(prev => {
+      const currentSet = new Set(prev[windowId] || [])
+      if (currentSet.has(key)) {
+        currentSet.delete(key)
+      } else {
+        currentSet.add(key)
+      }
+      return { ...prev, [windowId]: currentSet }
+    })
+  }
+
+  // Toggle all teachers in a window
+  const toggleAllTeachers = (windowId, pendingList) => {
+    setSelectedTeachers(prev => {
+      const currentSet = new Set(prev[windowId] || [])
+      const allKeys = pendingList.map(t => `${t.teacher_id}|${t.course_id}`)
+      const allSelected = allKeys.length > 0 && allKeys.every(k => currentSet.has(k))
+      if (allSelected) {
+        // Deselect all
+        return { ...prev, [windowId]: new Set() }
+      } else {
+        // Select all
+        return { ...prev, [windowId]: new Set(allKeys) }
+      }
+    })
+  }
+
+  // Open extension modal for selected teachers
+  const openExtensionModal = (windowId) => {
+    const selected = selectedTeachers[windowId]
+    if (!selected || selected.size === 0) return
+    const teachers = Array.from(selected).map(key => {
+      const [teacher_id, course_id] = key.split('|')
+      return { teacher_id, course_id: parseInt(course_id) }
+    })
+    // Default to 24 hours from now
+    const defaultEnd = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    const pad = (n) => String(n).padStart(2, '0')
+    const defaultEndStr = `${defaultEnd.getFullYear()}-${pad(defaultEnd.getMonth() + 1)}-${pad(defaultEnd.getDate())}T${pad(defaultEnd.getHours())}:${pad(defaultEnd.getMinutes())}`
+    setExtensionEndDate(defaultEndStr)
+    setExtensionModal({ windowId, teachers })
+  }
+
+  // Submit the extension
+  const submitExtension = async () => {
+    if (!extensionModal || !extensionEndDate) return
+    setExtensionLoading(true)
+    try {
+      const res = await fetch(`${API_BASE_URL}/mark-entry-windows/extend-for-teachers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_window_id: extensionModal.windowId,
+          teachers: extensionModal.teachers,
+          new_end_at: extensionEndDate,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message || 'Failed to extend window')
+      setMessage({ type: 'success', text: data.message || `Extended window for ${data.created} teacher(s)` })
+      setExtensionModal(null)
+      setSelectedTeachers(prev => ({ ...prev, [extensionModal.windowId]: new Set() }))
+      fetchClosedPendingWindows()
+      fetchExistingWindows()
+    } catch (error) {
+      console.error('Error extending window:', error)
+      setMessage({ type: 'error', text: error.message || 'Failed to extend window for selected teachers.' })
+    } finally {
+      setExtensionLoading(false)
     }
   }
 
@@ -542,6 +691,7 @@ function MarkEntryPermissionsPage() {
 
     // Set editing mode
     setEditingWindow(win)
+    setWindowName(win.window_name || '')
     setWindowStartAt(formatDateTimeLocal(win.start_at))
     setWindowEndAt(formatDateTimeLocal(win.end_at))
     setWindowEnabled(win.enabled)
@@ -615,30 +765,63 @@ function MarkEntryPermissionsPage() {
     setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100)
   }
 
-  const editWindow = (win) => {
-    setEditingWindow(win)
-    setWindowStartAt(formatDateTimeLocal(win.start_at))
-    setWindowEndAt(formatDateTimeLocal(win.end_at))
-    setWindowEnabled(win.enabled)
+  const editWindow = async (win) => {
+    const latestWindow = (await fetchWindowById(win.id)) || win
 
-    // Will be populated by loadWindowRule which separates by learning mode
-    setSelectedPBLComponents([])
-    setSelectedUALComponents([])
+    setEditingWindow(latestWindow)
+    setWindowName(latestWindow.window_name || '')
+    setWindowStartAt(formatDateTimeLocal(latestWindow.start_at))
+    setWindowEndAt(formatDateTimeLocal(latestWindow.end_at))
+    setWindowEnabled(latestWindow.enabled)
+
+    // Directly separate window's component_ids into PBL and UAL
+    if (win.component_ids && win.component_ids.length > 0) {
+      try {
+        const allComponentsRes = await Promise.all([
+          fetch(`${API_BASE_URL}/mark-categories-by-type/1?learning_modes=1,2`).then(r => r.json()),
+          fetch(`${API_BASE_URL}/mark-categories-by-type/2?learning_modes=1,2`).then(r => r.json()),
+          fetch(`${API_BASE_URL}/mark-categories-by-type/3?learning_modes=1,2`).then(r => r.json())
+        ])
+        const allComponents = []
+        allComponentsRes.forEach(cats => {
+          if (Array.isArray(cats)) allComponents.push(...cats)
+        })
+
+        const pblIds = []
+        const ualIds = []
+        win.component_ids.forEach(id => {
+          const comp = allComponents.find(c => c.id === id)
+          if (comp) {
+            if (comp.learning_mode_id === 2) pblIds.push(id)
+            else if (comp.learning_mode_id === 1) ualIds.push(id)
+          }
+        })
+        setSelectedPBLComponents(pblIds)
+        setSelectedUALComponents(ualIds)
+      } catch (err) {
+        console.error('Error loading component details for edit:', err)
+        setSelectedPBLComponents([])
+        setSelectedUALComponents([])
+      }
+    } else {
+      setSelectedPBLComponents([])
+      setSelectedUALComponents([])
+    }
 
     // Determine scope and set appropriate fields
-    if (win.teacher_id && win.course_id) {
+    if (latestWindow.teacher_id && latestWindow.course_id) {
       setWindowScope('teacher_course')
-      setSelectedTeacherId(win.teacher_id)
-      setSelectedCourseId(win.course_id.toString())
-    } else if (win.semester && win.course_id) {
+      setSelectedTeacherId(latestWindow.teacher_id)
+      setSelectedCourseId(latestWindow.course_id.toString())
+    } else if (latestWindow.semester && latestWindow.course_id) {
       setWindowScope('department_semester_course')
-      setWindowDepartmentId(win.department_id ? win.department_id.toString() : '0')
-      setWindowSemester(win.semester.toString())
-      setWindowCourseId(win.course_id.toString())
-    } else if (win.semester) {
+      setWindowDepartmentId(latestWindow.department_id ? latestWindow.department_id.toString() : '0')
+      setWindowSemester(latestWindow.semester.toString())
+      setWindowCourseId(latestWindow.course_id.toString())
+    } else if (latestWindow.semester) {
       setWindowScope('department_semester')
-      setWindowDepartmentId(win.department_id ? win.department_id.toString() : '0')
-      setWindowSemester(win.semester.toString())
+      setWindowDepartmentId(latestWindow.department_id ? latestWindow.department_id.toString() : '0')
+      setWindowSemester(latestWindow.semester.toString())
     }
 
     setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100)
@@ -655,6 +838,7 @@ function MarkEntryPermissionsPage() {
       start_at: startDate.toISOString(),
       end_at: endDate.toISOString(),
       enabled: windowEnabled,
+      window_name: windowName.trim(),
       component_ids: [...selectedPBLComponents, ...selectedUALComponents].length > 0
         ? [...selectedPBLComponents, ...selectedUALComponents]
         : null,
@@ -670,7 +854,7 @@ function MarkEntryPermissionsPage() {
       if (!res.ok) throw new Error('Failed to update window')
       setMessage({ type: 'success', text: 'Window updated successfully.' })
       setEditingWindow(null)
-      fetchExistingWindows()
+      await fetchExistingWindows()
     } catch (error) {
       console.error('Error updating window:', error)
       setMessage({ type: 'error', text: 'Failed to update window.' })
@@ -681,6 +865,7 @@ function MarkEntryPermissionsPage() {
 
   const cancelEdit = () => {
     setEditingWindow(null)
+    setWindowName('')
     setWindowStartAt('')
     setWindowEndAt('')
     setWindowEnabled(true)
@@ -757,6 +942,10 @@ function MarkEntryPermissionsPage() {
   }
 
   const assignStudentsToUser = async () => {
+    if (!windowName.trim()) {
+      setMessage({ type: 'error', text: 'Window name is required.' })
+      return
+    }
     if (!selectedUserId || selectedStudents.length === 0 || !windowStartAt || !windowEndAt) {
       setMessage({ type: 'error', text: 'Please fill all required fields: user, time period, and at least one student.' })
       return
@@ -776,6 +965,7 @@ function MarkEntryPermissionsPage() {
             start_at: new Date(windowStartAt).toISOString(),
             end_at: new Date(windowEndAt).toISOString(),
             enabled: windowEnabled,
+            window_name: windowName.trim(),
             component_ids: allComponents.length > 0 ? allComponents : null,
           })
         })
@@ -818,6 +1008,7 @@ function MarkEntryPermissionsPage() {
             student_ids: selectedStudents,
             start_at: windowStartAt,
             end_at: windowEndAt,
+            window_name: windowName.trim(),
             component_ids: allComponents.length > 0 ? allComponents : [],
             created_by: localStorage.getItem('username') || 'coe_admin'
           })
@@ -843,6 +1034,7 @@ function MarkEntryPermissionsPage() {
       setSelectedStudents([])
       setSelectedUserId('')
       setStudents([])
+      setWindowName('')
       setWindowStartAt('')
       setWindowEndAt('')
       setWindowDepartmentId('')
@@ -898,7 +1090,7 @@ function MarkEntryPermissionsPage() {
           {[
             { key: 'create', label: 'Mark Entry Window' },
             { key: 'existing', label: 'Existing Windows' },
-            { key: 'extension', label: 'Window Extension', disabled: true },
+            { key: 'extension', label: 'Window Extension' },
           ].map(tab => (
             <button
               key={tab.key}
@@ -992,6 +1184,22 @@ function MarkEntryPermissionsPage() {
                     </p>
                   </div>
                 )}
+
+                {/* Window Name */}
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Window Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={windowName}
+                    onChange={(e) => setWindowName(e.target.value)}
+                    placeholder="e.g. PT - 1, Mid Semester Exam, Final Lab..."
+                    maxLength={100}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">{windowName.length}/100 characters</p>
+                </div>
 
                 {/* Scope Selection */}
                 <div>
@@ -1331,6 +1539,20 @@ function MarkEntryPermissionsPage() {
                   )}
                 </div>
 
+                {/* Window Name */}
+                <div className="p-6 border-b border-gray-100">
+                  <h4 className="text-sm font-semibold text-gray-700 mb-3">Window Name <span className="text-red-500">*</span></h4>
+                  <input
+                    type="text"
+                    value={windowName}
+                    onChange={(e) => setWindowName(e.target.value)}
+                    placeholder="e.g. PT - 1, Mid Semester Exam, Final Lab..."
+                    maxLength={100}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">{windowName.length}/100 characters</p>
+                </div>
+
                 {/* Window Time Period */}
                 <div className="p-6 border-b border-gray-100">
                   <h4 className="text-sm font-semibold text-gray-700 mb-3">Time Period</h4>
@@ -1545,7 +1767,7 @@ function MarkEntryPermissionsPage() {
                       <button
                         onClick={() => {
                           setEditingWindow(null); setSelectedUserId(''); setSelectedStudents([])
-                          setWindowDepartmentId(''); setWindowSemester(''); setWindowCourseId('')
+                          setWindowName(''); setWindowDepartmentId(''); setWindowSemester(''); setWindowCourseId('')
                           setWindowStartAt(''); setWindowEndAt(''); setWindowEnabled(true)
                           setSelectedPBLComponents([]); setSelectedUALComponents([])
                         }}
@@ -1590,13 +1812,37 @@ function MarkEntryPermissionsPage() {
                 </div>
               </div>
               {existingTab === 'window-scope' ? (
-                <span className="px-3 py-1 bg-background text-primary rounded-full text-sm font-semibold">
-                  {existingWindows.length} {existingWindows.length === 1 ? 'window' : 'windows'}
-                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search by name, ID, dept, course…"
+                    value={existingWindowSearch}
+                    onChange={e => setExistingWindowSearch(e.target.value)}
+                    className="w-56 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <span className="px-3 py-1 bg-background text-primary rounded-full text-sm font-semibold">
+                    {existingWindows.filter(w => {
+                      const q = existingWindowSearch.toLowerCase()
+                      return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.course_name||'').toLowerCase().includes(q)
+                    }).length} {existingWindows.length === 1 ? 'window' : 'windows'}
+                  </span>
+                </div>
               ) : (
-                <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
-                  {userAssignedWindows.length} {userAssignedWindows.length === 1 ? 'window' : 'windows'}
-                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search by name, ID, user, course…"
+                    value={existingUserWindowSearch}
+                    onChange={e => setExistingUserWindowSearch(e.target.value)}
+                    className="w-56 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
+                    {userAssignedWindows.filter(w => {
+                      const q = existingUserWindowSearch.toLowerCase()
+                      return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.user_username||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q)
+                    }).length} {userAssignedWindows.length === 1 ? 'window' : 'windows'}
+                  </span>
+                </div>
               )}
             </div>
 
@@ -1607,9 +1853,18 @@ function MarkEntryPermissionsPage() {
                   <div className="text-center py-12 text-gray-400">
                     <p className="text-sm">No windows configured yet</p>
                   </div>
-                ) : (
+                ) : (() => {
+                  const filtered = existingWindows.filter(w => {
+                    const q = existingWindowSearch.toLowerCase()
+                    return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.course_name||'').toLowerCase().includes(q)
+                  })
+                  return filtered.length === 0 ? (
+                    <div className="text-center py-12 text-gray-400">
+                      <p className="text-sm">No windows match &ldquo;{existingWindowSearch}&rdquo;</p>
+                    </div>
+                  ) : (
                   <div className="space-y-3">
-                    {existingWindows.map((win) => {
+                    {filtered.map((win) => {
                       const { status, color } = getWindowStatus(win)
                       return (
                         <div key={win.id} className="bg-gray-50 rounded-lg p-4 border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all">
@@ -1620,7 +1875,8 @@ function MarkEntryPermissionsPage() {
                                 <span className="text-base font-bold text-blue-700 leading-tight">{win.id}</span>
                               </div>
                               <div>
-                                <p className="font-semibold text-gray-800 text-sm mb-2">{getScopeDescription(win)}</p>
+                                <p className="font-semibold text-gray-800 text-sm">{win.window_name || getScopeDescription(win)}</p>
+                                {win.window_name && <p className="text-xs text-gray-500 mb-1">{getScopeDescription(win)}</p>}
                                 <span className={`px-2 py-1 rounded text-xs font-medium ${color}`}>{status}</span>
                               </div>
                             </div>
@@ -1642,14 +1898,15 @@ function MarkEntryPermissionsPage() {
                             </div>
                             <div className="bg-white rounded p-2 border border-gray-100">
                               <div className="text-gray-500 mb-1">Components</div>
-                              <div className="font-medium">{win.component_ids && win.component_ids.length > 0 ? `${win.component_ids.length} selected` : 'All allowed'}</div>
+                              <div className="font-medium">{win.window_name || (win.component_ids && win.component_ids.length > 0 ? `${win.component_ids.length} selected` : 'All allowed')}</div>
                             </div>
                           </div>
                         </div>
                       )
                     })}
                   </div>
-                )}
+                  )
+                })()}
               </div>
             )}
 
@@ -1660,20 +1917,41 @@ function MarkEntryPermissionsPage() {
                   <div className="text-center py-12 text-gray-400">
                     <p className="text-sm">No user-assigned windows configured yet</p>
                   </div>
-                ) : (
+                ) : (() => {
+                  const filteredU = userAssignedWindows.filter(w => {
+                    const q = existingUserWindowSearch.toLowerCase()
+                    return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.user_username||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q)
+                  })
+                  return filteredU.length === 0 ? (
+                    <div className="text-center py-12 text-gray-400">
+                      <p className="text-sm">No windows match "{existingUserWindowSearch}"</p>
+                    </div>
+                  ) : (
                   <div className="space-y-3">
-                    {userAssignedWindows.map((win) => {
+                    {filteredU.map((win) => {
                       const { status, color } = getWindowStatus(win)
                       return (
                         <div key={win.id} className="bg-background rounded-lg p-4 border border-purple-200 hover:border-purple-300 hover:shadow-sm transition-all">
                           <div className="flex items-start justify-between mb-3">
                             <div className="flex-1">
-                              <p className="font-semibold text-gray-800 text-sm mb-2">
-                                <span>User:</span> {win.user_username || `ID: ${win.user_id}`}
-                                {win.course_name && <span className="text-gray-600"> • {win.course_name}</span>}
-                                {win.department_name && <span className="text-gray-600"> • {win.department_name}</span>}
-                                {win.semester && <span className="text-gray-600"> • Sem {win.semester}</span>}
+                              <p className="font-semibold text-gray-800 text-sm">
+                                {win.window_name || (
+                                  <>
+                                    <span>User:</span> {win.user_username || `ID: ${win.user_id}`}
+                                    {win.course_name && <span className="text-gray-600"> • {win.course_name}</span>}
+                                    {win.department_name && <span className="text-gray-600"> • {win.department_name}</span>}
+                                    {win.semester && <span className="text-gray-600"> • Sem {win.semester}</span>}
+                                  </>
+                                )}
                               </p>
+                              {win.window_name && (
+                                <p className="text-xs text-gray-500 mb-1">
+                                  <span>User:</span> {win.user_username || `ID: ${win.user_id}`}
+                                  {win.course_name && <span> • {win.course_name}</span>}
+                                  {win.department_name && <span> • {win.department_name}</span>}
+                                  {win.semester && <span> • Sem {win.semester}</span>}
+                                </p>
+                              )}
                               <span className={`px-2 py-1 rounded text-xs font-medium ${color}`}>{status}</span>
                               {win.student_count > 0 && (
                                 <span className="ml-2 px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-medium">
@@ -1699,14 +1977,15 @@ function MarkEntryPermissionsPage() {
                             </div>
                             <div className="bg-white rounded p-2 border border-purple-100">
                               <div className="text-gray-500 mb-1">Components</div>
-                              <div className="font-medium">{win.component_ids && win.component_ids.length > 0 ? `${win.component_ids.length} selected` : 'All allowed'}</div>
+                              <div className="font-medium">{win.window_name || (win.component_ids && win.component_ids.length > 0 ? `${win.component_ids.length} selected` : 'All allowed')}</div>
                             </div>
                           </div>
                         </div>
                       )
                     })}
                   </div>
-                )}
+                  )
+                })()}
               </div>
             )}
           </div>
@@ -1714,12 +1993,546 @@ function MarkEntryPermissionsPage() {
 
         {/* ── Extension Tab ── */}
         {mainTab === 'extension' && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-16 text-center">
-            <svg className="w-12 h-12 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
-            </svg>
-            <h3 className="text-base font-semibold text-gray-500">Window Extension</h3>
-            <p className="text-sm text-gray-400 mt-1">This feature will be configured separately.</p>
+          <div className="space-y-6">
+            {/* ── Section 1: Active Windows - Pending Submissions ── */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800">Active Windows - Pending Submissions</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Teachers who have not yet submitted marks for currently active windows
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search windows…"
+                    value={activePendingSearch}
+                    onChange={e => setActivePendingSearch(e.target.value)}
+                    className="w-44 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <button
+                    onClick={fetchPendingWindows}
+                    disabled={loadingPendingWindows}
+                    className="px-4 py-2 bg-primary hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {loadingPendingWindows ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+
+              {loadingPendingWindows ? (
+                <div className="py-16 text-center text-gray-400">
+                  <div className="animate-spin w-8 h-8 border-4 border-gray-200 border-t-primary rounded-full mx-auto mb-4"></div>
+                  Loading pending submissions...
+                </div>
+              ) : pendingWindows.length === 0 ? (
+                <div className="py-12 text-center">
+                  <svg className="w-12 h-12 mx-auto text-green-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <h3 className="text-base font-semibold text-gray-700 mb-1">All Caught Up!</h3>
+                  <p className="text-sm text-gray-500">
+                    All teachers have submitted their marks for active windows.
+                  </p>
+                </div>
+              ) : (  
+                <div className="space-y-4">
+                  {pendingWindows.filter(w => {
+                    const q = activePendingSearch.toLowerCase()
+                    return !q || String(w.window_id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q)
+                  }).map((window) => {
+                    const isExpanded = expandedWindowId === window.window_id
+                    const startDate = new Date(window.start_at)
+                    const endDate = new Date(window.end_at)
+                    const currentView = activeWindowView[window.window_id] || 'pending'
+                    const pendingList = window.pending_teachers || []
+                    const completedList = window.completed_teachers || []
+                    const showingList = currentView === 'completed' ? completedList : pendingList
+
+                    return (
+                      <div
+                        key={window.window_id}
+                        className="rounded-xl border border-gray-200 overflow-hidden hover:border-primary transition-colors"
+                      >
+                        <button
+                          onClick={() => setExpandedWindowId(isExpanded ? null : window.window_id)}
+                          className="w-full px-5 py-4 flex items-center gap-4 bg-gradient-to-r from-purple-50 to-white hover:from-purple-100 transition-colors"
+                        >
+                          <div className="flex-shrink-0 w-14 h-14 rounded-xl bg-primary/10 border border-primary/20 flex flex-col items-center justify-center">
+                            <span className="text-[10px] font-semibold text-primary uppercase tracking-wider">Window</span>
+                            <span className="text-lg font-bold text-primary">{window.window_id}</span>
+                          </div>
+
+                          <div className="flex-1 text-left min-w-0">
+                            {window.window_name && (
+                              <p className="font-semibold text-gray-800 text-sm mb-1">{window.window_name}</p>
+                            )}
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              {window.department_name && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                                  {window.department_name}
+                                </span>
+                              )}
+                              {!window.department_name && window.department_id && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                                  Dept: {window.department_id}
+                                </span>
+                              )}
+                              {window.semester && (
+                                <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-medium rounded-full">
+                                  Sem {window.semester}
+                                </span>
+                              )}
+                              {window.course_code && (
+                                <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full">
+                                  {window.course_code}
+                                </span>
+                              )}
+                              {!window.course_code && window.course_id && (
+                                <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full">
+                                  Course ID: {window.course_id}
+                                </span>
+                              )}
+                              <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">
+                                {pendingList.length} Pending
+                              </span>
+                              <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-bold rounded-full">
+                                {completedList.length} Submitted
+                              </span>
+                              <span className="px-2 py-0.5 bg-green-100 text-green-800 text-xs font-semibold rounded-full">
+                                Active
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {startDate.toLocaleString()} &rarr; {endDate.toLocaleString()}
+                            </div>
+                          </div>
+
+                          <svg
+                            className={`w-5 h-5 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="border-t border-gray-200">
+                            {/* Toggle between Pending and Submitted */}
+                            <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center">
+                              <div className="inline-flex rounded-lg bg-gray-200 p-0.5">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setActiveWindowView(prev => ({ ...prev, [window.window_id]: 'pending' }))
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    currentView === 'pending'
+                                      ? 'bg-red-500 text-white shadow-sm'
+                                      : 'text-gray-600 hover:text-gray-800'
+                                  }`}
+                                >
+                                  Not Submitted ({pendingList.length})
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setActiveWindowView(prev => ({ ...prev, [window.window_id]: 'completed' }))
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    currentView === 'completed'
+                                      ? 'bg-green-500 text-white shadow-sm'
+                                      : 'text-gray-600 hover:text-gray-800'
+                                  }`}
+                                >
+                                  Submitted ({completedList.length})
+                                </button>
+                              </div>
+                            </div>
+
+                            {showingList.length === 0 ? (
+                              <div className="py-8 text-center text-gray-400 text-sm">
+                                {currentView === 'completed' ? 'No teachers have submitted marks for this window yet.' : 'All teachers have submitted marks for this window!'}
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead className={currentView === 'completed' ? 'bg-green-50' : 'bg-red-50'}>
+                                    <tr>
+                                      {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name', ...(currentView === 'completed' ? ['Submitted At'] : [])].map(h => (
+                                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                                          {h}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {showingList.map((teacher, idx) => (
+                                      <tr key={`${teacher.teacher_id}-${teacher.course_id}`} className={idx % 2 === 0 ? 'bg-white' : (currentView === 'completed' ? 'bg-green-50/30' : 'bg-red-50/30')}>
+                                        <td className="px-4 py-3 text-gray-400 text-xs">{idx + 1}</td>
+                                        <td className="px-4 py-3 font-mono text-gray-700 text-xs">{teacher.teacher_id}</td>
+                                        <td className="px-4 py-3 font-medium text-gray-800">{teacher.teacher_name}</td>
+                                        <td className="px-4 py-3">
+                                          <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
+                                            {teacher.course_code}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-3 text-gray-600 text-xs">{teacher.course_name}</td>
+                                        {currentView === 'completed' && (
+                                          <td className="px-4 py-3 text-gray-500 text-xs">
+                                            {teacher.submitted_at ? new Date(teacher.submitted_at).toLocaleString() : '—'}
+                                          </td>
+                                        )}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* ── Section 2: Closed Windows - Incomplete Submissions ── */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800">Closed Windows - Incomplete Submissions</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Teachers who did not complete mark entry before the window deadline passed
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search windows…"
+                    value={closedPendingSearch}
+                    onChange={e => setClosedPendingSearch(e.target.value)}
+                    className="w-44 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    onClick={fetchClosedPendingWindows}
+                    disabled={loadingClosedWindows}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {loadingClosedWindows ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+
+              {loadingClosedWindows ? (
+                <div className="py-16 text-center text-gray-400">
+                  <div className="animate-spin w-8 h-8 border-4 border-gray-200 border-t-amber-500 rounded-full mx-auto mb-4"></div>
+                  Loading closed window data...
+                </div>
+              ) : closedPendingWindows.length === 0 ? (
+                <div className="py-12 text-center">
+                  <svg className="w-12 h-12 mx-auto text-green-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <h3 className="text-base font-semibold text-gray-700 mb-1">No Overdue Submissions</h3>
+                  <p className="text-sm text-gray-500">
+                    All teachers completed their mark entries for past windows, or no windows have closed yet.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {closedPendingWindows.filter(w => {
+                    const q = closedPendingSearch.toLowerCase()
+                    return !q || String(w.window_id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q)
+                  }).map((window) => {
+                    const isExpanded = expandedClosedWindowId === window.window_id
+                    const startDate = new Date(window.start_at)
+                    const endDate = new Date(window.end_at)
+                    const currentView = closedWindowView[window.window_id] || 'pending'
+                    const pendingList = window.pending_teachers || []
+                    const completedList = window.completed_teachers || []
+                    const showingList = currentView === 'completed' ? completedList : pendingList
+                    const windowSelected = selectedTeachers[window.window_id] || new Set()
+                    const allPendingKeys = pendingList.map(t => `${t.teacher_id}|${t.course_id}`)
+                    const allPendingSelected = allPendingKeys.length > 0 && allPendingKeys.every(k => windowSelected.has(k))
+                    const someSelected = windowSelected.size > 0
+
+                    // Calculate how long ago the window closed
+                    const closedAgo = Math.floor((Date.now() - endDate.getTime()) / (1000 * 60 * 60 * 24))
+                    const closedAgoText = closedAgo === 0 ? 'today' : closedAgo === 1 ? '1 day ago' : `${closedAgo} days ago`
+                    
+                    return (
+                      <div
+                        key={window.window_id}
+                        className="rounded-xl border border-amber-200 overflow-hidden hover:border-amber-400 transition-colors"
+                      >
+                        <button
+                          onClick={() => setExpandedClosedWindowId(isExpanded ? null : window.window_id)}
+                          className="w-full px-5 py-4 flex items-center gap-4 bg-gradient-to-r from-amber-50 to-white hover:from-amber-100 transition-colors"
+                        >
+                          <div className="flex-shrink-0 w-14 h-14 rounded-xl bg-amber-100 border border-amber-200 flex flex-col items-center justify-center">
+                            <span className="text-[10px] font-semibold text-amber-700 uppercase tracking-wider">Window</span>
+                            <span className="text-lg font-bold text-amber-700">{window.window_id}</span>
+                          </div>
+
+                          <div className="flex-1 text-left min-w-0">
+                            {window.window_name && (
+                              <p className="font-semibold text-gray-800 text-sm mb-1">{window.window_name}</p>
+                            )}
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              {window.department_name && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                                  {window.department_name}
+                                </span>
+                              )}
+                              {!window.department_name && window.department_id && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                                  Dept: {window.department_id}
+                                </span>
+                              )}
+                              {window.semester && (
+                                <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-medium rounded-full">
+                                  Sem {window.semester}
+                                </span>
+                              )}
+                              {window.course_code && (
+                                <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full">
+                                  {window.course_code}
+                                </span>
+                              )}
+                              {!window.course_code && window.course_id && (
+                                <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full">
+                                  Course ID: {window.course_id}
+                                </span>
+                              )}
+                              <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">
+                                {pendingList.length} Not Submitted
+                              </span>
+                              <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-bold rounded-full">
+                                {completedList.length} Completed
+                              </span>
+                              <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-semibold rounded-full">
+                                Closed {closedAgoText}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {startDate.toLocaleString()} &rarr; {endDate.toLocaleString()}
+                            </div>
+                          </div>
+
+                          <svg
+                            className={`w-5 h-5 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="border-t border-amber-200">
+                            {/* Toggle switch between Pending and Completed + Extend button */}
+                            <div className="px-5 py-3 bg-gray-50 border-b border-amber-100 flex items-center justify-between">
+                              <div className="inline-flex rounded-lg bg-gray-200 p-0.5">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setClosedWindowView(prev => ({ ...prev, [window.window_id]: 'pending' }))
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    currentView === 'pending'
+                                      ? 'bg-red-500 text-white shadow-sm'
+                                      : 'text-gray-600 hover:text-gray-800'
+                                  }`}
+                                >
+                                  Not Submitted ({pendingList.length})
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setClosedWindowView(prev => ({ ...prev, [window.window_id]: 'completed' }))
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                    currentView === 'completed'
+                                      ? 'bg-green-500 text-white shadow-sm'
+                                      : 'text-gray-600 hover:text-gray-800'
+                                  }`}
+                                >
+                                  Completed ({completedList.length})
+                                </button>
+                              </div>
+
+                              {currentView === 'pending' && someSelected && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    openExtensionModal(window.window_id)
+                                  }}
+                                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  Extend for {windowSelected.size} Selected
+                                </button>
+                              )}
+                            </div>
+
+                            {showingList.length === 0 ? (
+                              <div className="py-8 text-center text-gray-400 text-sm">
+                                {currentView === 'completed' ? 'No teachers have submitted marks for this window yet.' : 'All teachers have submitted marks for this window!'}
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead className={currentView === 'completed' ? 'bg-green-50' : 'bg-amber-50'}>
+                                    <tr>
+                                      {currentView === 'pending' && (
+                                        <th className="px-4 py-3 text-left w-10">
+                                          <input
+                                            type="checkbox"
+                                            checked={allPendingSelected}
+                                            onChange={(e) => {
+                                              e.stopPropagation()
+                                              toggleAllTeachers(window.window_id, pendingList)
+                                            }}
+                                            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                          />
+                                        </th>
+                                      )}
+                                      {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name', ...(currentView === 'completed' ? ['Submitted At'] : [])].map(h => (
+                                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                                          {h}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {showingList.map((teacher, idx) => {
+                                      const tKey = `${teacher.teacher_id}|${teacher.course_id}`
+                                      const isSelected = windowSelected.has(tKey)
+                                      return (
+                                        <tr
+                                          key={tKey}
+                                          className={`${isSelected ? 'bg-indigo-50' : (idx % 2 === 0 ? 'bg-white' : (currentView === 'completed' ? 'bg-green-50/30' : 'bg-amber-50/30'))} ${currentView === 'pending' ? 'cursor-pointer hover:bg-indigo-50/50' : ''}`}
+                                          onClick={currentView === 'pending' ? () => toggleTeacherSelection(window.window_id, teacher.teacher_id, teacher.course_id) : undefined}
+                                        >
+                                          {currentView === 'pending' && (
+                                            <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                                              <input
+                                                type="checkbox"
+                                                checked={isSelected}
+                                                onChange={() => toggleTeacherSelection(window.window_id, teacher.teacher_id, teacher.course_id)}
+                                                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                              />
+                                            </td>
+                                          )}
+                                          <td className="px-4 py-3 text-gray-400 text-xs">{idx + 1}</td>
+                                          <td className="px-4 py-3 font-mono text-gray-700 text-xs">{teacher.teacher_id}</td>
+                                          <td className="px-4 py-3 font-medium text-gray-800">{teacher.teacher_name}</td>
+                                          <td className="px-4 py-3">
+                                            <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
+                                              {teacher.course_code}
+                                            </span>
+                                          </td>
+                                          <td className="px-4 py-3 text-gray-600 text-xs">{teacher.course_name}</td>
+                                          {currentView === 'completed' && (
+                                            <td className="px-4 py-3 text-gray-500 text-xs">
+                                              {teacher.submitted_at ? new Date(teacher.submitted_at).toLocaleString() : '—'}
+                                            </td>
+                                          )}
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Extension Modal */}
+            {extensionModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setExtensionModal(null)}>
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="px-6 py-5 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white">
+                    <h3 className="text-lg font-bold">Extend Window for Selected Teachers</h3>
+                    <p className="text-indigo-200 text-sm mt-1">
+                      Creating individual windows for {extensionModal.teachers.length} teacher(s) from Window #{extensionModal.windowId}
+                    </p>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1.5">New Window End Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        value={extensionEndDate}
+                        onChange={(e) => setExtensionEndDate(e.target.value)}
+                        className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                      />
+                      <p className="text-xs text-gray-400 mt-1">Window will start immediately and end at the selected date/time.</p>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <p className="text-xs font-semibold text-gray-600 mb-2">Selected Teachers:</p>
+                      <div className="space-y-1 max-h-40 overflow-y-auto">
+                        {extensionModal.teachers.map((t, i) => {
+                          const win = closedPendingWindows.find(w => w.window_id === extensionModal.windowId)
+                          const teacherData = win?.pending_teachers?.find(pt => pt.teacher_id === t.teacher_id && pt.course_id === t.course_id)
+                          return (
+                            <div key={i} className="flex items-center gap-2 text-xs text-gray-600">
+                              <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold flex-shrink-0">{i + 1}</span>
+                              <span className="font-mono">{t.teacher_id}</span>
+                              {teacherData && <span className="text-gray-400">— {teacherData.teacher_name} ({teacherData.course_code})</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-4 bg-gray-50 border-t flex items-center justify-end gap-3">
+                    <button
+                      onClick={() => setExtensionModal(null)}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={submitExtension}
+                      disabled={extensionLoading || !extensionEndDate}
+                      className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {extensionLoading ? (
+                        <>
+                          <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
+                          Extending...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Extend Window
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

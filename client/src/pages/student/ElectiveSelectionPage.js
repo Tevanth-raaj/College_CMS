@@ -356,12 +356,12 @@ const ElectiveSelectionPage = () => {
 
   // Slot type config — label, icon, colour accent
   const slotTypeConfig = {
-    PROFESSIONAL: { label: 'Professional Elective', icon: '📚', badge: 'bg-blue-100 text-blue-800', border: 'border-blue-300', required: true },
-    OPEN:         { label: 'Open Elective',          icon: '🌐', badge: 'bg-green-100 text-green-800', border: 'border-green-300', required: true },
-    MIXED:        { label: 'Professional + Open',    icon: '📚', badge: 'bg-purple-100 text-purple-800', border: 'border-purple-300', required: true },
-    HONOR:        { label: 'Honour Course',          icon: '🏆', badge: 'bg-yellow-100 text-yellow-800', border: 'border-yellow-300', required: false },
-    MINOR:        { label: 'Minor Course',           icon: '📖', badge: 'bg-orange-100 text-orange-800', border: 'border-orange-300', required: false },
-    ADDON:        { label: 'Add-On Course',          icon: '➕', badge: 'bg-gray-100 text-gray-700',   border: 'border-gray-300',   required: false },
+    PROFESSIONAL: { label: 'Professional Elective', icon: '📚', border: 'border-blue-300', required: true },
+    OPEN:         { label: 'Open Elective',          icon: '🌐', border: 'border-green-300', required: true },
+    MIXED:        { label: 'Professional + Open',    icon: '📚', border: 'border-purple-300', required: true },
+    HONOR:        { label: 'Honour Course',          icon: '🏆', border: 'border-yellow-300', required: false },
+    MINOR:        { label: 'Minor Course',           icon: '📖', border: 'border-orange-300', required: false },
+    ADDON:        { label: 'Add-On Course',          icon: '➕', border: 'border-gray-300',   required: false },
   };
 
   if (loading) {
@@ -381,7 +381,11 @@ const ElectiveSelectionPage = () => {
     return (
       <MainLayout>
         <div className="max-w-2xl mx-auto py-20 text-center">
-          <div className="text-5xl mb-4">📭</div>
+          <div className="text-5xl mb-4 text-gray-300">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8m0 8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h14a2 2 0 012 2v8z" />
+            </svg>
+          </div>
           <h1 className="text-2xl font-bold text-gray-800 mb-2">No Electives Available</h1>
           <p className="text-gray-500">There are no electives available for the next semester at this time.</p>
           <p className="text-gray-400 text-sm mt-1">Please contact your HOD if you believe this is an error.</p>
@@ -448,14 +452,14 @@ const ElectiveSelectionPage = () => {
     return (
       <div
         key={slotName}
-        className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${
+        className={`bg-white rounded-md border shadow-sm overflow-hidden transition-all ${
           isSubmitted ? 'opacity-60 pointer-events-none' : ''
         } ${selectedValue ? 'border-gray-300' : 'border-gray-200 hover:border-gray-300'}`}
       >
         <div className="px-4 pt-4 pb-3 bg-gray-50 border-b border-gray-100">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm">{cfg.icon}</span>
-            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${cfg.badge}`}>{cfg.label}</span>
+            {/* <span className="text-sm">{cfg.icon}</span> */}
+            <span className={"inline-flex items-center px-2 py-0.5 mb-1 rounded-full text-xs font-bold bg-background text-primary"}>{cfg.label}</span>
             <span className="text-xs text-red-500 font-semibold">Required</span>
           </div>
           <h2 className="text-sm font-bold text-gray-900">{slotName}</h2>
@@ -466,13 +470,13 @@ const ElectiveSelectionPage = () => {
               value={selectedValue}
               onChange={handleDropdownChange}
               disabled={isSubmitted || electiveData?.window_open === false}
-              className={`w-full appearance-none bg-white border-2 rounded-xl px-4 py-3 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 transition cursor-pointer ${
+              className={`w-full appearance-none bg-white border-2 rounded-md px-4 py-3 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 transition cursor-pointer ${
                 selectedValue ? 'border-gray-900 text-gray-800 focus:ring-gray-400' : 'border-gray-200 text-gray-400 focus:ring-blue-300'
               } disabled:opacity-60 disabled:cursor-not-allowed`}
             >
-              <option value="">— Choose a course —</option>
+              <option value="" style={{ color: '#111827' }}>— Choose a course —</option>
               {slotData.courses.map(course => (
-                <option key={course.hod_selection_id} value={course.hod_selection_id}>
+                <option key={course.hod_selection_id} value={course.hod_selection_id} style={{ color: '#111827' }}>
                   {course.course_code} — {course.course_name} ({course.credits} cr)
                 </option>
               ))}
@@ -484,7 +488,7 @@ const ElectiveSelectionPage = () => {
             </div>
           </div>
           {selectedValue && selectedCourse && (
-            <div className="mt-3 flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl">
+            <div className="mt-3 flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
               <svg className="w-4 h-4 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
               </svg>
@@ -500,7 +504,9 @@ const ElectiveSelectionPage = () => {
   };
 
   return (
-    <MainLayout>
+    <MainLayout
+    title="Elective Selection"
+    >
       <div className="py-8 px-6">
 
         {/* ── Page header ── */}
@@ -517,7 +523,13 @@ const ElectiveSelectionPage = () => {
               ? 'bg-green-50 text-green-800 border border-green-200'
               : 'bg-red-50 text-red-800 border border-red-200'
           }`}>
-            <span className="text-base mt-0.5">{message.type === 'success' ? '✅' : '❌'}</span>
+            <span className="mt-0.5">
+              {message.type === 'success' ? (
+                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+              ) : (
+                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              )}
+            </span>
             <span>{message.text}</span>
           </div>
         )}
@@ -525,7 +537,7 @@ const ElectiveSelectionPage = () => {
         {/* —— Window closed banner —— */}
         {!isSubmitted && electiveData?.window_open === false && (
           <div className="mb-5 flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-sm font-semibold shadow-sm">
-            <span className="text-lg">🔒</span>
+            <svg className="w-5 h-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11V7a4 4 0 10-8 0v4" /><rect x="3" y="11" width="14" height="10" rx="2" ry="2"/></svg>
             <span>
               Elective selection window is closed.
               {electiveData.window_start && electiveData.window_end
@@ -538,7 +550,7 @@ const ElectiveSelectionPage = () => {
         {/* ── Submitted banner ── */}
         {isSubmitted && (
           <div className="mb-5 flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-sm font-semibold shadow-sm">
-            <span className="text-lg">🔒</span>
+            <svg className="w-5 h-5 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11V7a4 4 0 10-8 0v4" /><rect x="3" y="11" width="14" height="10" rx="2" ry="2"/></svg>
             Your selections have been submitted and are now locked.
           </div>
         )}
@@ -546,7 +558,7 @@ const ElectiveSelectionPage = () => {
         {/* ════════════════════════════════════════ */}
         {/* SECTION 1 — Required Electives                      */}
         {/* ════════════════════════════════════════ */}
-        <div className="mb-8">
+        <div className="mb-8 card-custom p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900">Required Electives</h2>
@@ -568,7 +580,7 @@ const ElectiveSelectionPage = () => {
           <div className="w-full bg-gray-100 rounded-full h-1.5 mb-5">
             <div
               className={`h-1.5 rounded-full transition-all duration-500 ${
-                progressPct === 100 ? 'bg-green-500' : 'bg-blue-500'
+                progressPct === 100 ? 'bg-green-500' : 'bg-primary'
               }`}
               style={{ width: `${progressPct}%` }}
             />
@@ -583,7 +595,7 @@ const ElectiveSelectionPage = () => {
         {/* SECTION 2 — Optional Track                           */}
         {/* ════════════════════════════════════════ */}
         {availableOptionalTypes.length > 0 && (
-          <div className="mb-8">
+          <div className="mb-8 card-custom p-6">
             <div className="border-t border-gray-200 pt-8 mb-5">
               <h2 className="text-lg font-bold text-gray-900">Optional Track</h2>
               <p className="text-xs text-gray-400 mt-0.5">Choose one additional track to enroll in, or skip</p>
@@ -603,13 +615,13 @@ const ElectiveSelectionPage = () => {
               ].filter(Boolean).map(({ type, label, sub, icon, activeBg, activeBorder }) => {
                 const isActive = optionalType === type;
                 return (
-                  <button
+                    <button
                     key={String(type)}
                     disabled={isSubmitted}
                     onClick={() => handleOptionalTypeChange(type)}
-                    className={`flex flex-col items-center gap-1.5 px-3 py-5 rounded-2xl border-2 transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed select-none ${
+                    className={`flex flex-col items-center gap-1.5 px-3 py-5 rounded-md border-2 transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed select-none ${
                       isActive
-                        ? `${activeBg} ${activeBorder} shadow-lg scale-[1.03]`
+                        ? 'bg-primary text-white border-primary shadow-lg scale-[1.03]'
                         : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:bg-gray-50'
                     }`}
                   >
@@ -627,12 +639,12 @@ const ElectiveSelectionPage = () => {
             {optionalType && optionalType !== null && (
               <div>
                 <div className="flex items-center gap-2 mb-3 px-1">
-                  <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p className="text-sm font-semibold text-green-700">
+                  <p className="text-sm font-semibold text-emerald-800">
                     You are enrolled in all {optionalType === 'MINOR' ? 'Minor' : 'Honour'} courses below
-                    {totalCreditUsed > 0 && <span className="ml-2 text-green-600 font-bold">({totalCreditUsed} credits)</span>}
+                    {totalCreditUsed > 0 && <span className="ml-2 text-emerald-700 font-bold">({totalCreditUsed} credits)</span>}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -640,9 +652,9 @@ const ElectiveSelectionPage = () => {
                     const course = slotData.courses[0];
                     const cfg = slotTypeConfig[slotData.slot_type];
                     const colors = {
-                      HONOR: { border: 'border-amber-300', bg: 'bg-amber-50', divider: '#fcd34d', badge: 'bg-amber-200 text-amber-800' },
-                      MINOR: { border: 'border-orange-300', bg: 'bg-orange-50', divider: '#fdba74', badge: 'bg-orange-200 text-orange-800' },
-                      ADDON: { border: 'border-teal-300',   bg: 'bg-teal-50',   divider: '#99f6e4', badge: 'bg-teal-200 text-teal-800' },
+                      HONOR: { border: 'border-primary', bg: 'bg-background', divider: '#7D53F6', badge: 'bg-background text-primary' },
+                      MINOR: { border: 'border-primary', bg: 'bg-background', divider: '#7D53F6', badge: 'bg-background text-primary' },
+                      ADDON: { border: 'border-primary', bg: 'bg-background', divider: '#7D53F6', badge: 'bg-background text-primary' },
                     };
                     const c = colors[optionalType] || colors.ADDON;
                     return (
@@ -653,7 +665,7 @@ const ElectiveSelectionPage = () => {
                             <span className="text-sm">{cfg.icon}</span>
                             <span className="text-xs font-bold text-gray-700">{slotName}</span>
                           </div>
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${c.badge}`}>Enrolled</span>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-green-700`}>Enrolled</span>
                         </div>
                         {course ? (
                           <div className="px-4 py-4">
@@ -681,7 +693,7 @@ const ElectiveSelectionPage = () => {
         {/* SECTION 3 — Add-On Courses (optional, student opts in) */}
         {/* ════════════════════════════════════════ */}
         {addonSlotEntries.length > 0 && (
-          <div className="mb-8">
+          <div className="mb-8 card-custom p-6">
             <div className="border-t border-gray-200 pt-8 mb-4">
               <div className="flex items-center gap-2 mb-0.5">
                 <h2 className="text-lg font-bold text-gray-900">Add-On Courses</h2>
@@ -694,7 +706,7 @@ const ElectiveSelectionPage = () => {
                 const course = slotData.courses[0];
                 const isEnrolled = !!selections[slotName];
                 return (
-                  <div key={slotName} className={`rounded-2xl border-2 overflow-hidden transition-all ${
+                  <div key={slotName} className={`rounded-md border-2 overflow-hidden transition-all ${
                     isEnrolled ? 'border-teal-300 bg-teal-50' : 'border-gray-200 bg-white'
                   }`}>
                     <div className={`px-4 py-3 border-b flex items-center justify-between ${
@@ -705,8 +717,8 @@ const ElectiveSelectionPage = () => {
                         <span className="text-xs font-bold text-gray-700">{slotName}</span>
                       </div>
                       {isEnrolled
-                        ? <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-teal-200 text-teal-800">Enrolled</span>
-                        : <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Not enrolled</span>
+                        ? <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-background text-green-600">Enrolled</span>
+                        : <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-background text-red-600">Not enrolled</span>
                       }
                     </div>
                     {course ? (
@@ -719,8 +731,8 @@ const ElectiveSelectionPage = () => {
                             onClick={() => handleSelection(slotName, isEnrolled ? null : course.hod_selection_id, course.credits)}
                             className={`mt-3 w-full py-2 rounded-xl text-xs font-bold transition-all ${
                               isEnrolled
-                                ? 'bg-teal-100 text-teal-700 hover:bg-teal-200'
-                                : 'bg-gray-900 text-white hover:bg-gray-700'
+                                ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                : 'btn-primary-custom'
                             }`}
                           >
                             {isEnrolled ? 'Remove' : 'Enroll'}
@@ -743,17 +755,18 @@ const ElectiveSelectionPage = () => {
         <div className="border-t border-gray-200 pt-6 mt-4 pb-6">
           {isSubmitted ? (
             <div className="flex items-center justify-center gap-2 py-4 px-6 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-700 font-semibold">
-              <span>🔒</span> Selections submitted and locked
+              <svg className="w-5 h-5 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11V7a4 4 0 10-8 0v4" /><rect x="3" y="11" width="14" height="10" rx="2" ry="2"/></svg>
+              Selections submitted and locked
             </div>
           ) : (
             <div className="flex flex-col items-stretch gap-3">
               <button
                 onClick={handleSubmit}
                 disabled={!canSubmit || isSubmitting}
-                className={`w-full py-4 rounded-2xl text-white font-bold text-base tracking-wide transition-all shadow-sm ${
+                className={`w-full py-4 rounded-2xl font-bold text-base tracking-wide transition-all shadow-sm ${
                   !canSubmit || isSubmitting
                     ? 'bg-gray-200 cursor-not-allowed text-gray-400 shadow-none'
-                    : 'bg-gray-900 hover:bg-gray-700 active:scale-[0.98] shadow-md'
+                    : 'bg-primary text-white active:scale-[0.98] shadow-md'
                 }`}
               >
                 {isSubmitting

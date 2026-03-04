@@ -586,9 +586,9 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 	// Create the mark entry window with user_id
 	result, err := tx.Exec(`
 		INSERT INTO mark_entry_windows 
-		(user_id, department_id, semester, course_id, start_at, end_at, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, 1)
-	`, numericUserID, req.DepartmentID, req.Semester, req.CourseID, req.StartAt, req.EndAt)
+		(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+	`, numericUserID, req.DepartmentID, req.Semester, req.CourseID, req.StartAt, req.EndAt, req.WindowName)
 
 	if err != nil {
 		_ = tx.Rollback()

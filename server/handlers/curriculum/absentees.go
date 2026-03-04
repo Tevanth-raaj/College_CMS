@@ -32,6 +32,7 @@ type ExamAbsentee struct {
 	LearningModeID int        `json:"learning_mode_id"`
 	CreatedAt      time.Time  `json:"created_at"`
 	WindowEndAt    *time.Time `json:"window_end_at,omitempty"`
+	WindowName     string     `json:"window_name,omitempty"`
 }
 
 type absenteeRow struct {
@@ -524,7 +525,8 @@ func GetExamAbsentees(w http.ResponseWriter, r *http.Request) {
 			COALESCE(mct.name, '')                  AS category_name,
 			ea.learning_mode_id,
 			MIN(ea.created_at)                      AS created_at,
-			MAX(mew.end_at)                         AS window_end_at
+			MAX(mew.end_at)                         AS window_end_at,
+			MAX(COALESCE(mew.window_name, ''))      AS window_name
 		FROM exam_absentees ea
 		LEFT JOIN courses c ON ea.course_id = c.id
 		LEFT JOIN students s ON ea.student_id = s.id
@@ -552,7 +554,7 @@ func GetExamAbsentees(w http.ResponseWriter, r *http.Request) {
 			&a.ID, &a.WindowID, &a.CourseID, &a.CourseCode, &a.CourseName,
 			&a.StudentID, &a.StudentName, &a.RegisterNo,
 			&a.MarkCategoryID, &a.CategoryName, &a.LearningModeID, &a.CreatedAt,
-			&a.WindowEndAt,
+			&a.WindowEndAt, &a.WindowName,
 		); err != nil {
 			log.Printf("absentees: scan error: %v", err)
 			continue

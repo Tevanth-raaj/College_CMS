@@ -25,43 +25,27 @@ function LoginPage() {
       const data = await response.json();
 
       if (data.success) {
-        // Determine the best name to display
-        const displayName = data.teacher_data?.name || data.user.username;
-        
         // Store user info in localStorage
         localStorage.setItem('userRole', data.user.role)
-        localStorage.setItem('userName', data.user.full_name || data.teacher_name || data.user.username)
         localStorage.setItem('userEmail', data.user.email)
         localStorage.setItem('userId', data.user.id)
         localStorage.setItem('user_id', data.user.id) // Store with underscore for consistency
         localStorage.setItem('username', data.user.username) // Store username for API calls
         
-        // Store teacher ID if teacher role (use teachers.id, NOT users.id)
-        if (data.user.role === 'teacher' && data.teacher_data?.teacher_id) {
-          localStorage.setItem('teacherId', data.teacher_data.teacher_id)
-          localStorage.setItem('teacher_id', data.teacher_data.teacher_id) // This is teachers.id, not users.id
-          localStorage.setItem('faculty_id', data.teacher_data.faculty_id) // Store alphanumeric faculty ID too
-        }
-
-        setUsername("");
-        setPassword("");
-
-        // Redirect based on role
-        if (data.user.role === "teacher") {
-          navigate("/teacher-dashboard");
-        } else if (data.user.role === "curriculum_entry_user") {
-          navigate("/curriculum");
-        } else if (data.user.role === "hod") {
-          navigate("/hod/elective-management");
+        // Store teacher data if teacher role and teacher_data exists
+        if ((data.user.role === 'teacher' || data.user.role === 'hod') && data.teacher_data) {
+          const teacherData = data.teacher_data
+          localStorage.setItem('teacherId', teacherData.teacher_id)
+          localStorage.setItem('teacher_id', teacherData.teacher_id)
+          localStorage.setItem('faculty_id', teacherData.faculty_id || '')
+          localStorage.setItem('teacher_name', teacherData.name || '')
+          localStorage.setItem('teacher_email', teacherData.email || '')
+          localStorage.setItem('teacher_dept', teacherData.dept || '')
+          localStorage.setItem('teacher_designation', teacherData.designation || '')
+          localStorage.setItem('userName', teacherData.name || data.user.username)
+          console.log('Stored teacher data:', teacherData)
         } else {
-          // Clear any stale teacher data from previous sessions
-          localStorage.removeItem('teacher_id');
-          localStorage.removeItem('faculty_id');
-          localStorage.removeItem('teacher_name');
-          localStorage.removeItem('teacher_email');
-          localStorage.removeItem('teacher_dept');
-          localStorage.removeItem('teacher_designation');
-          console.log('No teacher data - cleared stale teacher localStorage');
+          localStorage.setItem('userName', data.user.full_name || data.user.username)
         }
         
         console.log('Login successful, stored email:', data.user.email);
@@ -75,7 +59,7 @@ function LoginPage() {
           'admin': '/dashboard',
           'hod': '/curriculum',
           'hr': '/hr/faculty',
-          'teacher': '/teacher/course-selection',
+          'teacher': '/teacher-dashboard',
           'student': '/student/elective-selection'
         };
         
