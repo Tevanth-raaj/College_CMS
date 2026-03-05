@@ -34,6 +34,7 @@ import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
 import MarkEntryPermissionsPage from "../pages/curriculum/MarkEntryPermissionsPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
+import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
 
 //404 page
 import NotFoundPage from "../components/NotFoundPage";
@@ -91,12 +92,17 @@ function App() {
           />
 
           <Route path="course-allocation" element={<CourseAllocationPage />} />
+          <Route path="elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="teacher/course-selection" element={<TeacherCourseSelectionPage />} />
           <Route
             path="elective-management"
             element={<ElectiveManagementPage />}
           />
           <Route path="hod/elective-management" element={<HODElectivePage />} />
+          <Route path="hod/honour-minor-eligibility" element={<HODHonourMinorEligibilityPage />} />
           <Route path="academic-calendar" element={<AcademicCalendarPage />} />
+          <Route path="exam-absentees" element={<AbsenteesPage />} />
 
           <Route path="regulations" element={<RegulationPage />} />
           <Route
