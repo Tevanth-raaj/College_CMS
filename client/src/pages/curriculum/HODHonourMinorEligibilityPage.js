@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import MainLayout from "../../components/MainLayout";
 import { API_BASE_URL } from "../../config";
 
@@ -15,6 +15,34 @@ const HODHonourMinorEligibilityPage = () => {
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
   const [exportingTeachers, setExportingTeachers] = useState(false);
+
+  // Window selection state
+  const [windows, setWindows] = useState([]);
+  const [selectedWindow, setSelectedWindow] = useState(null);
+  const [loadingWindows, setLoadingWindows] = useState(false);
+
+  // Fetch allocation windows on mount
+  useEffect(() => {
+    const fetchWindows = async () => {
+      setLoadingWindows(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/hod/teacher-limits/windows`);
+        if (res.ok) {
+          const data = await res.json();
+          setWindows(data);
+          if (data.length > 0) {
+            // Default to latest window (first in the list – ordered DESC)
+            setSelectedWindow(data[0]);
+          }
+        }
+      } catch (e) {
+        // Non-fatal: export will still work without filter
+      } finally {
+        setLoadingWindows(false);
+      }
+    };
+    fetchWindows();
+  }, []);
 
   // Honour templates and imports
   const handleDownloadHonourTemplate = async () => {
@@ -149,20 +177,31 @@ const HODHonourMinorEligibilityPage = () => {
   const handleExportTeacherLimits = async () => {
     try {
       setExportingTeachers(true);
-      const response = await fetch(`${API_BASE_URL}/hod/teacher-limits/export`);
+      let url = `${API_BASE_URL}/hod/teacher-limits/export`;
+      if (selectedWindow) {
+        const params = new URLSearchParams({
+          window_start: selectedWindow.window_start,
+          window_end: selectedWindow.window_end,
+        });
+        url += `?${params.toString()}`;
+      }
+      const response = await fetch(url);
       if (!response.ok) {
         throw new Error("Failed to export teacher data");
       }
 
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const urlObj = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = `teacher_limits_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.href = urlObj;
+      const windowLabel = selectedWindow
+        ? `${selectedWindow.academic_year}_${selectedWindow.semester_type}`
+        : new Date().toISOString().slice(0, 10);
+      a.download = `teacher_limits_${windowLabel}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(urlObj);
 
       setMessageType("success");
       setMessage("Teacher limits data exported successfully.");
@@ -186,6 +225,41 @@ const HODHonourMinorEligibilityPage = () => {
           <p className="text-sm text-gray-600">
             Export teacher workload and course allocation data including assigned limits, subjects, and labs.
           </p>
+
+          {/* Window selector */}
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">
+              Allocation Window
+            </label>
+            {loadingWindows ? (
+              <p className="text-sm text-gray-500">Loading windows…</p>
+            ) : windows.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">No allocation windows found — exporting all records.</p>
+            ) : (
+              <select
+                value={selectedWindow ? `${selectedWindow.window_start}||${selectedWindow.window_end}` : ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) {
+                    setSelectedWindow(null);
+                    return;
+                  }
+                  const found = windows.find(
+                    (w) => `${w.window_start}||${w.window_end}` === val
+                  );
+                  setSelectedWindow(found || null);
+                }}
+                className="w-full max-w-md border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {windows.map((w) => (
+                  <option key={`${w.window_start}||${w.window_end}`} value={`${w.window_start}||${w.window_end}`}>
+                    {w.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
           <button
             onClick={handleExportTeacherLimits}
             disabled={exportingTeachers}

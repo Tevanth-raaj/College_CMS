@@ -203,8 +203,9 @@ const HRAppealsReviewPage = () => {
   };
 
   return (
-    <MainLayout>
-      <div className="max-w-7xl mx-auto py-6 px-4">
+    <MainLayout 
+    title="Teacher Workload Appeals">
+      <div className="card-custom mx-auto py-6 px-4">
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Teacher Workload Appeals</h1>
@@ -238,7 +239,7 @@ const HRAppealsReviewPage = () => {
           <div
             className={`mb-4 p-3 rounded-lg text-base font-medium ${
               message.type === 'success'
-                ? 'bg-green-50 text-green-800 border border-green-200'
+                ? 'bg-green-50 text-primary border border-green-200'
                 : 'bg-red-50 text-red-800 border border-red-200'
             }`}
           >
@@ -252,7 +253,7 @@ const HRAppealsReviewPage = () => {
             onClick={() => setStatusFilter('pending')}
             className={`px-6 py-2 rounded-lg font-medium transition ${
               statusFilter === 'pending'
-                ? 'bg-orange-600 text-white shadow-lg'
+                ? 'bg-primary text-white shadow-lg'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
             }`}
           >
@@ -262,7 +263,7 @@ const HRAppealsReviewPage = () => {
             onClick={() => setStatusFilter('resolved')}
             className={`px-6 py-2 rounded-lg font-medium transition ${
               statusFilter === 'resolved'
-                ? 'bg-green-600 text-white shadow-lg'
+                ? 'bg-primary text-white shadow-lg'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
             }`}
           >
@@ -272,7 +273,7 @@ const HRAppealsReviewPage = () => {
             onClick={() => setStatusFilter('all')}
             className={`px-6 py-2 rounded-lg font-medium transition ${
               statusFilter === 'all'
-                ? 'bg-blue-600 text-white shadow-lg'
+                ? 'bg-primary text-white shadow-lg'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
             }`}
           >
@@ -282,18 +283,18 @@ const HRAppealsReviewPage = () => {
 
         {/* Appeals Table */}
         {loading ? (
-          <div className="text-center py-12">
+          <div className="text-center py-20">
             <p className="text-xl text-gray-600">Loading appeals...</p>
           </div>
         ) : appeals.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-lg shadow">
+          <div className="text-center py-20 bg-white rounded-lg ">
             <p className="text-xl text-gray-600">No appeals found</p>
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="bg-white rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b-2 border-gray-200">
+                <thead className="bg-white border-b-2 border-gray-200">
                   <tr>
                     <th className="text-left py-3 px-4 font-semibold text-gray-900">Teacher</th>
                     <th className="text-left py-3 px-4 font-semibold text-gray-900">Appeal Message</th>
@@ -323,7 +324,7 @@ const HRAppealsReviewPage = () => {
                             className={`px-3 py-1 rounded-full text-xs font-medium ${
                               appeal.hr_action?.String === 'REJECTED'
                                 ? 'bg-red-100 text-red-800'
-                                : 'bg-green-100 text-green-800'
+                                : 'bg-background text-primary'
                             }`}
                           >
                             {appeal.hr_action?.String}
@@ -341,7 +342,7 @@ const HRAppealsReviewPage = () => {
                             <button
                               onClick={() => handleOpenAcceptModal(appeal)}
                               disabled={isSubmitting}
-                              className="px-4 py-1 bg-green-600 text-white rounded text-xs font-medium hover:bg-green-700 disabled:opacity-50"
+                              className="px-4 py-1 bg-primary text-white rounded text-xs font-medium  disabled:opacity-50"
                             >
                               Accept
                             </button>
@@ -374,7 +375,7 @@ const HRAppealsReviewPage = () => {
 
             <div className="space-y-4">
               {/* Teacher Info */}
-              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+              <div className="bg-background p-4 rounded-lg border border-blue-200">
                 <p className="text-sm text-gray-600 mb-1">Teacher:</p>
                 <p className="text-lg font-medium text-gray-900">{selectedAppeal.teacher_name}</p>
                 <p className="text-sm text-indigo-600 font-semibold">Faculty ID: {selectedAppeal.teacher_faculty_id}</p>
@@ -409,7 +410,7 @@ const HRAppealsReviewPage = () => {
                                 min="0"
                                 value={alloc.max_count}
                                 onChange={(e) => updateAllocationCount(alloc.course_type_id, e.target.value)}
-                                className="w-20 px-3 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent text-center"
+                                className="w-20 px-3 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-primary focus:border-transparent text-center"
                               />
                             </div>
                           </div>
@@ -448,7 +449,7 @@ const HRAppealsReviewPage = () => {
                 </button>
                 <button
                   onClick={handleAccept}
-                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
+                  className="flex-1 px-4 py-2 bg-primary text-white rounded-lg font-medium disabled:opacity-50"
                   disabled={isSubmitting}
                 >
                   {isSubmitting ? 'Processing...' : 'Approve & Update Allocation'}

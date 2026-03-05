@@ -18,11 +18,14 @@ function MarkEntryPage() {
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [markErrors, setMarkErrors] = useState({}) // key: `${studentId}_${categoryId}`
   const [absentees, setAbsentees] = useState([]) // [{student_id, mark_category_id}]
-  const [applicableWindows, setApplicableWindows] = useState([])
-  const [selectedWindowId, setSelectedWindowId] = useState(null)
   const [autoSaveStatus, setAutoSaveStatus] = useState('') // '', 'saving', 'saved', 'error'
   const autoSaveTimerRef = useRef(null)
   const pendingMarksRef = useRef({})
+
+  // Missed-window appeal states (for teachers who never submitted before the window closed)
+  const [missedWindowAppeals, setMissedWindowAppeals] = useState({}) // { courseId → appeal | null }
+  const [appealReason, setAppealReason] = useState('')
+  const [appealSubmitting, setAppealSubmitting] = useState(false)
 
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
@@ -139,45 +142,7 @@ function MarkEntryPage() {
     if (userRole !== 'teacher' && !hasActiveWindow) return
     fetchMarkCategories()
     loadExistingMarks()
-  }, [selectedCourse, learningMode, hasActiveWindow, userRole, selectedWindowId])
-
-  useEffect(() => {
-    if (!isTeacher || !selectedCourse || !facultyIdentifier) {
-      setApplicableWindows([])
-      setSelectedWindowId(null)
-      return
-    }
-    fetchApplicableWindows()
-  }, [isTeacher, selectedCourse?.course_id, facultyIdentifier])
-
-  const fetchApplicableWindows = async () => {
-    try {
-      const params = new URLSearchParams({
-        teacher_id: facultyIdentifier,
-        course_id: String(selectedCourse.course_id),
-      })
-      const response = await fetch(`${API_BASE_URL}/mark-entry/applicable-windows?${params.toString()}`)
-      if (!response.ok) {
-        setApplicableWindows([])
-        setSelectedWindowId(null)
-        return
-      }
-
-      const data = await response.json()
-      const windows = Array.isArray(data) ? data : []
-      setApplicableWindows(windows)
-
-      if (windows.length === 0) {
-        setSelectedWindowId(null)
-      } else if (!windows.some((w) => w.id === selectedWindowId)) {
-        setSelectedWindowId(windows[0].id)
-      }
-    } catch (error) {
-      console.error('Error fetching applicable windows:', error)
-      setApplicableWindows([])
-      setSelectedWindowId(null)
-    }
-  }
+  }, [selectedCourse, learningMode, hasActiveWindow, userRole])
 
   const fetchMarkCategories = async () => {
     try {
@@ -200,15 +165,8 @@ function MarkEntryPage() {
         : '1,2'
       
       console.log('Requesting mark categories for learning modes:', learningModesParam)
-      const params = new URLSearchParams({
-        teacher_id: facultyIdentifier,
-        learning_modes: learningModesParam,
-      })
-      if (selectedWindowId) {
-        params.set('window_id', String(selectedWindowId))
-      }
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?${params.toString()}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?teacher_id=${facultyIdentifier}&learning_modes=${learningModesParam}`
       )
       if (response.status === 403) {
         setMarkCategories([])
@@ -251,14 +209,8 @@ function MarkEntryPage() {
         setMessage({ type: 'error', text: 'User identifier not found. Please login again.' })
         return
       }
-      const params = new URLSearchParams({
-        teacher_id: facultyIdentifier,
-      })
-      if (selectedWindowId) {
-        params.set('window_id', String(selectedWindowId))
-      }
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/student-marks?${params.toString()}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/student-marks?teacher_id=${facultyIdentifier}`
       )
       if (response.status === 403) {
         setStudentMarks({})
@@ -754,7 +706,6 @@ function MarkEntryPage() {
         body: JSON.stringify({
           course_id: selectedCourse.course_id,
           faculty_id: facultyId,
-          window_id: selectedWindowId || undefined,
           mark_entries: markEntries,
         }),
       })
@@ -776,27 +727,64 @@ function MarkEntryPage() {
       setSavingMarks(false)
     }
   }
-  const handleFillOnes = () => {
-    const updated = { ...studentMarks }
-    students.forEach((student) => {
-      if (!updated[student.student_id]) {
-        updated[student.student_id] = {}
+
+
+
+  // Fetch any existing appeal for the selected course's missed window
+  useEffect(() => {
+    if (!selectedCourse || !selectedCourse.has_missed_submission || !selectedCourse.missed_window) return
+    if (!teacherId) return
+    fetchMissedWindowAppeal(selectedCourse)
+    setAppealReason('') // reset form when course changes
+  }, [selectedCourse?.course_id])
+
+  const fetchMissedWindowAppeal = async (course) => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/mark-appeals?teacher_id=${encodeURIComponent(teacherId)}&course_id=${course.course_id}&window_id=${course.missed_window.id}`
+      )
+      if (res.ok) {
+        const data = await res.json()
+        setMissedWindowAppeals(prev => ({
+          ...prev,
+          [course.course_id]: Array.isArray(data) && data.length > 0 ? data[0] : null,
+        }))
       }
-      filteredMarkCategories.forEach((category) => {
-        if (isCellAbsent(student.student_id, category.id)) return
-        updated[student.student_id][category.id] = 1
-      })
-    })
-    setStudentMarks(updated)
-    setMessage({ type: 'success', text: 'Filled mark cells with 1 for current students/components.' })
+    } catch (err) {
+      console.error('Error fetching missed window appeal:', err)
+    }
   }
 
-  const handleSaveMarks = async () => {
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current)
-      autoSaveTimerRef.current = null
+  const submitMissedWindowAppeal = async (course) => {
+    if (!appealReason.trim()) {
+      setMessage({ type: 'error', text: 'Please enter a reason for the appeal.' })
+      return
     }
-    await doSaveMarks()
+    setAppealSubmitting(true)
+    try {
+      const res = await fetch(`${API_BASE_URL}/mark-appeals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teacher_id: teacherId,
+          course_id: course.course_id,
+          window_id: course.missed_window.id,
+          reason: appealReason.trim(),
+        }),
+      })
+      if (res.ok) {
+        setAppealReason('')
+        setMessage({ type: 'success', text: 'Appeal submitted. The COE will review your request.' })
+        await fetchMissedWindowAppeal(course)
+      } else {
+        const errText = await res.text()
+        setMessage({ type: 'error', text: errText || 'Failed to submit appeal.' })
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Error submitting appeal. Please try again.' })
+    } finally {
+      setAppealSubmitting(false)
+    }
   }
 
   if (loading) {
@@ -875,6 +863,144 @@ function MarkEntryPage() {
           </div>
         )}
 
+        {/* Missed Window Appeal Card — shown when a teacher never submitted before the window closed
+            Hidden if teacher now has an active window (COE already extended it). */}
+        {selectedCourse && selectedCourse.has_missed_submission && selectedCourse.missed_window && isTeacher && !selectedCourse.has_window && (() => {
+          const appeal = missedWindowAppeals[selectedCourse.course_id]
+          const win = selectedCourse.missed_window
+          return (
+            <div className="bg-white border border-red-200 rounded-xl shadow-sm overflow-hidden">
+              {/* Header */}
+              <div className="px-6 py-4 bg-gradient-to-r from-red-500 to-rose-500 flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.04 0 1.911-.757 1.993-1.79L21 4.79A1.99 1.99 0 0019 3H5a1.99 1.99 0 00-2 2.21l.947 13.21c.082 1.033.954 1.79 1.993 1.79z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-white font-bold text-sm">Missed Mark Entry Window</h3>
+                  <p className="text-red-100 text-xs">You did not submit marks during the window period for this course.</p>
+                </div>
+              </div>
+
+              {/* Window Details */}
+              <div className="px-6 py-4 border-b border-red-100 bg-red-50/40">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Window Details</p>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-xs text-gray-500">Window</span>
+                    <p className="font-medium text-gray-800">{win.name || `Window #${win.id}`}</p>
+                  </div>
+                  <div>
+                    <span className="text-xs text-gray-500">Period</span>
+                    <p className="font-medium text-gray-800">
+                      {new Date(win.start_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      {' → '}
+                      {new Date(win.end_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Appeal Section */}
+              <div className="px-6 py-5">
+                {appeal === undefined ? (
+                  // Still loading appeal status
+                  <div className="flex items-center gap-2 text-gray-400 text-sm">
+                    <div className="animate-spin w-4 h-4 border-2 border-gray-300 border-t-transparent rounded-full" />
+                    Checking appeal status...
+                  </div>
+                ) : !appeal ? (
+                  // No appeal yet — show submission form
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Submit an Appeal</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      If you missed the deadline due to a valid reason, submit an appeal. The COE will review and can extend the window for you.
+                    </p>
+                    <textarea
+                      value={appealReason}
+                      onChange={e => setAppealReason(e.target.value)}
+                      placeholder="Explain why you missed the mark entry deadline..."
+                      rows={3}
+                      className="w-full px-4 py-2.5 text-sm border border-red-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400 resize-none placeholder-gray-400"
+                    />
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        onClick={() => submitMissedWindowAppeal(selectedCourse)}
+                        disabled={appealSubmitting || !appealReason.trim()}
+                        className="px-5 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+                      >
+                        {appealSubmitting ? (
+                          <>
+                            <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                            Submitting...
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                            </svg>
+                            Submit Appeal
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ) : appeal.status === 'pending' ? (
+                  // Appeal submitted, waiting for COE
+                  <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-amber-800">Appeal Submitted — Awaiting COE Review</p>
+                      <p className="text-xs text-gray-700 mt-1 leading-relaxed">{appeal.reason}</p>
+                      <p className="text-xs text-gray-400 mt-1.5">Submitted on {new Date(appeal.created_at).toLocaleString()}</p>
+                    </div>
+                  </div>
+                ) : appeal.status === 'resolved' ? (
+                  // COE approved — window extended, teacher should reload
+                  <div className="flex items-start gap-3 bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-green-800">Appeal Approved — Window Has Been Extended</p>
+                      <p className="text-xs text-gray-600 mt-1">The COE has extended the mark entry window for you. Reload the page to start entering marks.</p>
+                      <button
+                        onClick={() => window.location.reload()}
+                        className="mt-2.5 px-3 py-1.5 text-xs font-semibold text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                      >
+                        Reload Page
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // Rejected (edge case)
+                  <div className="flex items-start gap-3 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-700">Appeal Rejected</p>
+                      <p className="text-xs text-gray-600 mt-1">The COE has reviewed your appeal and declined the extension. Please contact the COE directly for further assistance.</p>
+                      {appeal.resolved_at && (
+                        <p className="text-xs text-gray-400 mt-1">Reviewed on {new Date(appeal.resolved_at).toLocaleString()}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
+
         {/* Learning Mode Toggle */}
         {selectedCourse && learningMode && (
           <div className="bg-purple-50 rounded-lg p-4 border border-purple-100 shadow-sm">
@@ -917,31 +1043,6 @@ function MarkEntryPage() {
           </div>
         )}
 
-        {/* Debug: Applicable Window Selector (faculty only, shown only if multiple windows apply) */}
-        {isTeacher && selectedCourse && applicableWindows.length > 1 && (
-          <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 shadow-sm">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div>
-                <h4 className="text-sm font-semibold text-gray-800">Debug Window Selector</h4>
-                <p className="text-xs text-gray-600 mt-1">Multiple active windows apply for this course/faculty. Select one for mark load/save.</p>
-              </div>
-              <div className="min-w-[320px]">
-                <select
-                  value={selectedWindowId || ''}
-                  onChange={(e) => setSelectedWindowId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                  className="w-full px-3 py-2 border border-amber-300 rounded-lg focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 bg-white"
-                >
-                  {applicableWindows.map((window) => (
-                    <option key={window.id} value={window.id}>
-                      Window #{window.id} | {window.start_at} to {window.end_at}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Mark Entry Table */}
         {selectedCourse && filteredMarkCategories.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col" style={{ height: 'calc(100vh - 400px)', minHeight: '500px' }}>
@@ -961,47 +1062,6 @@ function MarkEntryPage() {
                     </span>
                   ) : (
                     <>
-                      <button
-                        onClick={handleFillOnes}
-                        disabled={savingMarks}
-                        className="px-5 py-2 bg-gray-600 text-white text-sm font-medium rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                      >
-                        Fill 1s
-                      </button>
-                      <button
-                        onClick={handleSaveMarks}
-                        disabled={savingMarks}
-                        className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {savingMarks ? 'Saving...' : 'Save'}
-                      </button>
-                      {/* Auto-save status indicator */}
-                      {autoSaveStatus && (
-                        <div className="flex items-center gap-2 text-sm">
-                          {autoSaveStatus === 'saving' && (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
-                              <span className="text-blue-600 font-medium">Saving...</span>
-                            </>
-                          )}
-                          {autoSaveStatus === 'saved' && (
-                            <>
-                              <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
-                              </svg>
-                              <span className="text-green-600 font-medium">Saved</span>
-                            </>
-                          )}
-                          {autoSaveStatus === 'error' && (
-                            <>
-                              <svg className="w-4 h-4 text-red-600" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"/>
-                              </svg>
-                              <span className="text-red-600 font-medium">Error saving</span>
-                            </>
-                          )}
-                        </div>
-                      )}
                       <button
                         onClick={() => setShowSubmitDialog(true)}
                         disabled={!allMarksFilled || Object.keys(markErrors).length > 0}
@@ -1101,9 +1161,19 @@ function MarkEntryPage() {
                               return (
                                 <td key={category.id} className="px-3 py-3 text-center border-r border-gray-200" style={{ minWidth: '140px', maxWidth: '180px' }}>
                                   {isSubmitted ? (
-                                    <span className="inline-block w-20 px-2 py-1 text-center text-sm font-medium text-gray-700 bg-gray-100 rounded border border-gray-200">
-                                      {earned ?? '—'}
-                                    </span>
+                                    isCellAbsent(student.student_id, category.id) ? (
+                                      <span className="inline-flex items-center gap-1 text-red-400 text-xs font-medium tracking-wide">
+                                        <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                          <circle cx="12" cy="12" r="10" />
+                                          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                                        </svg>
+                                        Absent
+                                      </span>
+                                    ) : (
+                                      <span className="inline-block w-20 px-2 py-1 text-center text-sm font-medium text-gray-700 bg-gray-100 rounded border border-gray-200">
+                                        {earned ?? '—'}
+                                      </span>
+                                    )
                                   ) : isCellAbsent(student.student_id, category.id) ? (
                                     <span className="inline-flex items-center gap-1 text-red-300 text-xs font-medium tracking-wide">
                                       <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
