@@ -1652,9 +1652,14 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if hasSemester {
-			extraJoins += " INNER JOIN curriculum_courses cc ON cc.course_id = tca.course_id"
-			extraJoins += " INNER JOIN normal_cards nc ON cc.semester_id = nc.id"
-			extraWhere += " AND nc.semester_number = ?"
+			// Use a subquery approach to find courses in the specified semester
+			// This is more robust than INNER JOIN which can miss courses if curriculum_courses is incomplete
+			extraWhere += ` AND tca.course_id IN (
+				SELECT DISTINCT cc.course_id 
+				FROM curriculum_courses cc
+				INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+				WHERE nc.semester_number = ?
+			)`
 			teacherArgs = append(teacherArgs, semester.Int64)
 		}
 
