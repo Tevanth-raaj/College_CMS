@@ -188,6 +188,11 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/mark-submissions", curriculum.SubmitMarks).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/mark-submissions/check", curriculum.CheckMarkSubmission).Methods("GET", "OPTIONS")
 
+	// Mark Appeal routes
+	router.HandleFunc("/api/mark-appeals", curriculum.SubmitMarkAppeal).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/mark-appeals", curriculum.GetMarkAppeals).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/mark-appeals/{id}/resolve", curriculum.ResolveMarkAppeal).Methods("POST", "OPTIONS")
+
 	// Exam Absentees routes (COE role)
 	router.HandleFunc("/api/exam-absentees/preview", curriculum.PreviewAbsentees).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/exam-absentees/upload", curriculum.UploadAbsentees).Methods("POST", "OPTIONS")

@@ -334,6 +334,33 @@ func runMigrations() error {
 			  AND ea.id               != dupes.keep_id
 	`)
 
+	// Create mark_appeal_requests table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS mark_appeal_requests (
+			id          INT NOT NULL AUTO_INCREMENT,
+			teacher_id  VARCHAR(45) NOT NULL,
+			course_id   INT NOT NULL,
+			window_id   INT NOT NULL,
+			reason      TEXT NOT NULL,
+			status      ENUM('pending','resolved','rejected') NOT NULL DEFAULT 'pending',
+			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			resolved_at TIMESTAMP NULL,
+			resolved_by VARCHAR(100) NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_appeal (teacher_id, course_id, window_id),
+			KEY idx_appeal_window (window_id),
+			KEY idx_appeal_teacher (teacher_id),
+			KEY idx_appeal_status (status)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to create mark_appeal_requests table: %v", err)
+	} else {
+		log.Println("mark_appeal_requests table created/verified successfully")
+	}
+	// Fix collation on existing table (if it was created with utf8mb4_unicode_ci)
+	DB.Exec(`ALTER TABLE mark_appeal_requests CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`)
+
 	// Add is_active column to teacher_course_tracking if it doesn't exist
 	var isActiveExists int
 	err = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='teacher_course_tracking' AND COLUMN_NAME='is_active'").Scan(&isActiveExists)
