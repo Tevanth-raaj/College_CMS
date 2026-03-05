@@ -268,6 +268,8 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/users/{id}/password", curriculum.ChangePassword).Methods("PUT", "OPTIONS")
 
 	// Student-Teacher Entry routes
+	router.HandleFunc("/api/students/import/template", studentteacher.DownloadStudentImportTemplate).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/students/import", studentteacher.ImportStudents).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/students", studentteacher.GetStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students/{id}", studentteacher.GetStudent).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students", studentteacher.CreateStudent).Methods("POST", "OPTIONS")

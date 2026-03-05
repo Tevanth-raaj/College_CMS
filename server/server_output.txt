@@ -1,6 +1,0 @@
-normal_cards table already exists, skipping rename
-UNIQUE position constraints removed successfully!
-Successfully removed name column from normal_cards!
-Successfully created mark_entry_student_permissions table!
-user_id column already exists in mark_entry_windows
-Server started at http://localhost:5000

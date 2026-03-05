@@ -1281,7 +1281,6 @@ func RemoveNameColumnFromNormalCards() error {
 	}
 
 	if !columnExists {
-		fmt.Println("Name column doesn't exist in normal_cards, skipping removal")
 		return nil
 	}
 
@@ -1295,7 +1294,6 @@ func RemoveNameColumnFromNormalCards() error {
 		return fmt.Errorf("failed to drop name column from normal_cards: %w", err)
 	}
 
-	fmt.Println("Successfully removed name column from normal_cards!")
 	return nil
 }
 
@@ -1325,7 +1323,6 @@ func CreateMarkEntryStudentPermissionsTables() error {
 		return fmt.Errorf("failed to create mark_entry_student_permissions table: %w", err)
 	}
 
-	fmt.Println("Successfully created mark_entry_student_permissions table!")
 	return nil
 }
 
@@ -1343,16 +1340,12 @@ func MigrateTeacherCourseLimitsTeacherID() error {
 	`).Scan(&dataType)
 	if err != nil {
 		// Table may not exist yet – skip
-		fmt.Println("MigrateTeacherCourseLimitsTeacherID: table not found, skipping")
 		return nil
 	}
 
 	if dataType == "varchar" {
-		fmt.Println("teacher_course_limits.teacher_id is already VARCHAR – no migration needed")
 		return nil
 	}
-
-	fmt.Printf("Migrating teacher_course_limits.teacher_id from %s to VARCHAR(50)...\n", dataType)
 
 	// Drop unique constraint – MySQL may name it 'uq_teacher_type' or 'teacher_id'.
 	DB.Exec(`ALTER TABLE teacher_course_limits DROP KEY uq_teacher_type`)
@@ -1376,7 +1369,6 @@ func MigrateTeacherCourseLimitsTeacherID() error {
 		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: re-add unique key failed: %w", err)
 	}
 
-	fmt.Println("teacher_course_limits.teacher_id migrated to VARCHAR(50) successfully")
 	return nil
 }
 
@@ -1397,7 +1389,6 @@ func AddUserIdToMarkEntryWindows() error {
 	}
 
 	if columnExists {
-		fmt.Println("user_id column already exists in mark_entry_windows")
 		return nil
 	}
 
@@ -1411,7 +1402,6 @@ func AddUserIdToMarkEntryWindows() error {
 		return fmt.Errorf("failed to add user_id column to mark_entry_windows: %w", err)
 	}
 
-	fmt.Println("Successfully added user_id column to mark_entry_windows!")
 	return nil
 }
 
@@ -1431,7 +1421,6 @@ func AddWindowNameToMarkEntryWindows() error {
 	}
 
 	if columnExists {
-		fmt.Println("window_name column already exists in mark_entry_windows")
 		return nil
 	}
 
@@ -1443,6 +1432,5 @@ func AddWindowNameToMarkEntryWindows() error {
 		return fmt.Errorf("failed to add window_name column to mark_entry_windows: %w", err)
 	}
 
-	fmt.Println("Successfully added window_name column to mark_entry_windows!")
 	return nil
 }
