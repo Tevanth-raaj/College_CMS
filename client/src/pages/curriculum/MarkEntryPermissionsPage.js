@@ -399,8 +399,6 @@ function MarkEntryPermissionsPage() {
   const loadWindowRule = async () => {
     const query = buildWindowQuery()
     if (!query) {
-      // setWindowStartAt('')
-      // setWindowEndAt('')
       setWindowEnabled(true)
       return
     }
@@ -412,11 +410,7 @@ function MarkEntryPermissionsPage() {
       const data = await res.json()
 
       if (!data) {
-        setWindowStartAt('')
-        setWindowEndAt('')
         setWindowEnabled(true)
-        setSelectedPBLComponents([])
-        setSelectedUALComponents([])
         return
       }
 
@@ -482,6 +476,7 @@ function MarkEntryPermissionsPage() {
       start_at: startDate.toISOString(),
       end_at: endDate.toISOString(),
       enabled: windowEnabled,
+      window_name: windowName.trim(),
       component_ids: [...selectedPBLComponents, ...selectedUALComponents].length > 0
         ? [...selectedPBLComponents, ...selectedUALComponents]
         : null,
@@ -738,7 +733,7 @@ function MarkEntryPermissionsPage() {
     }
 
     // Set scope fields
-    setWindowDepartmentId(win.department_id || '')
+    setWindowDepartmentId(win.department_id ? String(win.department_id) : '')
     setWindowSemester(win.semester || '')
     setWindowCourseId(win.course_id || '')
 
@@ -874,6 +869,65 @@ function MarkEntryPermissionsPage() {
       component_ids: [...selectedPBLComponents, ...selectedUALComponents].length > 0
         ? [...selectedPBLComponents, ...selectedUALComponents]
         : null,
+      teacher_id: null,
+      user_id: null,
+      department_id: null,
+      semester: null,
+      course_id: null,
+    }
+
+    const originalTeacherID = editingWindow.teacher_id || null
+    const originalUserID = editingWindow.user_username || null
+    const originalDepartmentID = editingWindow.department_id ?? null
+    const originalSemester = editingWindow.semester ?? null
+    const originalCourseID = editingWindow.course_id ?? null
+    const isLikelyDepartmentScope =
+      windowScope === 'department_semester' ||
+      windowScope === 'department_semester_course' ||
+      (!originalTeacherID && !originalUserID && originalSemester !== null)
+
+    if (windowScope === 'teacher_course') {
+      payload.teacher_id = selectedTeacherId || originalTeacherID
+      payload.course_id = selectedCourseId ? parseInt(selectedCourseId, 10) : originalCourseID
+    }
+
+    if (windowScope === 'department_semester') {
+      if (windowDepartmentId === '0') payload.department_id = null
+      else if (windowDepartmentId) payload.department_id = parseInt(windowDepartmentId, 10)
+      else payload.department_id = originalDepartmentID
+
+      payload.semester = windowSemester ? parseInt(windowSemester, 10) : originalSemester
+    }
+
+    if (windowScope === 'department_semester_course') {
+      if (windowDepartmentId === '0') payload.department_id = null
+      else if (windowDepartmentId) payload.department_id = parseInt(windowDepartmentId, 10)
+      else payload.department_id = originalDepartmentID
+
+      payload.semester = windowSemester ? parseInt(windowSemester, 10) : originalSemester
+      payload.course_id = windowCourseId && windowCourseId !== 'all' ? parseInt(windowCourseId, 10) : originalCourseID
+    }
+
+    // Safety override for stale UI scope state during edit mode:
+    // if the original window is dept-scoped, always carry dept/semester/course explicitly.
+    if (isLikelyDepartmentScope) {
+      if (windowDepartmentId === '0') payload.department_id = null
+      else if (windowDepartmentId) payload.department_id = parseInt(windowDepartmentId, 10)
+      else payload.department_id = originalDepartmentID
+
+      payload.semester = windowSemester ? parseInt(windowSemester, 10) : originalSemester
+
+      if (windowCourseId === 'all') payload.course_id = null
+      else if (windowCourseId) payload.course_id = parseInt(windowCourseId, 10)
+      else payload.course_id = originalCourseID
+    }
+
+    if (!payload.teacher_id && !payload.user_id && !payload.semester && !payload.course_id) {
+      payload.teacher_id = originalTeacherID
+      payload.user_id = originalUserID
+      payload.department_id = payload.department_id ?? originalDepartmentID
+      payload.semester = payload.semester ?? originalSemester
+      payload.course_id = payload.course_id ?? originalCourseID
     }
 
     setWindowLoading(true)
@@ -883,10 +937,23 @@ function MarkEntryPermissionsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      if (!res.ok) throw new Error('Failed to update window')
+
+      let responseBody = null
+      try {
+        responseBody = await res.json()
+      } catch {
+        responseBody = null
+      }
+
+      if (!res.ok) {
+        throw new Error('Failed to update window')
+      }
+
+      const refreshed = await fetchExistingWindows()
+      const updatedWindow = (refreshed || []).find((windowItem) => String(windowItem.id) === String(editingWindow.id))
+
       setMessage({ type: 'success', text: 'Window updated successfully.' })
       setEditingWindow(null)
-      await fetchExistingWindows()
     } catch (error) {
       console.error('Error updating window:', error)
       setMessage({ type: 'error', text: 'Failed to update window.' })
@@ -908,6 +975,8 @@ function MarkEntryPermissionsPage() {
   const getScopeDescription = (window) => {
     if (window.teacher_id && window.course_id) {
       return `${window.teacher_name} - ${window.course_code} (Most Specific)`
+    } else if (window.user_id && window.course_id) {
+      return `${window.user_username || 'User'} - ${window.course_code}`
     } else if (window.department_id && window.semester && window.course_id) {
       return `${window.department_name} - Sem ${window.semester} - ${window.course_code}`
     } else if (window.department_id && window.semester) {
@@ -917,7 +986,14 @@ function MarkEntryPermissionsPage() {
     } else if (!window.department_id && window.semester) {
       return `All Departments - Semester ${window.semester}`
     }
-    return 'Unknown scope'
+
+    const parts = []
+    if (window.teacher_name) parts.push(window.teacher_name)
+    if (window.user_username) parts.push(window.user_username)
+    if (window.department_name) parts.push(window.department_name)
+    if (window.semester) parts.push(`Sem ${window.semester}`)
+    if (window.course_code) parts.push(window.course_code)
+    return parts.length > 0 ? parts.join(' - ') : 'General Window'
   }
 
   const getWindowStatus = (win) => {
@@ -999,6 +1075,11 @@ function MarkEntryPermissionsPage() {
             enabled: windowEnabled,
             window_name: windowName.trim(),
             component_ids: allComponents.length > 0 ? allComponents : null,
+            teacher_id: null,
+            user_id: selectedUserId || null,
+            department_id: windowDepartmentId && windowDepartmentId !== '0' ? parseInt(windowDepartmentId, 10) : null,
+            semester: windowSemester ? parseInt(windowSemester, 10) : null,
+            course_id: windowCourseId && windowCourseId !== 'all' ? parseInt(windowCourseId, 10) : null,
           })
         })
 
@@ -1335,7 +1416,7 @@ function MarkEntryPermissionsPage() {
                           <option value="0">All Departments</option>
                           {departments.map((department) => (
                             <option key={department.id} value={department.id}>
-                              {department.name}
+                              {department.department_name || department.name || `Department ${department.id}`}
                             </option>
                           ))}
                         </select>
@@ -1624,7 +1705,7 @@ function MarkEntryPermissionsPage() {
                       >
                         <option value="">All Departments</option>
                         {departments.map((dept) => (
-                          <option key={dept.id} value={dept.id}>{dept.name}</option>
+                          <option key={dept.id} value={dept.id}>{dept.department_name || dept.name || `Department ${dept.id}`}</option>
                         ))}
                       </select>
                     </div>
@@ -1728,7 +1809,11 @@ function MarkEntryPermissionsPage() {
                       onChange={(e) => setStudentFilters({ ...studentFilters, department: e.target.value })}
                       className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 bg-white">
                       <option value="">All Departments</option>
-                      {departments.map(dept => (<option key={dept.id} value={dept.name}>{dept.name}</option>))}
+                      {departments.map(dept => (
+                        <option key={dept.id} value={dept.department_name || dept.name || ''}>
+                          {dept.department_name || dept.name || `Department ${dept.id}`}
+                        </option>
+                      ))}
                     </select>
                     <input type="number" placeholder="Year (optional)" value={studentFilters.year}
                       onChange={(e) => setStudentFilters({ ...studentFilters, year: e.target.value })}

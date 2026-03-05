@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strconv"
@@ -41,6 +43,7 @@ type markEntryOverviewRow struct {
 	DepartmentName      string  `json:"department_name"`
 	Semester            int     `json:"semester"`
 	WindowID            *int    `json:"window_id,omitempty"`
+	WindowName          *string `json:"window_name,omitempty"`
 	WindowStartAt       *string `json:"window_start_at,omitempty"`
 	WindowEndAt         *string `json:"window_end_at,omitempty"`
 	WindowStatus        string  `json:"window_status"`
@@ -127,6 +130,7 @@ type extensionRequestBody struct {
 
 type selectedWindowContext struct {
 	ID           int
+	WindowName   sql.NullString
 	TeacherID    sql.NullString
 	DepartmentID sql.NullInt64
 	Semester     sql.NullInt64
@@ -192,11 +196,12 @@ func getTeacherIdentifierAliases(teacherID string) []string {
 func getSelectedWindowContext(windowID int) (*selectedWindowContext, error) {
 	ctx := &selectedWindowContext{}
 	err := db.DB.QueryRow(`
-		SELECT id, teacher_id, department_id, semester, course_id, start_at, end_at, enabled
+		SELECT id, COALESCE(window_name, ''), teacher_id, department_id, semester, course_id, start_at, end_at, enabled
 		FROM mark_entry_windows
 		WHERE id = ?
 	`, windowID).Scan(
 		&ctx.ID,
+		&ctx.WindowName,
 		&ctx.TeacherID,
 		&ctx.DepartmentID,
 		&ctx.Semester,
@@ -352,9 +357,9 @@ func getDepartmentContextFromUsername(username string) (int, string, error) {
 	return 0, "", fmt.Errorf("department mapping not found for user")
 }
 
-func findBestWindowForAssignment(teacherID string, departmentID int, semester int, courseID int) (*int, *time.Time, *time.Time, []int, string, error) {
+func findBestWindowForAssignment(teacherID string, departmentID int, semester int, courseID int) (*int, *string, *time.Time, *time.Time, []int, string, error) {
 	query := `
-		SELECT id, start_at, end_at
+		SELECT id, COALESCE(window_name, ''), start_at, end_at
 		FROM mark_entry_windows
 		WHERE enabled = 1
 			AND (teacher_id = ? OR teacher_id IS NULL)
@@ -371,19 +376,20 @@ func findBestWindowForAssignment(teacherID string, departmentID int, semester in
 	`
 
 	var windowID int
+	var windowName string
 	var startAt, endAt time.Time
-	err := db.DB.QueryRow(query, teacherID, departmentID, semester, courseID).Scan(&windowID, &startAt, &endAt)
+	err := db.DB.QueryRow(query, teacherID, departmentID, semester, courseID).Scan(&windowID, &windowName, &startAt, &endAt)
 	if err == sql.ErrNoRows {
 		status := "not_configured"
-		return nil, nil, nil, []int{}, status, nil
+		return nil, nil, nil, nil, []int{}, status, nil
 	}
 	if err != nil {
-		return nil, nil, nil, nil, "", err
+		return nil, nil, nil, nil, nil, "", err
 	}
 
 	componentRows, err := db.DB.Query(`SELECT assessment_component_id FROM mark_entry_window_components WHERE window_id = ?`, windowID)
 	if err != nil {
-		return nil, nil, nil, nil, "", err
+		return nil, nil, nil, nil, nil, "", err
 	}
 	defer componentRows.Close()
 
@@ -395,6 +401,12 @@ func findBestWindowForAssignment(teacherID string, departmentID int, semester in
 		}
 	}
 
+	var windowNamePtr *string
+	trimmedWindowName := strings.TrimSpace(windowName)
+	if trimmedWindowName != "" {
+		windowNamePtr = &trimmedWindowName
+	}
+
 	now := time.Now().UTC()
 	status := "closed"
 	if now.Before(startAt) {
@@ -403,7 +415,7 @@ func findBestWindowForAssignment(teacherID string, departmentID int, semester in
 		status = "open"
 	}
 
-	return &windowID, &startAt, &endAt, componentIDs, status, nil
+	return &windowID, windowNamePtr, &startAt, &endAt, componentIDs, status, nil
 }
 
 func getCourseTypeForCourse(courseID int) (int, error) {
@@ -503,20 +515,21 @@ func getDepartmentAssignments(departmentID int, semester int) ([]markEntryAssign
 			c.course_name,
 			tca.teacher_id,
 			COALESCE(t.name, tca.teacher_id) AS teacher_name,
-			COALESCE(d.id, 0) AS department_id,
-			COALESCE(d.department_name, 'Unmapped') AS department_name,
+			COALESCE(d_curr.id, d_teacher.id, 0) AS department_id,
+			COALESCE(d_curr.department_name, d_teacher.department_name, 'Unmapped') AS department_name,
 			nc.semester_number
 		FROM teacher_course_allocation tca
 		JOIN courses c ON c.id = tca.course_id
 		JOIN curriculum_courses cc ON cc.course_id = c.id
 		JOIN normal_cards nc ON nc.id = cc.semester_id
 		LEFT JOIN teachers t ON t.faculty_id = tca.teacher_id
-		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id
-		LEFT JOIN departments d ON d.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
-		WHERE d.id = ?
+		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id AND dt.status = 1
+		LEFT JOIN departments d_curr ON d_curr.current_curriculum_id = cc.curriculum_id
+		LEFT JOIN departments d_teacher ON d_teacher.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
+		WHERE (d_curr.id = ? OR d_teacher.id = ?)
 			AND nc.semester_number = ?
 		ORDER BY c.course_code, teacher_name
-	`, departmentID, semester)
+	`, departmentID, departmentID, semester)
 	if err != nil {
 		return nil, err
 	}
@@ -560,7 +573,7 @@ func buildMarkEntryOverview(departmentID int, semester int) ([]markEntryOverview
 		teacherAliases := getTeacherIdentifierAliases(assignment.TeacherID)
 		enteredMarksByStudent := getEnteredMarksByStudent(assignment.CourseID, teacherAliases)
 
-		windowID, windowStart, windowEnd, allowedComponents, windowStatus, windowErr := findBestWindowForAssignment(
+		windowID, windowName, windowStart, windowEnd, allowedComponents, windowStatus, windowErr := findBestWindowForAssignment(
 			assignment.TeacherID,
 			assignment.DepartmentID,
 			assignment.Semester,
@@ -688,6 +701,7 @@ func buildMarkEntryOverview(departmentID int, semester int) ([]markEntryOverview
 			DepartmentName:      assignment.Department,
 			Semester:            assignment.Semester,
 			WindowID:            windowID,
+			WindowName:          windowName,
 			WindowStatus:        windowStatus,
 			AssignedStudents:    assigned,
 			CompletedStudents:   completed,
@@ -857,12 +871,19 @@ func buildWindowMonitorRows(assignments []markEntryAssignmentRow, selectedWindow
 		}
 
 		var windowID *int
+		var windowName *string
 		var windowStart, windowEnd *time.Time
 		allowedComponents := []int{}
 		windowStatus := "not_configured"
 
 		if selectedWindow != nil {
 			windowID = &selectedWindow.ID
+			if selectedWindow.WindowName.Valid {
+				trimmedWindowName := strings.TrimSpace(selectedWindow.WindowName.String)
+				if trimmedWindowName != "" {
+					windowName = &trimmedWindowName
+				}
+			}
 			windowStart = &selectedWindow.StartAt
 			windowEnd = &selectedWindow.EndAt
 			allowedComponents = selectedWindow.ComponentIDs
@@ -876,7 +897,7 @@ func buildWindowMonitorRows(assignments []markEntryAssignmentRow, selectedWindow
 				windowStatus = "open"
 			}
 		} else {
-			bestWindowID, startAt, endAt, components, status, err := findBestWindowForAssignment(
+			bestWindowID, bestWindowName, startAt, endAt, components, status, err := findBestWindowForAssignment(
 				assignment.TeacherID,
 				assignment.DepartmentID,
 				assignment.Semester,
@@ -886,6 +907,7 @@ func buildWindowMonitorRows(assignments []markEntryAssignmentRow, selectedWindow
 				return nil, err
 			}
 			windowID = bestWindowID
+			windowName = bestWindowName
 			windowStart = startAt
 			windowEnd = endAt
 			allowedComponents = components
@@ -1007,6 +1029,7 @@ func buildWindowMonitorRows(assignments []markEntryAssignmentRow, selectedWindow
 			DepartmentName:      assignment.Department,
 			Semester:            assignment.Semester,
 			WindowID:            windowID,
+			WindowName:          windowName,
 			WindowStatus:        windowStatus,
 			AssignedStudents:    assigned,
 			CompletedStudents:   completed,
@@ -1203,6 +1226,175 @@ func GetAdminWindowMonitor(w http.ResponseWriter, r *http.Request) {
 			"completed_students":    completedStudents,
 		},
 		"rows": rows,
+	})
+}
+
+func AdminFillRandomMarksForWindow(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var req struct {
+		WindowID     int  `json:"window_id"`
+		Semester     int  `json:"semester"`
+		DepartmentID *int `json:"department_id,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.WindowID <= 0 {
+		http.Error(w, "window_id is required", http.StatusBadRequest)
+		return
+	}
+	if req.Semester <= 0 {
+		http.Error(w, "semester is required", http.StatusBadRequest)
+		return
+	}
+
+	selectedWindow, err := getSelectedWindowContext(req.WindowID)
+	if err != nil {
+		http.Error(w, "window not found", http.StatusNotFound)
+		return
+	}
+
+	assignments, err := getAssignmentsForWindowMonitor(req.Semester, req.DepartmentID)
+	if err != nil {
+		log.Printf("[AdminFillRandomMarksForWindow] failed to load assignments: %v", err)
+		http.Error(w, "failed to load assignments", http.StatusInternalServerError)
+		return
+	}
+
+	type componentMeta struct {
+		MaxMarks        float64
+		ConversionMarks float64
+	}
+
+	randSource := rand.New(rand.NewSource(time.Now().UnixNano()))
+	componentCache := make(map[int]componentMeta)
+	entriesUpserted := 0
+	studentsTouched := 0
+	assignmentsMatched := 0
+	absentSkipped := 0
+
+	for _, assignment := range assignments {
+		if !doesWindowMatchAssignment(selectedWindow, assignment) {
+			continue
+		}
+		assignmentsMatched++
+
+		normalizedFacultyID := normalizeFacultyIdentifier(assignment.TeacherID)
+		if strings.TrimSpace(normalizedFacultyID) == "" {
+			normalizedFacultyID = assignment.TeacherID
+		}
+
+		courseTypeID, typeErr := getCourseTypeForCourse(assignment.CourseID)
+		if typeErr != nil {
+			continue
+		}
+
+		absentByStudent := getAbsentComponentsByStudent(req.WindowID, assignment.CourseID)
+		expectedByMode := make(map[int]map[int]bool)
+		touchedStudentsForAssignment := map[int]bool{}
+
+		studentRows, studentErr := db.DB.Query(`
+			SELECT s.id, COALESCE(s.learning_mode_id, 2)
+			FROM course_student_teacher_allocation csta
+			JOIN students s ON s.id = csta.student_id
+			WHERE csta.course_id = ? AND csta.teacher_id = ? AND csta.status = 1
+		`, assignment.CourseID, assignment.TeacherID)
+		if studentErr != nil {
+			continue
+		}
+
+		for studentRows.Next() {
+			var studentID int
+			var learningModeID int
+			if scanErr := studentRows.Scan(&studentID, &learningModeID); scanErr != nil {
+				continue
+			}
+
+			expectedComponents, exists := expectedByMode[learningModeID]
+			if !exists {
+				expectedComponents, _ = getExpectedComponents(courseTypeID, learningModeID, selectedWindow.ComponentIDs)
+				expectedByMode[learningModeID] = expectedComponents
+			}
+
+			for componentID := range expectedComponents {
+				if absentByStudent[studentID][componentID] {
+					absentSkipped++
+					continue
+				}
+
+				meta, cached := componentCache[componentID]
+				if !cached {
+					var maxMarks float64
+					var conversionMarks float64
+					metaErr := db.DB.QueryRow(`
+						SELECT COALESCE(max_marks, 0), COALESCE(conversion_marks, 0)
+						FROM mark_category_types
+						WHERE id = ?
+					`, componentID).Scan(&maxMarks, &conversionMarks)
+					if metaErr != nil {
+						continue
+					}
+					meta = componentMeta{MaxMarks: maxMarks, ConversionMarks: conversionMarks}
+					componentCache[componentID] = meta
+				}
+
+				if meta.MaxMarks <= 0 {
+					continue
+				}
+
+				upperBound := int(math.Floor(meta.MaxMarks))
+				if upperBound < 0 {
+					upperBound = 0
+				}
+				obtainedMarks := float64(randSource.Intn(upperBound + 1))
+				convertedMarks := 0.0
+				if meta.MaxMarks > 0 {
+					convertedMarks = (obtainedMarks / meta.MaxMarks) * meta.ConversionMarks
+				}
+
+				_, execErr := db.DB.Exec(`
+					INSERT INTO student_marks
+					(student_id, course_id, faculty_id, assessment_component_id, obtained_marks, converted_marks, status)
+					VALUES (?, ?, ?, ?, ?, ?, 1)
+					ON DUPLICATE KEY UPDATE
+					obtained_marks = VALUES(obtained_marks),
+					converted_marks = VALUES(converted_marks),
+					status = 1
+				`, studentID, assignment.CourseID, normalizedFacultyID, componentID, obtainedMarks, convertedMarks)
+				if execErr != nil {
+					continue
+				}
+
+				entriesUpserted++
+				touchedStudentsForAssignment[studentID] = true
+			}
+		}
+
+		studentRows.Close()
+		studentsTouched += len(touchedStudentsForAssignment)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":             true,
+		"window_id":           req.WindowID,
+		"semester":            req.Semester,
+		"department_id":       req.DepartmentID,
+		"assignments_matched": assignmentsMatched,
+		"students_touched":    studentsTouched,
+		"entries_upserted":    entriesUpserted,
+		"absent_skipped":      absentSkipped,
+		"message":             "Random marks filled for matching faculty assignments in selected window",
 	})
 }
 
@@ -2230,8 +2422,12 @@ func exportCourseWiseRows(departmentID int, semester int) ([][]string, error) {
 		return nil, err
 	}
 
-	records := [][]string{{"Course Code", "Course Name", "Teacher ID", "Teacher Name", "Assigned Students", "Completed Students", "Completion %", "Window Status", "Late", "Extension Status"}}
+	records := [][]string{{"Course Code", "Course Name", "Teacher ID", "Teacher Name", "Assigned Students", "Completed Students", "Completion %", "Window Name", "Window Status", "Late", "Extension Status"}}
 	for _, row := range overviewRows {
+		windowName := ""
+		if row.WindowName != nil {
+			windowName = strings.TrimSpace(*row.WindowName)
+		}
 		records = append(records, []string{
 			row.CourseCode,
 			row.CourseName,
@@ -2240,6 +2436,7 @@ func exportCourseWiseRows(departmentID int, semester int) ([][]string, error) {
 			strconv.Itoa(row.AssignedStudents),
 			strconv.Itoa(row.CompletedStudents),
 			fmt.Sprintf("%.2f", row.CompletionPercent),
+			windowName,
 			row.WindowStatus,
 			strconv.FormatBool(row.Late),
 			row.ExtensionStatus,
@@ -2252,6 +2449,7 @@ func exportCourseWiseRows(departmentID int, semester int) ([][]string, error) {
 type detailedMarkEntryRow struct {
 	DepartmentName string
 	Semester       int
+	WindowName     string
 	TeacherID      string
 	TeacherName    string
 	CourseCode     string
@@ -2369,16 +2567,22 @@ func buildDetailedMarkEntryRows(departmentID int, semester int) ([]detailedMarkE
 			rows = append(rows, detailedMarkEntryRow{
 				DepartmentName: overview.DepartmentName,
 				Semester:       overview.Semester,
-				TeacherID:      overview.TeacherID,
-				TeacherName:    overview.TeacherName,
-				CourseCode:     overview.CourseCode,
-				CourseName:     overview.CourseName,
-				StudentID:      studentID,
-				EnrollmentNo:   meta.EnrollmentNo,
-				StudentName:    meta.StudentName,
-				ComponentID:    componentID,
-				ComponentName:  componentName,
-				Marks:          marks,
+				WindowName: func() string {
+					if overview.WindowName == nil {
+						return ""
+					}
+					return strings.TrimSpace(*overview.WindowName)
+				}(),
+				TeacherID:     overview.TeacherID,
+				TeacherName:   overview.TeacherName,
+				CourseCode:    overview.CourseCode,
+				CourseName:    overview.CourseName,
+				StudentID:     studentID,
+				EnrollmentNo:  meta.EnrollmentNo,
+				StudentName:   meta.StudentName,
+				ComponentID:   componentID,
+				ComponentName: componentName,
+				Marks:         marks,
 			})
 		}
 		markRows.Close()
@@ -2392,42 +2596,46 @@ func exportTeacherWiseMarkRows(departmentID int, semester int) ([][]string, erro
 	if err != nil {
 		return nil, err
 	}
+	return buildPivotedDetailedRecords(detailedRows, true), nil
+}
 
-	sort.Slice(detailedRows, func(i, j int) bool {
-		if detailedRows[i].TeacherID != detailedRows[j].TeacherID {
-			return detailedRows[i].TeacherID < detailedRows[j].TeacherID
-		}
-		if detailedRows[i].CourseCode != detailedRows[j].CourseCode {
-			return detailedRows[i].CourseCode < detailedRows[j].CourseCode
-		}
-		if detailedRows[i].EnrollmentNo != detailedRows[j].EnrollmentNo {
-			return detailedRows[i].EnrollmentNo < detailedRows[j].EnrollmentNo
-		}
-		if detailedRows[i].ComponentID != detailedRows[j].ComponentID {
-			return detailedRows[i].ComponentID < detailedRows[j].ComponentID
-		}
-		return detailedRows[i].StudentID < detailedRows[j].StudentID
-	})
-
-	records := [][]string{{"Department", "Semester", "Teacher ID", "Teacher Name", "Course Code", "Course Name", "Student ID", "Enrollment No", "Student Name", "Component ID", "Component", "Marks"}}
-	for _, row := range detailedRows {
-		records = append(records, []string{
-			row.DepartmentName,
-			strconv.Itoa(row.Semester),
-			row.TeacherID,
-			row.TeacherName,
-			row.CourseCode,
-			row.CourseName,
-			strconv.Itoa(row.StudentID),
-			row.EnrollmentNo,
-			row.StudentName,
-			strconv.Itoa(row.ComponentID),
-			row.ComponentName,
-			fmt.Sprintf("%.2f", row.Marks),
-		})
+func buildDetailedMarkEntryRowsAllDepartments(semester int) ([]detailedMarkEntryRow, error) {
+	assignments, err := getAssignmentsForWindowMonitor(semester, nil)
+	if err != nil {
+		return nil, err
 	}
 
-	return records, nil
+	departmentSet := map[int]bool{}
+	departmentIDs := make([]int, 0)
+	for _, assignment := range assignments {
+		if assignment.DepartmentID <= 0 {
+			continue
+		}
+		if !departmentSet[assignment.DepartmentID] {
+			departmentSet[assignment.DepartmentID] = true
+			departmentIDs = append(departmentIDs, assignment.DepartmentID)
+		}
+	}
+
+	sort.Ints(departmentIDs)
+	allRows := make([]detailedMarkEntryRow, 0)
+	for _, departmentID := range departmentIDs {
+		rows, rowsErr := buildDetailedMarkEntryRows(departmentID, semester)
+		if rowsErr != nil {
+			continue
+		}
+		allRows = append(allRows, rows...)
+	}
+
+	return allRows, nil
+}
+
+func exportTeacherWiseMarkRowsAllDepartments(semester int) ([][]string, error) {
+	detailedRows, err := buildDetailedMarkEntryRowsAllDepartments(semester)
+	if err != nil {
+		return nil, err
+	}
+	return buildPivotedDetailedRecords(detailedRows, true), nil
 }
 
 func exportCourseWiseMarkRows(departmentID int, semester int) ([][]string, error) {
@@ -2435,42 +2643,200 @@ func exportCourseWiseMarkRows(departmentID int, semester int) ([][]string, error
 	if err != nil {
 		return nil, err
 	}
+	return buildPivotedDetailedRecords(detailedRows, false), nil
+}
 
-	sort.Slice(detailedRows, func(i, j int) bool {
-		if detailedRows[i].CourseCode != detailedRows[j].CourseCode {
-			return detailedRows[i].CourseCode < detailedRows[j].CourseCode
-		}
-		if detailedRows[i].TeacherID != detailedRows[j].TeacherID {
-			return detailedRows[i].TeacherID < detailedRows[j].TeacherID
-		}
-		if detailedRows[i].EnrollmentNo != detailedRows[j].EnrollmentNo {
-			return detailedRows[i].EnrollmentNo < detailedRows[j].EnrollmentNo
-		}
-		if detailedRows[i].ComponentID != detailedRows[j].ComponentID {
-			return detailedRows[i].ComponentID < detailedRows[j].ComponentID
-		}
-		return detailedRows[i].StudentID < detailedRows[j].StudentID
-	})
+func exportCourseWiseMarkRowsAllDepartments(semester int) ([][]string, error) {
+	detailedRows, err := buildDetailedMarkEntryRowsAllDepartments(semester)
+	if err != nil {
+		return nil, err
+	}
+	return buildPivotedDetailedRecords(detailedRows, false), nil
+}
 
-	records := [][]string{{"Department", "Semester", "Course Code", "Course Name", "Teacher ID", "Teacher Name", "Student ID", "Enrollment No", "Student Name", "Component ID", "Component", "Marks"}}
+type pivotDetailedRow struct {
+	DepartmentName string
+	Semester       int
+	WindowName     string
+	FacultyCode    string
+	FacultyName    string
+	CourseCode     string
+	CourseName     string
+	StudentID      int
+	EnrollmentNo   string
+	StudentName    string
+	ComponentMarks map[string]float64
+}
+
+func splitMainAndSubComponent(componentName string) (string, string) {
+	trimmed := strings.TrimSpace(componentName)
+	if trimmed == "" {
+		return "Component", ""
+	}
+	parts := strings.SplitN(trimmed, "->", 2)
+	main := strings.TrimSpace(parts[0])
+	if main == "" {
+		main = "Component"
+	}
+	if len(parts) < 2 {
+		return main, ""
+	}
+	return main, strings.TrimSpace(parts[1])
+}
+
+func subComponentLess(a string, b string) bool {
+	an := strings.ToUpper(strings.TrimSpace(a))
+	bn := strings.ToUpper(strings.TrimSpace(b))
+	if strings.HasPrefix(an, "CO") && strings.HasPrefix(bn, "CO") {
+		av, aErr := strconv.Atoi(strings.TrimSpace(an[2:]))
+		bv, bErr := strconv.Atoi(strings.TrimSpace(bn[2:]))
+		if aErr == nil && bErr == nil {
+			return av < bv
+		}
+	}
+	return an < bn
+}
+
+func buildPivotedDetailedRecords(detailedRows []detailedMarkEntryRow, teacherMode bool) [][]string {
+	pivotByKey := make(map[string]*pivotDetailedRow)
+	mainToSubs := make(map[string]map[string]bool)
+
 	for _, row := range detailedRows {
-		records = append(records, []string{
+		mainTest, sub := splitMainAndSubComponent(row.ComponentName)
+		if _, exists := mainToSubs[mainTest]; !exists {
+			mainToSubs[mainTest] = map[string]bool{}
+		}
+		if sub != "" {
+			mainToSubs[mainTest][sub] = true
+		}
+
+		key := strings.Join([]string{
 			row.DepartmentName,
 			strconv.Itoa(row.Semester),
-			row.CourseCode,
-			row.CourseName,
+			row.WindowName,
 			row.TeacherID,
 			row.TeacherName,
+			row.CourseCode,
+			row.CourseName,
 			strconv.Itoa(row.StudentID),
 			row.EnrollmentNo,
 			row.StudentName,
-			strconv.Itoa(row.ComponentID),
-			row.ComponentName,
-			fmt.Sprintf("%.2f", row.Marks),
-		})
+		}, "|")
+
+		pivot, exists := pivotByKey[key]
+		if !exists {
+			pivot = &pivotDetailedRow{
+				DepartmentName: row.DepartmentName,
+				Semester:       row.Semester,
+				WindowName:     row.WindowName,
+				FacultyCode:    row.TeacherID,
+				FacultyName:    row.TeacherName,
+				CourseCode:     row.CourseCode,
+				CourseName:     row.CourseName,
+				StudentID:      row.StudentID,
+				EnrollmentNo:   row.EnrollmentNo,
+				StudentName:    row.StudentName,
+				ComponentMarks: map[string]float64{},
+			}
+			pivotByKey[key] = pivot
+		}
+
+		columnName := mainTest
+		if sub != "" {
+			columnName = fmt.Sprintf("%s - %s", mainTest, sub)
+		}
+		pivot.ComponentMarks[columnName] += row.Marks
+
+		if len(mainToSubs[mainTest]) > 0 {
+			totalColumn := fmt.Sprintf("%s - Total", mainTest)
+			pivot.ComponentMarks[totalColumn] += row.Marks
+		}
 	}
 
-	return records, nil
+	orderedMains := make([]string, 0, len(mainToSubs))
+	for main := range mainToSubs {
+		orderedMains = append(orderedMains, main)
+	}
+	sort.Strings(orderedMains)
+
+	orderedComponentColumns := make([]string, 0)
+	for _, main := range orderedMains {
+		subs := make([]string, 0, len(mainToSubs[main]))
+		for sub := range mainToSubs[main] {
+			subs = append(subs, sub)
+		}
+		sort.Slice(subs, func(i, j int) bool { return subComponentLess(subs[i], subs[j]) })
+
+		if len(subs) == 0 {
+			orderedComponentColumns = append(orderedComponentColumns, main)
+			continue
+		}
+
+		for _, sub := range subs {
+			orderedComponentColumns = append(orderedComponentColumns, fmt.Sprintf("%s - %s", main, sub))
+		}
+		orderedComponentColumns = append(orderedComponentColumns, fmt.Sprintf("%s - Total", main))
+	}
+
+	orderedRows := make([]*pivotDetailedRow, 0, len(pivotByKey))
+	for _, row := range pivotByKey {
+		orderedRows = append(orderedRows, row)
+	}
+	sort.Slice(orderedRows, func(i, j int) bool {
+		a := orderedRows[i]
+		b := orderedRows[j]
+		if teacherMode {
+			if a.FacultyCode != b.FacultyCode {
+				return a.FacultyCode < b.FacultyCode
+			}
+			if a.CourseCode != b.CourseCode {
+				return a.CourseCode < b.CourseCode
+			}
+		} else {
+			if a.CourseCode != b.CourseCode {
+				return a.CourseCode < b.CourseCode
+			}
+			if a.FacultyCode != b.FacultyCode {
+				return a.FacultyCode < b.FacultyCode
+			}
+		}
+		if a.EnrollmentNo != b.EnrollmentNo {
+			return a.EnrollmentNo < b.EnrollmentNo
+		}
+		return a.StudentID < b.StudentID
+	})
+
+	headers := []string{"Department", "Semester", "Window Name"}
+	if teacherMode {
+		headers = append(headers, "Faculty Code", "Faculty", "Course Code", "Course Name")
+	} else {
+		headers = append(headers, "Course Code", "Course Name", "Faculty Code", "Faculty")
+	}
+	headers = append(headers, "Student ID", "Enrollment No", "Student Name")
+	headers = append(headers, orderedComponentColumns...)
+
+	records := make([][]string, 0, len(orderedRows)+1)
+	records = append(records, headers)
+
+	for _, row := range orderedRows {
+		base := []string{row.DepartmentName, strconv.Itoa(row.Semester), row.WindowName}
+		if teacherMode {
+			base = append(base, row.FacultyCode, row.FacultyName, row.CourseCode, row.CourseName)
+		} else {
+			base = append(base, row.CourseCode, row.CourseName, row.FacultyCode, row.FacultyName)
+		}
+		base = append(base, strconv.Itoa(row.StudentID), row.EnrollmentNo, row.StudentName)
+		for _, componentColumn := range orderedComponentColumns {
+			if mark, exists := row.ComponentMarks[componentColumn]; exists {
+				base = append(base, fmt.Sprintf("%.2f", mark))
+			} else {
+				base = append(base, "")
+			}
+		}
+		records = append(records, base)
+	}
+
+	return records
 }
 
 func writeCSVAttachment(w http.ResponseWriter, filename string, records [][]string) {
@@ -2503,6 +2869,289 @@ func writeXLSXAttachment(w http.ResponseWriter, filename string, records [][]str
 	file.SetActiveSheet(index)
 	if err := file.DeleteSheet("Sheet1"); err != nil {
 		// ignore delete failures
+	}
+
+	buf, err := file.WriteToBuffer()
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
+	return nil
+}
+
+func sanitizeSheetName(name string, fallback string, used map[string]int) string {
+	clean := strings.TrimSpace(name)
+	if clean == "" {
+		clean = fallback
+	}
+
+	replacer := strings.NewReplacer("\\", " ", "/", " ", "?", "", "*", "", "[", "(", "]", ")", ":", " - ")
+	clean = strings.TrimSpace(replacer.Replace(clean))
+	if clean == "" {
+		clean = fallback
+	}
+
+	runes := []rune(clean)
+	if len(runes) > 31 {
+		clean = strings.TrimSpace(string(runes[:31]))
+	}
+	if clean == "" {
+		clean = fallback
+	}
+
+	base := clean
+	if count, exists := used[base]; exists {
+		for {
+			count++
+			suffix := fmt.Sprintf(" (%d)", count)
+			maxBaseRunes := 31 - len([]rune(suffix))
+			if maxBaseRunes < 1 {
+				maxBaseRunes = 1
+			}
+			baseRunes := []rune(base)
+			nameBase := base
+			if len(baseRunes) > maxBaseRunes {
+				nameBase = strings.TrimSpace(string(baseRunes[:maxBaseRunes]))
+			}
+			candidate := strings.TrimSpace(nameBase + suffix)
+			if _, taken := used[candidate]; !taken {
+				used[base] = count
+				used[candidate] = 1
+				return candidate
+			}
+		}
+	}
+
+	used[base] = 1
+	return base
+}
+
+func writeGroupedXLSXAttachment(w http.ResponseWriter, filename string, originalRecords [][]string, selectedRecords [][]string, groupByHeader string, suffixHeaders []string) error {
+	if len(originalRecords) == 0 || len(selectedRecords) == 0 {
+		return writeXLSXAttachment(w, filename, selectedRecords)
+	}
+
+	groupByIndex := -1
+	for index, header := range originalRecords[0] {
+		if strings.EqualFold(strings.TrimSpace(header), strings.TrimSpace(groupByHeader)) {
+			groupByIndex = index
+			break
+		}
+	}
+	if groupByIndex < 0 {
+		return writeXLSXAttachment(w, filename, selectedRecords)
+	}
+
+	suffixIndexes := make([]int, 0, len(suffixHeaders))
+	for _, headerName := range suffixHeaders {
+		suffixIndex := -1
+		for index, header := range originalRecords[0] {
+			if strings.EqualFold(strings.TrimSpace(header), strings.TrimSpace(headerName)) {
+				suffixIndex = index
+				break
+			}
+		}
+		if suffixIndex >= 0 {
+			suffixIndexes = append(suffixIndexes, suffixIndex)
+		}
+	}
+
+	file := excelize.NewFile()
+	if err := file.DeleteSheet("Sheet1"); err != nil {
+		// ignore
+	}
+
+	groups := make(map[string][][]string)
+	groupSheetLabel := make(map[string]string)
+	order := make([]string, 0)
+	maxRows := len(originalRecords)
+	if len(selectedRecords) < maxRows {
+		maxRows = len(selectedRecords)
+	}
+	for rowIndex := 1; rowIndex < maxRows; rowIndex++ {
+		groupValue := "Unassigned"
+		if groupByIndex < len(originalRecords[rowIndex]) {
+			candidate := strings.TrimSpace(originalRecords[rowIndex][groupByIndex])
+			if candidate != "" {
+				groupValue = candidate
+			}
+		}
+		if _, exists := groups[groupValue]; !exists {
+			order = append(order, groupValue)
+			groups[groupValue] = make([][]string, 0)
+			identifierParts := []string{}
+			for _, suffixIndex := range suffixIndexes {
+				if suffixIndex >= 0 && suffixIndex < len(originalRecords[rowIndex]) {
+					suffixValue := strings.TrimSpace(originalRecords[rowIndex][suffixIndex])
+					if suffixValue != "" {
+						duplicate := false
+						for _, existing := range identifierParts {
+							if strings.EqualFold(existing, suffixValue) {
+								duplicate = true
+								break
+							}
+						}
+						if !duplicate {
+							identifierParts = append(identifierParts, suffixValue)
+						}
+					}
+				}
+			}
+			labelParts := make([]string, 0, len(identifierParts)+1)
+			labelParts = append(labelParts, identifierParts...)
+			if strings.TrimSpace(groupValue) != "" {
+				labelParts = append(labelParts, groupValue)
+			}
+			groupSheetLabel[groupValue] = strings.Join(labelParts, " - ")
+		}
+		groups[groupValue] = append(groups[groupValue], selectedRecords[rowIndex])
+	}
+
+	usedNames := map[string]int{}
+	for idx, groupValue := range order {
+		label := groupSheetLabel[groupValue]
+		if strings.TrimSpace(label) == "" {
+			label = groupValue
+		}
+		sheetName := sanitizeSheetName(label, fmt.Sprintf("Sheet %d", idx+1), usedNames)
+		sheetIndex, err := file.NewSheet(sheetName)
+		if err != nil {
+			return err
+		}
+		if idx == 0 {
+			file.SetActiveSheet(sheetIndex)
+		}
+
+		for colIdx, value := range selectedRecords[0] {
+			cell, _ := excelize.CoordinatesToCellName(colIdx+1, 1)
+			_ = file.SetCellValue(sheetName, cell, value)
+		}
+
+		for dataRowIndex, row := range groups[groupValue] {
+			for colIdx, value := range row {
+				cell, _ := excelize.CoordinatesToCellName(colIdx+1, dataRowIndex+2)
+				_ = file.SetCellValue(sheetName, cell, value)
+			}
+		}
+	}
+
+	if len(order) == 0 {
+		sheetIndex, err := file.NewSheet("Report")
+		if err != nil {
+			return err
+		}
+		file.SetActiveSheet(sheetIndex)
+		for rowIdx, row := range selectedRecords {
+			for colIdx, value := range row {
+				cell, _ := excelize.CoordinatesToCellName(colIdx+1, rowIdx+1)
+				_ = file.SetCellValue("Report", cell, value)
+			}
+		}
+	}
+
+	buf, err := file.WriteToBuffer()
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
+	return nil
+}
+
+func writeDepartmentSheetsXLSXAttachment(w http.ResponseWriter, filename string, originalRecords [][]string, reportType string, fieldsParam string) error {
+	if len(originalRecords) == 0 {
+		return writeXLSXAttachment(w, filename, originalRecords)
+	}
+
+	selectedRecords := applySelectedExportFields(originalRecords, reportType, fieldsParam)
+	if len(selectedRecords) == 0 {
+		selectedRecords = originalRecords
+	}
+
+	departmentIndex := -1
+	for index, header := range originalRecords[0] {
+		if strings.EqualFold(strings.TrimSpace(header), "Department") {
+			departmentIndex = index
+			break
+		}
+	}
+	if departmentIndex < 0 {
+		return writeXLSXAttachment(w, filename, selectedRecords)
+	}
+
+	groups := map[string][][]string{}
+	order := make([]string, 0)
+	maxRows := len(originalRecords)
+	if len(selectedRecords) < maxRows {
+		maxRows = len(selectedRecords)
+	}
+	for rowIndex := 1; rowIndex < maxRows; rowIndex++ {
+		row := originalRecords[rowIndex]
+		departmentName := "Unmapped"
+		if departmentIndex >= 0 && departmentIndex < len(row) {
+			candidate := strings.TrimSpace(row[departmentIndex])
+			if candidate != "" {
+				departmentName = candidate
+			}
+		}
+		if _, exists := groups[departmentName]; !exists {
+			groups[departmentName] = make([][]string, 0)
+			order = append(order, departmentName)
+		}
+		groups[departmentName] = append(groups[departmentName], selectedRecords[rowIndex])
+	}
+
+	sort.SliceStable(order, func(i, j int) bool {
+		return strings.ToLower(order[i]) < strings.ToLower(order[j])
+	})
+
+	file := excelize.NewFile()
+	if err := file.DeleteSheet("Sheet1"); err != nil {
+		// ignore
+	}
+
+	usedNames := map[string]int{}
+	for index, departmentName := range order {
+		sheetName := sanitizeSheetName(departmentName, fmt.Sprintf("Dept %d", index+1), usedNames)
+		sheetIndex, err := file.NewSheet(sheetName)
+		if err != nil {
+			return err
+		}
+		if index == 0 {
+			file.SetActiveSheet(sheetIndex)
+		}
+
+		selectedRows := make([][]string, 0, len(groups[departmentName])+1)
+		selectedRows = append(selectedRows, selectedRecords[0])
+		selectedRows = append(selectedRows, groups[departmentName]...)
+
+		for rowIdx, row := range selectedRows {
+			for colIdx, value := range row {
+				cell, _ := excelize.CoordinatesToCellName(colIdx+1, rowIdx+1)
+				_ = file.SetCellValue(sheetName, cell, value)
+			}
+		}
+	}
+
+	if len(order) == 0 {
+		sheetIndex, err := file.NewSheet("Report")
+		if err != nil {
+			return err
+		}
+		file.SetActiveSheet(sheetIndex)
+		for rowIdx, row := range selectedRecords {
+			for colIdx, value := range row {
+				cell, _ := excelize.CoordinatesToCellName(colIdx+1, rowIdx+1)
+				_ = file.SetCellValue("Report", cell, value)
+			}
+		}
 	}
 
 	buf, err := file.WriteToBuffer()
@@ -2558,6 +3207,197 @@ func writePDFAttachment(w http.ResponseWriter, filename string, title string, re
 	return nil
 }
 
+func getExportFieldHeaders(reportType string) map[string]string {
+	switch reportType {
+	case "teacher":
+		return map[string]string{
+			"student_name":  "Student Name",
+			"enrollment_no": "Enrollment No",
+			"course_code":   "Course Code",
+			"course_name":   "Course Name",
+			"components":    "Components",
+			"faculty_code":  "Faculty Code",
+			"teacher_name":  "Faculty",
+			"window_name":   "Window Name",
+			"semester":      "Semester",
+			"department":    "Department",
+		}
+	case "course":
+		return map[string]string{
+			"student_name":  "Student Name",
+			"enrollment_no": "Enrollment No",
+			"course_code":   "Course Code",
+			"course_name":   "Course Name",
+			"components":    "Components",
+			"faculty_code":  "Faculty Code",
+			"teacher_name":  "Faculty",
+			"window_name":   "Window Name",
+			"semester":      "Semester",
+			"department":    "Department",
+		}
+	case "course_summary":
+		return map[string]string{
+			"course_code":        "Course Code",
+			"course_name":        "Course Name",
+			"teacher_name":       "Teacher Name",
+			"assigned_students":  "Assigned Students",
+			"completed_students": "Completed Students",
+			"completion_percent": "Completion %",
+			"window_name":        "Window Name",
+			"window_status":      "Window Status",
+			"late":               "Late",
+			"extension_status":   "Extension Status",
+		}
+	default:
+		return map[string]string{}
+	}
+}
+
+func applySelectedExportFields(records [][]string, reportType string, fieldsParam string) [][]string {
+	if len(records) == 0 || strings.TrimSpace(fieldsParam) == "" {
+		return records
+	}
+
+	fieldHeaderMap := getExportFieldHeaders(reportType)
+	if len(fieldHeaderMap) == 0 {
+		return records
+	}
+
+	headerRow := records[0]
+	headerIndex := make(map[string]int, len(headerRow))
+	for index, header := range headerRow {
+		headerIndex[strings.TrimSpace(header)] = index
+	}
+
+	selectedIndexes := make([]int, 0)
+	selectedHeaders := make([]string, 0)
+	seenHeader := map[string]bool{}
+	includeComponents := false
+	for _, rawField := range strings.Split(fieldsParam, ",") {
+		field := strings.ToLower(strings.TrimSpace(rawField))
+		if field == "" {
+			continue
+		}
+		if field == "components" {
+			includeComponents = true
+			continue
+		}
+		header, exists := fieldHeaderMap[field]
+		if !exists || seenHeader[header] {
+			continue
+		}
+		columnIndex, found := headerIndex[header]
+		if !found {
+			continue
+		}
+		seenHeader[header] = true
+		selectedIndexes = append(selectedIndexes, columnIndex)
+		selectedHeaders = append(selectedHeaders, header)
+	}
+
+	if len(selectedIndexes) == 0 {
+		return records
+	}
+
+	if includeComponents {
+		knownHeaders := map[string]bool{}
+		for _, known := range fieldHeaderMap {
+			knownHeaders[strings.TrimSpace(known)] = true
+		}
+		for index, header := range headerRow {
+			trimmed := strings.TrimSpace(header)
+			if trimmed == "" || knownHeaders[trimmed] {
+				continue
+			}
+			already := false
+			for _, selected := range selectedIndexes {
+				if selected == index {
+					already = true
+					break
+				}
+			}
+			if !already {
+				selectedIndexes = append(selectedIndexes, index)
+				selectedHeaders = append(selectedHeaders, header)
+			}
+		}
+	}
+
+	filtered := make([][]string, 0, len(records))
+	filtered = append(filtered, selectedHeaders)
+	for rowIndex := 1; rowIndex < len(records); rowIndex++ {
+		row := records[rowIndex]
+		selectedRow := make([]string, 0, len(selectedIndexes))
+		for _, columnIndex := range selectedIndexes {
+			if columnIndex >= 0 && columnIndex < len(row) {
+				selectedRow = append(selectedRow, row[columnIndex])
+			} else {
+				selectedRow = append(selectedRow, "")
+			}
+		}
+		filtered = append(filtered, selectedRow)
+	}
+
+	return filtered
+}
+
+func filterExportRecordsByScope(records [][]string, teacherID string, courseCode string, windowName string) [][]string {
+	if len(records) == 0 {
+		return records
+	}
+
+	teacherID = strings.TrimSpace(strings.ToLower(teacherID))
+	courseCode = strings.TrimSpace(strings.ToLower(courseCode))
+	windowName = strings.TrimSpace(strings.ToLower(windowName))
+
+	if teacherID == "" && courseCode == "" && windowName == "" {
+		return records
+	}
+
+	headers := records[0]
+	teacherIdx := -1
+	courseIdx := -1
+	windowIdx := -1
+	for index, header := range headers {
+		switch strings.TrimSpace(strings.ToLower(header)) {
+		case "faculty code":
+			teacherIdx = index
+		case "course code":
+			courseIdx = index
+		case "window name":
+			windowIdx = index
+		}
+	}
+
+	filtered := make([][]string, 0, len(records))
+	filtered = append(filtered, headers)
+	for rowIndex := 1; rowIndex < len(records); rowIndex++ {
+		row := records[rowIndex]
+
+		if teacherID != "" {
+			if teacherIdx < 0 || teacherIdx >= len(row) || strings.TrimSpace(strings.ToLower(row[teacherIdx])) != teacherID {
+				continue
+			}
+		}
+
+		if courseCode != "" {
+			if courseIdx < 0 || courseIdx >= len(row) || strings.TrimSpace(strings.ToLower(row[courseIdx])) != courseCode {
+				continue
+			}
+		}
+
+		if windowName != "" {
+			if windowIdx < 0 || windowIdx >= len(row) || strings.TrimSpace(strings.ToLower(row[windowIdx])) != windowName {
+				continue
+			}
+		}
+
+		filtered = append(filtered, row)
+	}
+
+	return filtered
+}
+
 func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -2569,12 +3409,23 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	departmentIDStr := strings.TrimSpace(r.URL.Query().Get("department_id"))
+	role := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("role")))
+	requestPath := strings.ToLower(strings.TrimSpace(r.URL.Path))
+	isAdminEndpoint := strings.Contains(requestPath, "/api/admin/")
+	if role == "" && isAdminEndpoint {
+		role = "admin"
+	}
 	semesterStr := strings.TrimSpace(r.URL.Query().Get("semester"))
 	reportType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("report_type")))
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	fields := strings.TrimSpace(r.URL.Query().Get("fields"))
+	teacherIDFilter := strings.TrimSpace(r.URL.Query().Get("teacher_id"))
+	courseCodeFilter := strings.TrimSpace(r.URL.Query().Get("course_code"))
+	windowNameFilter := strings.TrimSpace(r.URL.Query().Get("window_name"))
 
-	if username == "" || semesterStr == "" || reportType == "" || format == "" {
-		http.Error(w, "username, semester, report_type and format are required", http.StatusBadRequest)
+	if semesterStr == "" || reportType == "" || format == "" {
+		http.Error(w, "semester, report_type and format are required", http.StatusBadRequest)
 		return
 	}
 
@@ -2584,10 +3435,36 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	departmentID, departmentName, err := getDepartmentContextFromUsername(username)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	var departmentID int
+	var departmentName string
+	allDepartments := false
+	if departmentIDStr != "" {
+		departmentID, err = strconv.Atoi(departmentIDStr)
+		if err != nil || departmentID <= 0 {
+			http.Error(w, "invalid department_id", http.StatusBadRequest)
+			return
+		}
+		if scanErr := db.DB.QueryRow(`SELECT department_name FROM departments WHERE id = ?`, departmentID).Scan(&departmentName); scanErr != nil {
+			http.Error(w, "department not found", http.StatusBadRequest)
+			return
+		}
+	} else {
+		if username == "" {
+			if role == "admin" || role == "coe" {
+				allDepartments = true
+				departmentName = "all_departments"
+			} else {
+				http.Error(w, "username or department_id is required", http.StatusBadRequest)
+				return
+			}
+		}
+		if !allDepartments {
+			departmentID, departmentName, err = getDepartmentContextFromUsername(username)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 	}
 
 	var records [][]string
@@ -2595,12 +3472,24 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 	switch reportType {
 	case "teacher", "teacher-wise", "teacher_wise", "student":
 		normalizedReportType = "teacher"
-		records, err = exportTeacherWiseMarkRows(departmentID, semester)
+		if allDepartments {
+			records, err = exportTeacherWiseMarkRowsAllDepartments(semester)
+		} else {
+			records, err = exportTeacherWiseMarkRows(departmentID, semester)
+		}
 	case "course", "course-wise", "course_wise":
 		normalizedReportType = "course"
-		records, err = exportCourseWiseMarkRows(departmentID, semester)
+		if allDepartments {
+			records, err = exportCourseWiseMarkRowsAllDepartments(semester)
+		} else {
+			records, err = exportCourseWiseMarkRows(departmentID, semester)
+		}
 	case "course-summary":
 		normalizedReportType = "course_summary"
+		if allDepartments {
+			http.Error(w, "course_summary export requires a specific department", http.StatusBadRequest)
+			return
+		}
 		records, err = exportCourseWiseRows(departmentID, semester)
 	default:
 		http.Error(w, "report_type must be teacher or course", http.StatusBadRequest)
@@ -2613,11 +3502,35 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	originalRecords := records
+	originalRecords = filterExportRecordsByScope(originalRecords, teacherIDFilter, courseCodeFilter, windowNameFilter)
+	log.Printf("[DownloadMarkEntryReport] report_type=%s dept_id=%d semester=%d base_rows=%d fields=%q", normalizedReportType, departmentID, semester, len(originalRecords), fields)
+	records = applySelectedExportFields(originalRecords, normalizedReportType, fields)
+	log.Printf("[DownloadMarkEntryReport] filtered_rows=%d", len(records))
+
 	baseName := fmt.Sprintf("mark_entry_%s_sem%d_dept%s", normalizedReportType, semester, strings.ReplaceAll(strings.ToLower(departmentName), " ", "_"))
 	switch format {
 	case "csv":
 		writeCSVAttachment(w, baseName+".csv", records)
 	case "xlsx":
+		if allDepartments && (normalizedReportType == "teacher" || normalizedReportType == "course") {
+			if writeErr := writeDepartmentSheetsXLSXAttachment(w, baseName+".xlsx", originalRecords, normalizedReportType, fields); writeErr != nil {
+				http.Error(w, "failed to generate xlsx", http.StatusInternalServerError)
+			}
+			return
+		}
+		if normalizedReportType == "teacher" {
+			if writeErr := writeGroupedXLSXAttachment(w, baseName+".xlsx", originalRecords, records, "Faculty", []string{"Course Code", "Faculty Code"}); writeErr != nil {
+				http.Error(w, "failed to generate xlsx", http.StatusInternalServerError)
+			}
+			return
+		}
+		if normalizedReportType == "course" {
+			if writeErr := writeGroupedXLSXAttachment(w, baseName+".xlsx", originalRecords, records, "Course Name", []string{"Course Code", "Faculty Code"}); writeErr != nil {
+				http.Error(w, "failed to generate xlsx", http.StatusInternalServerError)
+			}
+			return
+		}
 		if writeErr := writeXLSXAttachment(w, baseName+".xlsx", records); writeErr != nil {
 			http.Error(w, "failed to generate xlsx", http.StatusInternalServerError)
 		}

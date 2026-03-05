@@ -447,7 +447,7 @@ function Sidebar({ onExpandedChange }) {
   return (
     <aside
       onPointerDownCapture={() => setIsPointerDownInSidebar(true)}
-      className={`fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 transition-all duration-300 ${
+      className={`fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 transition-all duration-300 flex flex-col ${
         isSidebarExpanded ? "w-64" : "w-20"
       }`}
     >
@@ -524,7 +524,7 @@ function Sidebar({ onExpandedChange }) {
       </div>
 
       {/* Navigation */}
-      <nav className="px-4 py-4 space-y-4">
+      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
         {menuItems.map((item) => (
           <button
             key={item.path}
@@ -535,8 +535,8 @@ function Sidebar({ onExpandedChange }) {
                 : "text-gray-900 hover:bg-gray-200 hover:text-gray-800"
             } ${
               isSidebarExpanded
-                ? "px-4 py-3 justify-start"
-                : "px-0 py-3 justify-center"
+                ? "px-4 py-2.5 justify-start"
+                : "px-0 py-2.5 justify-center"
             }`}
             style={{
               ...(isActive(item.path)
@@ -566,7 +566,7 @@ function Sidebar({ onExpandedChange }) {
       </nav>
 
       {/* User Section */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 mx-auto border-t border-gray-200">
+      <div className="p-3 border-t border-gray-200 bg-white">
         <div
           className={`flex items-center transition-all duration-300 overflow-hidden ${isSidebarExpanded ? "space-x-3" : "justify-center"}`}
         >
