@@ -43,6 +43,7 @@ function HODMarkEntryDashboardPage() {
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState({ type: '', text: '' })
   const [summary, setSummary] = useState(null)
   const [rows, setRows] = useState([])
   const [tableSearch, setTableSearch] = useState('')
@@ -57,9 +58,16 @@ function HODMarkEntryDashboardPage() {
     completion: '',
   })
   const [downloadingType, setDownloadingType] = useState('')
+  const [downloadProgress, setDownloadProgress] = useState({
+    active: false,
+    label: '',
+    percent: 0,
+    indeterminate: true,
+  })
   const [exportModal, setExportModal] = useState({ open: false, reportType: 'teacher' })
   const [fieldOrder, setFieldOrder] = useState([])
   const [selectedFields, setSelectedFields] = useState({})
+  const [fillingRandom, setFillingRandom] = useState(false)
 
   const [selectedRow, setSelectedRow] = useState(null)
   const [students, setStudents] = useState([])
@@ -244,10 +252,6 @@ function HODMarkEntryDashboardPage() {
       setError('Username not found. Please login again.')
       return
     }
-    if (isAdminMode && !departmentId) {
-      setError('Please select a department before downloading report.')
-      return
-    }
 
     if (!Array.isArray(fields) || fields.length === 0) {
       setError('Please select at least one field for export.')
@@ -256,10 +260,12 @@ function HODMarkEntryDashboardPage() {
 
     setDownloadingType(reportType)
     setError('')
+    setNotice({ type: '', text: '' })
     try {
       const params = new URLSearchParams()
       if (isAdminMode) {
-        params.append('department_id', departmentId)
+        params.append('role', userRole || 'admin')
+        if (departmentId) params.append('department_id', departmentId)
       } else {
         params.append('username', username)
       }
@@ -278,28 +284,127 @@ function HODMarkEntryDashboardPage() {
         ? `${API_BASE_URL}/admin/mark-entry/download?${params.toString()}`
         : `${API_BASE_URL}/hod/mark-entry/download?${params.toString()}`
 
+      const scopeSuffix = rowScope?.teacher_id
+        ? `_${String(rowScope.teacher_id).replace(/\s+/g, '_')}_${String(rowScope.course_code || '').replace(/\s+/g, '_')}`
+        : ''
+      const fileName = `mark_entry_${reportType}_sem${semester}${scopeSuffix}.xlsx`
+
+      setDownloadProgress({
+        active: true,
+        label: rowScope?.teacher_id ? 'Downloading faculty report...' : 'Downloading report...',
+        percent: 0,
+        indeterminate: true,
+      })
+
       const response = await fetch(endpoint)
       if (!response.ok) {
         const message = await response.text()
         throw new Error(message || 'Failed to download report')
       }
 
-      const blob = await response.blob()
+      const totalBytes = Number(response.headers.get('content-length') || 0)
+      const hasComputableLength = Number.isFinite(totalBytes) && totalBytes > 0
+
+      let blob
+      if (response.body && typeof response.body.getReader === 'function') {
+        const reader = response.body.getReader()
+        const chunks = []
+        let receivedBytes = 0
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value) {
+            chunks.push(value)
+            receivedBytes += value.length
+            if (hasComputableLength) {
+              const percent = Math.min(100, Math.round((receivedBytes / totalBytes) * 100))
+              setDownloadProgress({
+                active: true,
+                label: rowScope?.teacher_id ? 'Downloading faculty report...' : 'Downloading report...',
+                percent,
+                indeterminate: false,
+              })
+            } else {
+              setDownloadProgress({
+                active: true,
+                label: rowScope?.teacher_id ? 'Downloading faculty report...' : 'Downloading report...',
+                percent: 0,
+                indeterminate: true,
+              })
+            }
+          }
+        }
+
+        blob = new Blob(chunks)
+      } else {
+        blob = await response.blob()
+      }
       const objectURL = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = objectURL
-      const scopeSuffix = rowScope?.teacher_id
-        ? `_${String(rowScope.teacher_id).replace(/\s+/g, '_')}_${String(rowScope.course_code || '').replace(/\s+/g, '_')}`
-        : ''
-      anchor.download = `mark_entry_${reportType}_sem${semester}${scopeSuffix}.xlsx`
+      anchor.download = fileName
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
       URL.revokeObjectURL(objectURL)
+      setDownloadProgress({
+        active: true,
+        label: 'Download complete',
+        percent: 100,
+        indeterminate: false,
+      })
+      setTimeout(() => {
+        setDownloadProgress({ active: false, label: '', percent: 0, indeterminate: true })
+      }, 1200)
     } catch (err) {
       setError(err.message || 'Failed to download report')
+      setDownloadProgress({ active: false, label: '', percent: 0, indeterminate: true })
     } finally {
       setDownloadingType('')
+    }
+  }
+
+  const fillRandomMarksForWindow = async () => {
+    if (!isAdminMode) return
+    if (!windowId) {
+      setError('Select a window before filling random marks.')
+      return
+    }
+
+    const proceed = window.confirm('Fill random marks for all faculty assignments in this selected window?')
+    if (!proceed) return
+
+    setFillingRandom(true)
+    setError('')
+    setNotice({ type: '', text: '' })
+    try {
+      const payload = {
+        window_id: Number(windowId),
+        semester: Number(semester),
+      }
+      if (departmentId) payload.department_id = Number(departmentId)
+
+      const response = await fetch(`${API_BASE_URL}/admin/mark-entry/random-fill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      const data = await parseResponseBody(response)
+      if (!response.ok) {
+        throw new Error(data.error || data.message || 'Failed to fill random marks')
+      }
+
+      setNotice({
+        type: 'success',
+        text: `Random fill done: ${data.entries_upserted || 0} entries across ${data.assignments_matched || 0} assignments (${data.students_touched || 0} students).`,
+      })
+      fetchMonitor()
+    } catch (err) {
+      setError(err.message || 'Failed to fill random marks')
+    } finally {
+      setFillingRandom(false)
     }
   }
 
@@ -387,16 +492,29 @@ function HODMarkEntryDashboardPage() {
     >
       <div className="space-y-4">
         {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">{error}</div>}
+        {notice.text && notice.type === 'success' && (
+          <div className="bg-green-50 border border-green-200 text-green-700 rounded-lg p-3 text-sm">{notice.text}</div>
+        )}
 
         <div className="bg-white border rounded-lg p-3 flex flex-wrap items-center justify-between gap-2">
           <div className="text-sm text-gray-600">Export</div>
           <div className="flex flex-wrap gap-2">
+            {isAdminMode && (
+              <button
+                onClick={fillRandomMarksForWindow}
+                disabled={fillingRandom || !windowId}
+                className="border border-gray-300 px-3 py-2 rounded-lg text-sm disabled:opacity-60"
+                title={!windowId ? 'Select a window first' : 'Fill random marks for all faculty rows in selected window'}
+              >
+                {fillingRandom ? 'Filling Random...' : 'Fill Random (All Faculty in Window)'}
+              </button>
+            )}
             <button
               onClick={() => openExportModal('teacher')}
               disabled={downloadingType !== ''}
               className="border border-gray-300 px-3 py-2 rounded-lg text-sm disabled:opacity-60"
             >
-              {downloadingType === 'teacher' ? 'Downloading...' : 'Teacher-wise XLSX'}
+              {downloadingType === 'teacher' ? 'Downloading...' : 'Department-wise XLSX'}
             </button>
             <button
               onClick={() => openExportModal('course')}
@@ -408,12 +526,31 @@ function HODMarkEntryDashboardPage() {
           </div>
         </div>
 
+        {downloadProgress.active && (
+          <div className="bg-white border rounded-lg p-3">
+            <div className="flex items-center justify-between text-sm text-gray-700 mb-2">
+              <span>{downloadProgress.label || 'Downloading...'}</span>
+              <span>{downloadProgress.indeterminate ? 'Working...' : `${downloadProgress.percent}%`}</span>
+            </div>
+            <div className="w-full h-2 bg-gray-200 rounded overflow-hidden">
+              {downloadProgress.indeterminate ? (
+                <div className="h-full w-1/3 bg-primary animate-pulse" />
+              ) : (
+                <div
+                  className="h-full bg-primary transition-all duration-150"
+                  style={{ width: `${downloadProgress.percent}%` }}
+                />
+              )}
+            </div>
+          </div>
+        )}
+
         {exportModal.open && (
           <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50 p-4" onClick={() => setExportModal({ open: false, reportType: 'teacher' })}>
             <div className="bg-white rounded-lg w-full max-w-2xl p-4" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-3">
                 <h3 className="text-sm font-semibold text-gray-900">
-                  Configure {exportModal.reportType === 'teacher' ? 'Teacher-wise' : 'Course-wise'} XLSX
+                  Configure {exportModal.reportType === 'teacher' ? 'Department-wise' : 'Course-wise'} XLSX
                 </h3>
                 <button onClick={() => setExportModal({ open: false, reportType: 'teacher' })} className="text-gray-500 hover:text-gray-700">Close</button>
               </div>

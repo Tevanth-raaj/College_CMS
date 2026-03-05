@@ -2,6 +2,15 @@
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
+## Google Sign-In Setup
+
+To enable Google Sign-In on the login page, configure these environment variables:
+
+- Frontend (`client/.env`): `REACT_APP_GOOGLE_CLIENT_ID=<your_google_oauth_client_id>`
+- Backend (`server/.env`): `GOOGLE_CLIENT_ID=<same_google_oauth_client_id>`
+
+Only users already present and active in the `users` table can sign in with Google.
+
 ## Available Scripts
 
 In the project directory, you can run:

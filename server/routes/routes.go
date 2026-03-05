@@ -177,6 +177,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/mark-entry/overview", curriculum.GetHODMarkEntryOverview).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/window-monitor", curriculum.GetHODWindowMonitor).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/admin/mark-entry/window-monitor", curriculum.GetAdminWindowMonitor).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/mark-entry/random-fill", curriculum.AdminFillRandomMarksForWindow).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/teacher-students", curriculum.GetTeacherEnteredStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/result-analysis", curriculum.GetResultAnalysis).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/download", curriculum.DownloadMarkEntryReport).Methods("GET", "OPTIONS")
@@ -215,6 +216,7 @@ func SetupRoutes() *mux.Router {
 
 	// Authentication routes
 	router.HandleFunc("/api/auth/login", curriculum.Login).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/auth/google", curriculum.GoogleLogin).Methods("POST", "OPTIONS")
 
 	// Elective Management routes
 	router.HandleFunc("/api/hod/profile", curriculum.GetHODProfile).Methods("GET", "OPTIONS")
