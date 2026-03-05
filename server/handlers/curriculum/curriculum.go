@@ -195,7 +195,7 @@ func CreateSemester(w http.ResponseWriter, r *http.Request) {
 
 	query := "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, vertical_name) VALUES (?, ?, ?, ?)"
 	verticalName := ""
-	if card.CardType == "vertical" {
+	if card.CardType == "vertical" || card.CardType == "open_elective" {
 		verticalName = card.VerticalName
 	}
 	result, err := db.DB.Exec(query, card.CurriculumID, card.SemesterNumber, card.CardType, verticalName)

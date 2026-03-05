@@ -316,10 +316,11 @@ type HODOEOffering struct {
 
 // OECardInfo - OE card information for open elective offering
 type OECardInfo struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Semester    *int   `json:"semester,omitempty"`
-	CourseCount int    `json:"course_count"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	VerticalName string `json:"vertical_name,omitempty"`
+	Semester     *int   `json:"semester,omitempty"`
+	CourseCount  int    `json:"course_count"`
 }
 
 // SaveOEOfferingRequest - Request to save HOD OE offerings
