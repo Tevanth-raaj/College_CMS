@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS hod_minor_selections (
     
     FOREIGN KEY (department_id) REFERENCES departments(id),
     FOREIGN KEY (curriculum_id) REFERENCES curriculum(id),
-    FOREIGN KEY (vertical_id) REFERENCES normal_cards(id),
+    FOREIGN KEY (vertical_id) REFERENCES honour_verticals(id),
     FOREIGN KEY (course_id) REFERENCES courses(id),
     FOREIGN KEY (approved_by_user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
