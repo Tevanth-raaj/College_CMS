@@ -106,9 +106,10 @@ func main() {
 	// Migrate teacher_course_limits.teacher_id to VARCHAR(50) for faculty_id storage
 	if err := db.MigrateTeacherCourseLimitsTeacherID(); err != nil {
 		log.Fatal("Failed to migrate teacher_course_limits teacher_id column:", err)
-	// Add window_name to mark_entry_windows for auto-generated window names
-	if err := db.AddWindowNameToMarkEntryWindows(); err != nil {
-		log.Fatal("Failed to add window_name to mark_entry_windows:", err)
+		// Add window_name to mark_entry_windows for auto-generated window names
+		if err := db.AddWindowNameToMarkEntryWindows(); err != nil {
+			log.Fatal("Failed to add window_name to mark_entry_windows:", err)
+		}
 	}
 
 	// Start the allocation scheduler (auto-runs when teacher selection window closes)
@@ -127,5 +128,4 @@ func main() {
 
 	fmt.Println("Server started at http://localhost:5000")
 	log.Fatal(http.ListenAndServe(":5000", handler))
-}
 }

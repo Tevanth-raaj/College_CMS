@@ -513,20 +513,21 @@ func getDepartmentAssignments(departmentID int, semester int) ([]markEntryAssign
 			c.course_name,
 			tca.teacher_id,
 			COALESCE(t.name, tca.teacher_id) AS teacher_name,
-			COALESCE(d.id, 0) AS department_id,
-			COALESCE(d.department_name, 'Unmapped') AS department_name,
+			COALESCE(d_curr.id, d_teacher.id, 0) AS department_id,
+			COALESCE(d_curr.department_name, d_teacher.department_name, 'Unmapped') AS department_name,
 			nc.semester_number
 		FROM teacher_course_allocation tca
 		JOIN courses c ON c.id = tca.course_id
 		JOIN curriculum_courses cc ON cc.course_id = c.id
 		JOIN normal_cards nc ON nc.id = cc.semester_id
 		LEFT JOIN teachers t ON t.faculty_id = tca.teacher_id
-		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id
-		LEFT JOIN departments d ON d.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
-		WHERE d.id = ?
+		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id AND dt.status = 1
+		LEFT JOIN departments d_curr ON d_curr.current_curriculum_id = cc.curriculum_id
+		LEFT JOIN departments d_teacher ON d_teacher.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
+		WHERE (d_curr.id = ? OR d_teacher.id = ?)
 			AND nc.semester_number = ?
 		ORDER BY c.course_code, teacher_name
-	`, departmentID, semester)
+	`, departmentID, departmentID, semester)
 	if err != nil {
 		return nil, err
 	}
@@ -3021,6 +3022,63 @@ func applySelectedExportFields(records [][]string, reportType string, fieldsPara
 	return filtered
 }
 
+func filterExportRecordsByScope(records [][]string, teacherID string, courseCode string, windowName string) [][]string {
+	if len(records) == 0 {
+		return records
+	}
+
+	teacherID = strings.TrimSpace(strings.ToLower(teacherID))
+	courseCode = strings.TrimSpace(strings.ToLower(courseCode))
+	windowName = strings.TrimSpace(strings.ToLower(windowName))
+
+	if teacherID == "" && courseCode == "" && windowName == "" {
+		return records
+	}
+
+	headers := records[0]
+	teacherIdx := -1
+	courseIdx := -1
+	windowIdx := -1
+	for index, header := range headers {
+		switch strings.TrimSpace(strings.ToLower(header)) {
+		case "faculty code":
+			teacherIdx = index
+		case "course code":
+			courseIdx = index
+		case "window name":
+			windowIdx = index
+		}
+	}
+
+	filtered := make([][]string, 0, len(records))
+	filtered = append(filtered, headers)
+	for rowIndex := 1; rowIndex < len(records); rowIndex++ {
+		row := records[rowIndex]
+
+		if teacherID != "" {
+			if teacherIdx < 0 || teacherIdx >= len(row) || strings.TrimSpace(strings.ToLower(row[teacherIdx])) != teacherID {
+				continue
+			}
+		}
+
+		if courseCode != "" {
+			if courseIdx < 0 || courseIdx >= len(row) || strings.TrimSpace(strings.ToLower(row[courseIdx])) != courseCode {
+				continue
+			}
+		}
+
+		if windowName != "" {
+			if windowIdx < 0 || windowIdx >= len(row) || strings.TrimSpace(strings.ToLower(row[windowIdx])) != windowName {
+				continue
+			}
+		}
+
+		filtered = append(filtered, row)
+	}
+
+	return filtered
+}
+
 func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -3037,6 +3095,9 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 	reportType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("report_type")))
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
 	fields := strings.TrimSpace(r.URL.Query().Get("fields"))
+	teacherIDFilter := strings.TrimSpace(r.URL.Query().Get("teacher_id"))
+	courseCodeFilter := strings.TrimSpace(r.URL.Query().Get("course_code"))
+	windowNameFilter := strings.TrimSpace(r.URL.Query().Get("window_name"))
 
 	if semesterStr == "" || reportType == "" || format == "" {
 		http.Error(w, "semester, report_type and format are required", http.StatusBadRequest)
@@ -3097,7 +3158,10 @@ func DownloadMarkEntryReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	originalRecords := records
-	records = applySelectedExportFields(records, normalizedReportType, fields)
+	originalRecords = filterExportRecordsByScope(originalRecords, teacherIDFilter, courseCodeFilter, windowNameFilter)
+	log.Printf("[DownloadMarkEntryReport] report_type=%s dept_id=%d semester=%d base_rows=%d fields=%q", normalizedReportType, departmentID, semester, len(originalRecords), fields)
+	records = applySelectedExportFields(originalRecords, normalizedReportType, fields)
+	log.Printf("[DownloadMarkEntryReport] filtered_rows=%d", len(records))
 
 	baseName := fmt.Sprintf("mark_entry_%s_sem%d_dept%s", normalizedReportType, semester, strings.ReplaceAll(strings.ToLower(departmentName), " ", "_"))
 	switch format {

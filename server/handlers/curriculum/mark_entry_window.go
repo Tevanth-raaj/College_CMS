@@ -380,10 +380,37 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 		deptRows.Close()
 	}
 
+	// Also collect department(s) of students actually allocated for this teacher+course.
+	// This is required for cross-department teaching where curriculum mapping can be incomplete.
+	var studentDeptIDs []int64
+	studentDeptRows, studentDeptErr := database.Query(`
+		SELECT DISTINCT s.department_id
+		FROM course_student_teacher_allocation csta
+		JOIN students s ON csta.student_id = s.id
+		WHERE csta.course_id = ?
+		  AND csta.teacher_id = ?
+		  AND s.department_id IS NOT NULL
+	`, courseID, facultyID)
+	if studentDeptErr == nil {
+		for studentDeptRows.Next() {
+			var did int64
+			if studentDeptRows.Scan(&did) == nil {
+				studentDeptIDs = append(studentDeptIDs, did)
+			}
+		}
+		studentDeptRows.Close()
+	}
+
 	// Merge teacher departments + course departments (deduplicated)
-	allDeptIDs := make([]int64, 0, len(courseDeptIDs)+len(teacherDeptIDs))
+	allDeptIDs := make([]int64, 0, len(courseDeptIDs)+len(teacherDeptIDs)+len(studentDeptIDs))
 	deptSeen := make(map[int64]bool)
 	for _, did := range courseDeptIDs {
+		if !deptSeen[did] {
+			allDeptIDs = append(allDeptIDs, did)
+			deptSeen[did] = true
+		}
+	}
+	for _, did := range studentDeptIDs {
 		if !deptSeen[did] {
 			allDeptIDs = append(allDeptIDs, did)
 			deptSeen[did] = true
@@ -396,7 +423,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 		}
 	}
 
-	log.Printf("Course %d belongs to departments: %v (teacher depts: %v, merged: %v)", courseID, courseDeptIDs, teacherDeptIDs, allDeptIDs)
+	log.Printf("Course %d belongs to departments: %v (student depts: %v, teacher depts: %v, merged: %v)", courseID, courseDeptIDs, studentDeptIDs, teacherDeptIDs, allDeptIDs)
 
 	// Collect ALL semester numbers the course appears in across all curricula.
 	// A shared course (e.g. 22MA401) may be in sem 4 of AIDS and sem 3 of Math.
@@ -441,8 +468,8 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 	log.Printf("Course %d semesters across curricula: %v (nonSemCard=%v)", courseID, courseSemesters, hasNonSemesterCard)
 
 	// DEBUG: Log what we're matching against
-	log.Printf("Resolving window for courseID=%d, original teacherID=%s, facultyID=%s, numericUserID=%v, teacherDepts=%v, courseDepts=%v, allDepts=%v, courseSems=%v",
-		courseID, teacherID, facultyID, numericUserID, teacherDeptIDs, courseDeptIDs, allDeptIDs, courseSemesters)
+	log.Printf("Resolving window for courseID=%d, original teacherID=%s, facultyID=%s, numericUserID=%v, teacherDepts=%v, courseDepts=%v, studentDepts=%v, allDepts=%v, courseSems=%v",
+		courseID, teacherID, facultyID, numericUserID, teacherDeptIDs, courseDeptIDs, studentDeptIDs, allDeptIDs, courseSemesters)
 
 	// Prepare typed values for query parameters
 	userIDValue := interface{}(nil)
@@ -671,96 +698,37 @@ func GetApplicableMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var facultyID string
-	err = database.QueryRow(`SELECT faculty_id FROM teachers WHERE id = ? OR faculty_id = ?`, teacherID, teacherID).Scan(&facultyID)
-	if err != nil && err != sql.ErrNoRows {
-		http.Error(w, "failed to resolve teacher", http.StatusInternalServerError)
-		return
-	}
-	if err == sql.ErrNoRows || strings.TrimSpace(facultyID) == "" {
-		facultyID = teacherID
-	}
-
-	var numericUserID sql.NullInt64
-	_ = database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, facultyID).Scan(&numericUserID)
-
-	var departmentID sql.NullInt64
-	_ = database.QueryRow(`
-		SELECT department_id
-		FROM department_teachers
-		WHERE teacher_id = ? AND status = 1
-		ORDER BY id DESC
-		LIMIT 1
-	`, facultyID).Scan(&departmentID)
-
-	var semester sql.NullInt64
-	var cardType string
-	_ = database.QueryRow(`
-		SELECT nc.semester_number, COALESCE(nc.card_type, 'semester')
-		FROM curriculum_courses cc
-		JOIN normal_cards nc ON cc.semester_id = nc.id
-		WHERE cc.course_id = ?
-		LIMIT 1
-	`, courseID).Scan(&semester, &cardType)
-	if cardType != "semester" {
-		semester = sql.NullInt64{Valid: false}
-	}
-
-	query := `
-		SELECT id, start_at, end_at
-		FROM mark_entry_windows
-		WHERE enabled = 1
-		  AND ((teacher_id IS NULL AND user_id IS NULL) OR teacher_id = ? OR user_id = ?)
-		  AND (course_id IS NULL OR course_id = ?)
-		  AND (? IS NULL OR department_id IS NULL OR department_id = 0 OR department_id = ?)
-		  AND (? IS NULL OR semester IS NULL OR semester = 0 OR semester = ?)
-		ORDER BY
-		  (teacher_id IS NOT NULL) DESC,
-		  (user_id IS NOT NULL) DESC,
-		  (course_id IS NOT NULL) DESC,
-		  (department_id IS NOT NULL) DESC,
-		  (semester IS NOT NULL) DESC,
-		  updated_at DESC
-		LIMIT 25
-	`
-
-	deptValue := interface{}(nil)
-	if departmentID.Valid {
-		deptValue = departmentID.Int64
-	}
-
-	semValue := interface{}(nil)
-	if semester.Valid {
-		semValue = semester.Int64
-	}
-
-	userIDValue := interface{}(nil)
-	if numericUserID.Valid {
-		userIDValue = numericUserID.Int64
-	}
-
-	rows, queryErr := database.Query(query, facultyID, userIDValue, courseID, deptValue, deptValue, semValue, semValue)
-	if queryErr != nil {
+	windowOpen, windowIDs, _, resolveErr := resolveMarkEntryWindow(courseID, teacherID)
+	if resolveErr != nil {
 		http.Error(w, "failed to load applicable windows", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
+	if !windowOpen || len(windowIDs) == 0 {
+		json.NewEncoder(w).Encode([]map[string]interface{}{})
+		return
+	}
 
-	now := time.Now().UTC()
-	items := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		var windowID int
+	items := make([]map[string]interface{}, 0, len(windowIDs))
+	for _, windowID := range windowIDs {
 		var startAt time.Time
 		var endAt time.Time
-		if scanErr := rows.Scan(&windowID, &startAt, &endAt); scanErr != nil {
-			continue
-		}
-		if now.Before(startAt.UTC()) || now.After(endAt.UTC()) {
+		var windowName sql.NullString
+		var departmentID sql.NullInt64
+		detailErr := database.QueryRow(`
+			SELECT start_at, end_at, window_name, department_id
+			FROM mark_entry_windows
+			WHERE id = ? AND enabled = 1
+		`, windowID).Scan(&startAt, &endAt, &windowName, &departmentID)
+		if detailErr != nil {
 			continue
 		}
 
 		componentIDs := make([]int, 0)
-		compRows, compErr := database.Query(`SELECT assessment_component_id FROM mark_entry_window_components WHERE window_id = ?`, windowID)
+		compRows, compErr := database.Query(`
+			SELECT assessment_component_id
+			FROM mark_entry_window_components
+			WHERE window_id = ?
+		`, windowID)
 		if compErr == nil {
 			for compRows.Next() {
 				var componentID int
@@ -771,12 +739,19 @@ func GetApplicableMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			compRows.Close()
 		}
 
-		items = append(items, map[string]interface{}{
+		item := map[string]interface{}{
 			"id":            windowID,
+			"window_name":   strings.TrimSpace(windowName.String),
 			"start_at":      startAt.Local().Format(markEntryTimeLayout),
 			"end_at":        endAt.Local().Format(markEntryTimeLayout),
 			"component_ids": componentIDs,
-		})
+		}
+		if departmentID.Valid {
+			item["department_id"] = int(departmentID.Int64)
+		} else {
+			item["department_id"] = nil
+		}
+		items = append(items, item)
 	}
 
 	json.NewEncoder(w).Encode(items)
@@ -1191,6 +1166,17 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[UpdateMarkEntryWindow] incoming id=%d teacher=%v user=%v dept=%v sem=%v course=%v window_name=%q enabled=%v",
+		windowID,
+		request.TeacherID,
+		request.UserID,
+		request.DepartmentID,
+		request.Semester,
+		request.CourseID,
+		request.WindowName,
+		request.Enabled,
+	)
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
@@ -1212,19 +1198,105 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	teacherIDValue := interface{}(nil)
+	if request.TeacherID != nil && strings.TrimSpace(*request.TeacherID) != "" {
+		teacherIDValue = strings.TrimSpace(*request.TeacherID)
+	}
+
+	userIDValue := interface{}(nil)
+	if request.UserID != nil && strings.TrimSpace(*request.UserID) != "" {
+		trimmedUserID := strings.TrimSpace(*request.UserID)
+		var numericUserID int
+		lookupErr := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, trimmedUserID).Scan(&numericUserID)
+		if lookupErr == nil {
+			userIDValue = numericUserID
+		} else {
+			userIDValue = trimmedUserID
+		}
+	}
+
+	departmentIDValue := interface{}(nil)
+	if request.DepartmentID != nil && *request.DepartmentID > 0 {
+		departmentIDValue = *request.DepartmentID
+	}
+
+	semesterValue := interface{}(nil)
+	if request.Semester != nil && *request.Semester > 0 {
+		semesterValue = *request.Semester
+	}
+
+	courseIDValue := interface{}(nil)
+	if request.CourseID != nil && *request.CourseID > 0 {
+		courseIDValue = *request.CourseID
+	}
+
+	// Safety net: if update request carries no scope fields at all,
+	// preserve the existing scope instead of writing an invalid "unknown scope" row.
+	if teacherIDValue == nil && userIDValue == nil && departmentIDValue == nil && semesterValue == nil && courseIDValue == nil {
+		var existingTeacherID sql.NullString
+		var existingUserID sql.NullInt64
+		var existingDepartmentID sql.NullInt64
+		var existingSemester sql.NullInt64
+		var existingCourseID sql.NullInt64
+
+		err := database.QueryRow(`
+			SELECT teacher_id, user_id, department_id, semester, course_id
+			FROM mark_entry_windows
+			WHERE id = ?
+		`, windowID).Scan(&existingTeacherID, &existingUserID, &existingDepartmentID, &existingSemester, &existingCourseID)
+		if err == nil {
+			if existingTeacherID.Valid && strings.TrimSpace(existingTeacherID.String) != "" {
+				teacherIDValue = strings.TrimSpace(existingTeacherID.String)
+			}
+			if existingUserID.Valid {
+				userIDValue = int(existingUserID.Int64)
+			}
+			if existingDepartmentID.Valid {
+				departmentIDValue = int(existingDepartmentID.Int64)
+			}
+			if existingSemester.Valid {
+				semesterValue = int(existingSemester.Int64)
+			}
+			if existingCourseID.Valid {
+				courseIDValue = int(existingCourseID.Int64)
+			}
+		}
+	}
+
 	// Update window
 	updateQuery := `
 		UPDATE mark_entry_windows
-		SET start_at = ?, end_at = ?, enabled = ?, window_name = ?
+		SET teacher_id = ?, user_id = ?, department_id = ?, semester = ?, course_id = ?,
+		    start_at = ?, end_at = ?, enabled = ?, window_name = ?
 		WHERE id = ?
 	`
 
-	_, err = database.Exec(updateQuery, startAt, endAt, request.Enabled, request.WindowName, windowID)
+	_, err = database.Exec(updateQuery,
+		teacherIDValue,
+		userIDValue,
+		departmentIDValue,
+		semesterValue,
+		courseIDValue,
+		startAt,
+		endAt,
+		request.Enabled,
+		request.WindowName,
+		windowID,
+	)
 	if err != nil {
 		log.Printf("Error updating window: %v", err)
 		http.Error(w, "Failed to update window", http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("[UpdateMarkEntryWindow] saved id=%d teacher=%v user=%v dept=%v sem=%v course=%v",
+		windowID,
+		teacherIDValue,
+		userIDValue,
+		departmentIDValue,
+		semesterValue,
+		courseIDValue,
+	)
 
 	// Update components: delete existing and insert new
 	_, err = database.Exec(`DELETE FROM mark_entry_window_components WHERE window_id = ?`, windowID)

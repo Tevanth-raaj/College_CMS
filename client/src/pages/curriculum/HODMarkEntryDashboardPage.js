@@ -239,7 +239,7 @@ function HODMarkEntryDashboardPage() {
     }
   }
 
-  const downloadReport = async (reportType, fields = []) => {
+  const downloadReport = async (reportType, fields = [], rowScope = null) => {
     if (!isAdminMode && !username) {
       setError('Username not found. Please login again.')
       return
@@ -268,6 +268,12 @@ function HODMarkEntryDashboardPage() {
       params.append('format', 'xlsx')
       params.append('fields', fields.join(','))
 
+      if (rowScope && typeof rowScope === 'object') {
+        if (rowScope.teacher_id) params.append('teacher_id', rowScope.teacher_id)
+        if (rowScope.course_code) params.append('course_code', rowScope.course_code)
+        if (rowScope.window_name) params.append('window_name', rowScope.window_name)
+      }
+
       const endpoint = isAdminMode
         ? `${API_BASE_URL}/admin/mark-entry/download?${params.toString()}`
         : `${API_BASE_URL}/hod/mark-entry/download?${params.toString()}`
@@ -282,7 +288,10 @@ function HODMarkEntryDashboardPage() {
       const objectURL = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = objectURL
-      anchor.download = `mark_entry_${reportType}_sem${semester}.xlsx`
+      const scopeSuffix = rowScope?.teacher_id
+        ? `_${String(rowScope.teacher_id).replace(/\s+/g, '_')}_${String(rowScope.course_code || '').replace(/\s+/g, '_')}`
+        : ''
+      anchor.download = `mark_entry_${reportType}_sem${semester}${scopeSuffix}.xlsx`
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -329,6 +338,8 @@ function HODMarkEntryDashboardPage() {
       return true
     })
   }, [rows, tableSearch, tableFilters])
+
+  const defaultTeacherFields = useMemo(() => (EXPORT_FIELDS.teacher || []).map((field) => field.key), [])
 
   if (!canAccess) {
     return (
@@ -506,7 +517,7 @@ function HODMarkEntryDashboardPage() {
                   <th className="text-right px-3 py-2">Assigned</th>
                   <th className="text-right px-3 py-2">Completed</th>
                   <th className="text-right px-3 py-2">Completion %</th>
-                  <th className="text-left px-3 py-2">Drill-down</th>
+                  <th className="text-left px-3 py-2">Actions</th>
                 </tr>
                 {showTableFilters && (
                   <tr>
@@ -541,28 +552,41 @@ function HODMarkEntryDashboardPage() {
                 ) : filteredRows.length === 0 ? (
                   <tr><td colSpan="8" className="px-3 py-6 text-center text-gray-500">No monitor rows found.</td></tr>
                 ) : filteredRows.map((row) => (
-                  <tr key={`${row.course_id}-${row.teacher_id}-${row.department_id}`} className="border-t hover:bg-gray-50">
-                    <td className="px-3 py-2">{row.department_name || '-'}</td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-gray-900">{row.course_code}</div>
-                      <div className="text-gray-500">{row.course_name}</div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-gray-900">{row.teacher_name}</div>
-                      <div className="text-gray-500">{row.teacher_id}</div>
-                    </td>
-                    <td className="px-3 py-2">
-                      {row.window_name
-                        ? `${row.window_name}${row.window_status ? ` (${row.window_status})` : ''}`
-                        : (row.window_status || '-')}
-                    </td>
-                    <td className="px-3 py-2 text-right">{row.assigned_students || 0}</td>
-                    <td className="px-3 py-2 text-right">{row.completed_students || 0}</td>
-                    <td className="px-3 py-2 text-right">{Number(row.completion_percent || 0).toFixed(2)}</td>
-                    <td className="px-3 py-2">
-                      <button onClick={() => loadStudents(row)} className="text-primary hover:underline">View students</button>
-                    </td>
-                  </tr>
+                  <React.Fragment key={`${row.course_id}-${row.teacher_id}-${row.department_id}`}>
+                    <tr className="border-t hover:bg-gray-50">
+                      <td className="px-3 py-2">{row.department_name || '-'}</td>
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-gray-900">{row.course_code}</div>
+                        <div className="text-gray-500">{row.course_name}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-gray-900">{row.teacher_name}</div>
+                        <div className="text-gray-500">{row.teacher_id}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        {row.window_name
+                          ? `${row.window_name}${row.window_status ? ` (${row.window_status})` : ''}`
+                          : (row.window_status || '-')}
+                      </td>
+                      <td className="px-3 py-2 text-right">{row.assigned_students || 0}</td>
+                      <td className="px-3 py-2 text-right">{row.completed_students || 0}</td>
+                      <td className="px-3 py-2 text-right">{Number(row.completion_percent || 0).toFixed(2)}</td>
+                      <td className="px-3 py-2">
+                        <button onClick={() => loadStudents(row)} className="text-primary hover:underline text-left">View students</button>
+                      </td>
+                    </tr>
+                    <tr className="border-t bg-gray-50/40">
+                      <td colSpan="8" className="px-3 py-2">
+                        <button
+                          onClick={() => downloadReport('teacher', defaultTeacherFields, row)}
+                          disabled={downloadingType !== ''}
+                          className="text-primary hover:underline text-sm disabled:opacity-60"
+                        >
+                          {downloadingType === 'teacher' ? 'Downloading...' : 'Download XLSX for this faculty row'}
+                        </button>
+                      </td>
+                    </tr>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
