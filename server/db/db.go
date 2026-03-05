@@ -95,14 +95,347 @@ func InitDB() error {
 		return err
 	}
 
-	// Set session time zone if provided (e.g., +05:30)
-	if tz := os.Getenv("DB_TIME_ZONE"); tz != "" {
-		if _, err := DB.Exec("SET time_zone = ?", tz); err != nil {
-			log.Printf("Failed to set DB session time_zone to %s: %v", tz, err)
+	// Run migrations
+	if err := runMigrations(); err != nil {
+		log.Printf("Warning: Migrations failed: %v", err)
+	}
+
+	return nil
+}
+
+func runMigrations() error {
+	// Skip course_type table migrations - use existing table structure
+	// The course_type table already exists with column 'course_type', not 'name'
+	log.Println("Skipping course_type migrations - using existing table structure")
+
+	// Just ensure the table exists with basic structure
+	var tableExists int
+	err := DB.QueryRow("SELECT count(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'course_type'").Scan(&tableExists)
+	if err == nil && tableExists == 0 {
+		// Create course_type table only if it doesn't exist
+		_, err = DB.Exec(`
+			CREATE TABLE IF NOT EXISTS course_type (
+				id INT PRIMARY KEY AUTO_INCREMENT,
+				course_type VARCHAR(50) NOT NULL UNIQUE
+			)
+		`)
+		if err != nil {
+			return err
+		}
+
+		// Insert initial values
+		_, err = DB.Exec(`
+			INSERT IGNORE INTO course_type (id, course_type) VALUES 
+			(1, 'theory'), 
+			(2, 'lab'), 
+			(3, 'theory with lab')
+		`)
+	}
+	if err != nil {
+		log.Printf("Initial values insert warning: %v", err)
+	}
+
+	// Create teacher_course_limits table (current allocations only)
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS teacher_course_limits (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			teacher_id VARCHAR(50) NOT NULL,
+			course_type_id INT NOT NULL,
+			max_count INT DEFAULT 0,
+			UNIQUE KEY uq_teacher_type (teacher_id, course_type_id),
+			FOREIGN KEY (course_type_id) REFERENCES course_type(id)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Create teacher_course_history table to track allocation history
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS teacher_course_history (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			teacher_id VARCHAR(50) NOT NULL,
+			course_id INT DEFAULT NULL,
+			course_code VARCHAR(20) DEFAULT NULL,
+			course_name VARCHAR(255) DEFAULT NULL,
+			course_type_id INT NOT NULL,
+			max_count INT DEFAULT 0,
+			allocated_count INT DEFAULT 0,
+			window_start DATE NOT NULL,
+			window_end DATE NOT NULL,
+			semester_type VARCHAR(10) COMMENT 'ODD or EVEN',
+			academic_year VARCHAR(20) COMMENT 'e.g., 2025-2026',
+			record_type VARCHAR(20) DEFAULT NULL COMMENT 'limit or course',
+			allocated_date TIMESTAMP NULL COMMENT 'When the cron assigned this course',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			archived_at TIMESTAMP NULL COMMENT 'When this allocation was archived (window closed)',
+			
+			FOREIGN KEY (course_type_id) REFERENCES course_type(id),
+			KEY idx_teacher_id (teacher_id),
+			KEY idx_course_id (course_id),
+			KEY idx_window_dates (window_start, window_end),
+			KEY idx_record_type (record_type),
+			KEY idx_archived_at (archived_at),
+			INDEX idx_teacher_course_window (teacher_id, course_type_id, window_start)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Create student_enrollments table for allocation calculations
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS student_enrollments (
+			id INT NOT NULL AUTO_INCREMENT,
+			student_id INT NOT NULL,
+			course_id INT NOT NULL,
+			academic_year VARCHAR(20) NOT NULL COMMENT 'e.g., "2025-2026"',
+			semester INT NOT NULL COMMENT 'Semester number 1-8',
+			enrollment_status VARCHAR(50) DEFAULT 'enrolled' COMMENT 'enrolled, dropped, completed',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			KEY idx_student_id (student_id),
+			KEY idx_course_id (course_id),
+			KEY idx_academic_year_semester (academic_year, semester),
+			KEY idx_student_course_year_sem (student_id, course_id, academic_year, semester),
+			CONSTRAINT fk_se_student FOREIGN KEY (student_id) REFERENCES students (id) ON DELETE CASCADE ON UPDATE CASCADE,
+			CONSTRAINT fk_se_course FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE ON UPDATE CASCADE
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Populate student_enrollments based on existing curriculum structure
+	_, err = DB.Exec(`
+		INSERT IGNORE INTO student_enrollments (student_id, course_id, academic_year, semester, enrollment_status)
+		SELECT DISTINCT
+			ad.student_id,
+			cc.course_id,
+			'2025-2026' as academic_year,
+			nc.semester_number as semester,
+			'enrolled' as enrollment_status
+		FROM academic_details ad
+		JOIN curriculum c ON ad.curriculum_id = c.id
+		JOIN normal_cards nc ON nc.curriculum_id = c.id
+		JOIN curriculum_courses cc ON cc.curriculum_id = c.id AND cc.semester_id = nc.id
+		WHERE ad.student_id IS NOT NULL
+		  AND nc.semester_number IS NOT NULL
+		  AND nc.card_type = 'semester'
+		  AND cc.course_id IS NOT NULL
+	`)
+	if err != nil {
+		log.Printf("Warning: Student enrollments population failed: %v", err)
+	}
+
+	// Create student_eligible_honour_minor table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS student_eligible_honour_minor (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			student_email VARCHAR(255) NOT NULL,
+			type VARCHAR(20) DEFAULT 'HONOUR' COMMENT 'Type of eligibility: HONOUR or MINOR',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY idx_student_email_type (student_email, type),
+			INDEX idx_type (type),
+			INDEX idx_type_email (type, student_email)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to create student_eligible_honour_minor table: %v", err)
+	} else {
+		log.Println("student_eligible_honour_minor table created/verified successfully")
+	}
+
+	// Create teacher_course_appeal table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS teacher_course_appeal (
+			id INT NOT NULL AUTO_INCREMENT,
+			faculty_id BIGINT UNSIGNED NOT NULL,
+			appeal_message TEXT NOT NULL COMMENT 'Message from faculty explaining appeal',
+			appeal_status TINYINT(1) DEFAULT 0 COMMENT '0 = pending, 1 = resolved',
+			hr_action VARCHAR(50) DEFAULT NULL COMMENT 'APPROVED, REJECTED',
+			hr_message TEXT DEFAULT NULL COMMENT 'HR response message',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			resolved_at TIMESTAMP NULL DEFAULT NULL,
+			PRIMARY KEY (id),
+			KEY idx_faculty_id (faculty_id),
+			KEY idx_appeal_status (appeal_status),
+			KEY idx_faculty_status (faculty_id, appeal_status),
+			KEY idx_created_at (created_at),
+			CONSTRAINT teacher_course_appeal_ibfk_1 FOREIGN KEY (faculty_id) REFERENCES teachers (id) ON DELETE CASCADE ON UPDATE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to create teacher_course_appeal table: %v", err)
+	} else {
+		log.Println("teacher_course_appeal table created/verified successfully")
+	}
+
+	// Add allocation_run_at column to academic_calendar if it doesn't exist
+	var colExists int
+	err = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_NAME='academic_calendar' AND COLUMN_NAME='allocation_run_at'").Scan(&colExists)
+	if err == nil && colExists == 0 {
+		_, err = DB.Exec(`
+			ALTER TABLE academic_calendar 
+			ADD COLUMN allocation_run_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Timestamp when allocation was run for this window'
+		`)
+		if err != nil {
+			log.Printf("Warning: Failed to add allocation_run_at column: %v", err)
+		} else {
+			log.Println("allocation_run_at column added to academic_calendar")
+		}
+	}
+
+	// Run SQL migration files from db/migrations directory
+	if err := runSQLMigrations(); err != nil {
+		log.Printf("Warning: SQL migrations failed: %v", err)
+	}
+	// Create exam_absentees table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS exam_absentees (
+			id               INT AUTO_INCREMENT PRIMARY KEY,
+			window_id        INT NOT NULL,
+			course_id        INT NOT NULL,
+			student_id       INT NOT NULL,
+			mark_category_id INT NOT NULL,
+			learning_mode_id INT NOT NULL,
+			created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uq_absentee (window_id, course_id, student_id, mark_category_id),
+			KEY idx_course_window (course_id, window_id),
+			KEY idx_student (student_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to create exam_absentees table: %v", err)
+	} else {
+		log.Println("exam_absentees table created/verified successfully")
+	}
+
+	// Ensure UNIQUE constraint exists on exam_absentees (in case table was created without it)
+	DB.Exec(`ALTER TABLE exam_absentees ADD UNIQUE KEY uq_absentee (window_id, course_id, student_id, mark_category_id)`)
+	// ^ silently ignored if the key already exists
+
+	// Remove any existing duplicate rows (keep only the lowest id per unique combination)
+	DB.Exec(`
+		DELETE ea FROM exam_absentees ea
+		INNER JOIN (
+			SELECT MIN(id) AS keep_id, window_id, course_id, student_id, mark_category_id
+			FROM exam_absentees
+			GROUP BY window_id, course_id, student_id, mark_category_id
+			HAVING COUNT(*) > 1
+		) dupes ON ea.window_id        = dupes.window_id
+			  AND ea.course_id         = dupes.course_id
+			  AND ea.student_id        = dupes.student_id
+			  AND ea.mark_category_id  = dupes.mark_category_id
+			  AND ea.id               != dupes.keep_id
+	`)
+
+	// Create mark_appeal_requests table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS mark_appeal_requests (
+			id          INT NOT NULL AUTO_INCREMENT,
+			teacher_id  VARCHAR(45) NOT NULL,
+			course_id   INT NOT NULL,
+			window_id   INT NOT NULL,
+			reason      TEXT NOT NULL,
+			status      ENUM('pending','resolved','rejected') NOT NULL DEFAULT 'pending',
+			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			resolved_at TIMESTAMP NULL,
+			resolved_by VARCHAR(100) NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_appeal (teacher_id, course_id, window_id),
+			KEY idx_appeal_window (window_id),
+			KEY idx_appeal_teacher (teacher_id),
+			KEY idx_appeal_status (status)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to create mark_appeal_requests table: %v", err)
+	} else {
+		log.Println("mark_appeal_requests table created/verified successfully")
+	}
+	// Fix collation on existing table (if it was created with utf8mb4_unicode_ci)
+	DB.Exec(`ALTER TABLE mark_appeal_requests CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`)
+
+	// Add is_active column to teacher_course_tracking if it doesn't exist
+	var isActiveExists int
+	err = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='teacher_course_tracking' AND COLUMN_NAME='is_active'").Scan(&isActiveExists)
+	if err == nil && isActiveExists == 0 {
+		_, err = DB.Exec(`ALTER TABLE teacher_course_tracking ADD COLUMN is_active INT DEFAULT 1`)
+		if err != nil {
+			log.Printf("Warning: Failed to add is_active column to teacher_course_tracking: %v", err)
+		} else {
+			log.Println("is_active column added to teacher_course_tracking")
 		}
 	}
 
 	return nil
+}
+
+// runSQLMigrations reads and executes SQL files from db/migrations directory
+func runSQLMigrations() error {
+	migrationsDir := "./db/migrations"
+	
+	// Check if migrations directory exists
+	if _, err := os.Stat(migrationsDir); os.IsNotExist(err) {
+		log.Printf("Migrations directory not found: %s", migrationsDir)
+		return nil
+	}
+
+	// Read all migration files
+	files, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		log.Printf("Error reading migrations directory: %v", err)
+		return err
+	}
+
+	// Execute each .sql file
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".sql") {
+			continue
+		}
+
+		migrationPath := fmt.Sprintf("%s/%s", migrationsDir, file.Name())
+		log.Printf("Running migration: %s", file.Name())
+
+		// Read migration file content
+		content, err := os.ReadFile(migrationPath)
+		if err != nil {
+			log.Printf("Error reading migration file %s: %v", file.Name(), err)
+			continue
+		}
+
+		// Execute migration
+		// Split by semicolons and execute each statement separately
+		statements := strings.Split(string(content), ";")
+		for _, stmt := range statements {
+			stmt = strings.TrimSpace(stmt)
+			if stmt == "" || strings.HasPrefix(stmt, "--") {
+				continue
+			}
+			
+			_, err = DB.Exec(stmt)
+			if err != nil {
+				// Log error but continue with other statements
+				log.Printf("Error executing statement in %s: %v\nStatement: %s", file.Name(), err, stmt[:min(len(stmt), 100)])
+			}
+		}
+
+		log.Printf("Migration %s completed", file.Name())
+	}
+
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // CreateCurriculumTable creates the curriculum table if it doesn't exist
@@ -955,6 +1288,10 @@ func RemoveNameColumnFromNormalCards() error {
 	// Drop the name column
 	_, err = DB.Exec("ALTER TABLE normal_cards DROP COLUMN name")
 	if err != nil {
+		if mysqlErr, ok := err.(*mysql.MySQLError); ok && mysqlErr.Number == 1091 {
+			log.Println("Name column already removed from normal_cards, skipping")
+			return nil
+		}
 		return fmt.Errorf("failed to drop name column from normal_cards: %w", err)
 	}
 
@@ -992,6 +1329,57 @@ func CreateMarkEntryStudentPermissionsTables() error {
 	return nil
 }
 
+// MigrateTeacherCourseLimitsTeacherID alters teacher_course_limits.teacher_id from
+// BIGINT UNSIGNED to VARCHAR(50) so it correctly stores faculty_id.
+func MigrateTeacherCourseLimitsTeacherID() error {
+	// Check current data type
+	var dataType string
+	err := DB.QueryRow(`
+		SELECT DATA_TYPE
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME  = 'teacher_course_limits'
+		  AND COLUMN_NAME = 'teacher_id'
+	`).Scan(&dataType)
+	if err != nil {
+		// Table may not exist yet – skip
+		fmt.Println("MigrateTeacherCourseLimitsTeacherID: table not found, skipping")
+		return nil
+	}
+
+	if dataType == "varchar" {
+		fmt.Println("teacher_course_limits.teacher_id is already VARCHAR – no migration needed")
+		return nil
+	}
+
+	fmt.Printf("Migrating teacher_course_limits.teacher_id from %s to VARCHAR(50)...\n", dataType)
+
+	// Drop unique constraint – MySQL may name it 'uq_teacher_type' or 'teacher_id'.
+	DB.Exec(`ALTER TABLE teacher_course_limits DROP KEY uq_teacher_type`)
+	DB.Exec(`ALTER TABLE teacher_course_limits DROP KEY teacher_id`)
+
+	// Truncate stale numeric data – it cannot be mapped to varchar faculty_ids.
+	_, err = DB.Exec(`TRUNCATE TABLE teacher_course_limits`)
+	if err != nil {
+		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: truncate failed: %w", err)
+	}
+
+	// Alter the column type
+	_, err = DB.Exec(`ALTER TABLE teacher_course_limits MODIFY COLUMN teacher_id VARCHAR(50) NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: alter column failed: %w", err)
+	}
+
+	// Re-add unique constraint
+	_, err = DB.Exec(`ALTER TABLE teacher_course_limits ADD UNIQUE KEY uq_teacher_type (teacher_id, course_type_id)`)
+	if err != nil {
+		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: re-add unique key failed: %w", err)
+	}
+
+	fmt.Println("teacher_course_limits.teacher_id migrated to VARCHAR(50) successfully")
+	return nil
+}
+
 // AddUserIdToMarkEntryWindows adds user_id column to mark_entry_windows to support user-based windows
 func AddUserIdToMarkEntryWindows() error {
 	// Check if user_id column already exists
@@ -1024,5 +1412,37 @@ func AddUserIdToMarkEntryWindows() error {
 	}
 
 	fmt.Println("Successfully added user_id column to mark_entry_windows!")
+	return nil
+}
+
+// AddWindowNameToMarkEntryWindows adds window_name column to mark_entry_windows
+func AddWindowNameToMarkEntryWindows() error {
+	var columnExists bool
+	err := DB.QueryRow(`
+		SELECT COUNT(*) > 0 
+		FROM information_schema.columns 
+		WHERE table_schema = DATABASE() 
+		AND table_name = 'mark_entry_windows' 
+		AND column_name = 'window_name'
+	`).Scan(&columnExists)
+
+	if err != nil {
+		return fmt.Errorf("failed to check if window_name column exists: %w", err)
+	}
+
+	if columnExists {
+		fmt.Println("window_name column already exists in mark_entry_windows")
+		return nil
+	}
+
+	_, err = DB.Exec(`
+		ALTER TABLE mark_entry_windows 
+		ADD COLUMN window_name VARCHAR(500) NULL AFTER enabled
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to add window_name column to mark_entry_windows: %w", err)
+	}
+
+	fmt.Println("Successfully added window_name column to mark_entry_windows!")
 	return nil
 }

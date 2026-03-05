@@ -1,16 +1,8 @@
 import React from "react";
 import { Routes, Route } from "react-router-dom";
-
 import LoginPage from "../pages/curriculum/loginPage";
-import AppShell from "../components/AppShell";
-import PrivateRoute from "../components/PrivateRoute";
-
-// Dashboard & Users
 import Dashboard from "../pages/curriculum/dashboard";
 import TeacherDashboardPage from "../pages/curriculum/TeacherDashboardPage";
-import UsersPage from "../pages/curriculum/usersPage";
-
-// Curriculum
 import CurriculumMainPage from "../pages/curriculum/curriculumMainPage";
 import DepartmentOverviewPage from "../pages/curriculum/departmentOverviewPage";
 import ManageCurriculumPage from "../pages/curriculum/manageCurriculumPage";
@@ -21,21 +13,21 @@ import MappingPage from "../pages/curriculum/mappingPage";
 import PEOPOMappingPage from "../pages/curriculum/peoPOMappingPage";
 import ClusterManagementPage from "../pages/curriculum/clusterManagementPage";
 import SharingManagementPage from "../pages/curriculum/sharingManagementPage";
-
-// Regulation
 import RegulationPage from "../pages/regulation/regulationPage";
 import RegulationEditorPage from "../pages/regulation/regulationEditorPage";
-
-// Student–Teacher
+import UsersPage from "../pages/curriculum/usersPage";
 import StudentDetailsPage from "../pages/student-teacher_entry/studentDetailsPage";
 import TeacherStudentDashboard from "../pages/student-teacher_entry/TeacherStudentDashboard";
 import TeacherDetailsPage from "../pages/student-teacher_entry/TeacherDetailsPage";
 import TeacherStudentMappingPage from "../pages/student-teacher_entry/TeacherStudentMappingPage";
-
-// Courses & Marks
 import CourseAllocationPage from "../pages/curriculum/CourseAllocationPage";
+import ElectiveSelectionPage from "../pages/student/ElectiveSelectionPage";
+import TeacherCourseSelectionPage from "../pages/teacher/TeacherCourseSelectionPage";
+import HRFacultyPage from "../pages/hr/HRFacultyPage";
+import HRAppealsReviewPage from "../pages/hr/HRAppealsReviewPage";
 import ElectiveManagementPage from "../pages/curriculum/ElectiveManagementPage";
 import HODElectivePage from "../pages/curriculum/HODElectivePage";
+import HODHonourMinorEligibilityPage from "../pages/curriculum/HODHonourMinorEligibilityPage";
 import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
@@ -49,16 +41,17 @@ import NotFoundPage from "../components/NotFoundPage";
 function App() {
   return (
     <Routes>
-      {/* Public */}
       <Route path="/" element={<LoginPage />} />
 
-      {/* Protected */}
       <Route element={<PrivateRoute />}>
         <Route element={<AppShell />}>
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="teacher-dashboard" element={<TeacherDashboardPage />} />
 
-          <Route path="users" element={<UsersPage />} />
+          <Route path="/Student_details" element={<StudentDetailsPage />} />
+          <Route path="/student-teacher-dashboard" element={<TeacherStudentDashboard />} />
+          <Route path="/teacher-details" element={<TeacherDetailsPage />} />
+          <Route path="/teacher-student-mapping" element={<TeacherStudentMappingPage />} />
 
           <Route path="Student_details" element={<StudentDetailsPage />} />
           <Route

@@ -6,28 +6,74 @@ import StatCard from '../../components/StatCard'
 
 function TeacherDashboardPage() {
   const navigate = useNavigate()
-  const teacherID = localStorage.getItem('teacherId')
-  const teacherName = localStorage.getItem('userName')
+  const teacherID = localStorage.getItem('teacherId') || localStorage.getItem('teacher_id')
+  const teacherName = localStorage.getItem('teacher_name') || localStorage.getItem('userName')
+  const userRole = localStorage.getItem('userRole')
+  const userEmail = localStorage.getItem('userEmail')
   const [coursesByCategory, setCoursesByCategory] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+
   useEffect(() => {
+    // If we have teacherID, fetch courses directly
     if (teacherID) {
       fetchTeacherCourses()
-    } else {
-      setError('Teacher ID not found. Please login again.')
+    } 
+    // If teacher role but no teacherID, try to fetch from backend using email
+    else if ((userRole === 'teacher' || userRole === 'hod') && userEmail) {
+      fetchTeacherIdByEmail()
+    } 
+    // Otherwise show error
+    else {
+      setError('Unable to load teacher information. Please login again.')
       setLoading(false)
     }
-  }, [teacherID])
+  }, [teacherID, userRole, userEmail])
+
+  const fetchTeacherIdByEmail = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/teachers?email=${encodeURIComponent(userEmail)}`)
+      if (response.ok) {
+        const teachers = await response.json()
+        if (teachers && teachers.length > 0) {
+          const teacher = teachers[0]
+          // Store the teacher ID in localStorage
+          localStorage.setItem('teacherId', teacher.id)
+          localStorage.setItem('teacher_id', teacher.id)
+          localStorage.setItem('teacher_name', teacher.name || '')
+          localStorage.setItem('faculty_id', teacher.faculty_id || '')
+          console.log('Retrieved teacher data from email:', teacher)
+          // Now fetch courses
+          fetchTeacherCourses()
+        } else {
+          setError('Teacher profile not found. Please contact administrator.')
+          setLoading(false)
+        }
+      } else {
+        setError('Unable to load teacher profile. Please try again.')
+        setLoading(false)
+      }
+    } catch (err) {
+      console.error('Error fetching teacher ID:', err)
+      setError('Failed to load teacher information.')
+      setLoading(false)
+    }
+  }
 
   const fetchTeacherCourses = async () => {
     setLoading(true)
     setError('')
 
     try {
-      const url = `${API_BASE_URL}/teachers/${teacherID}/courses`
-      console.log('[TEACHER DASHBOARD] Fetching from:', url)
+      const currentTeacherId = localStorage.getItem('teacherId') || localStorage.getItem('teacher_id')
+      if (!currentTeacherId) {
+        setError('Teacher ID not available')
+        setLoading(false)
+        return
+      }
+
+      const url = `${API_BASE_URL}/teachers/${currentTeacherId}/courses`
       const response = await fetch(url)
 
       if (!response.ok) {
@@ -35,7 +81,6 @@ function TeacherDashboardPage() {
       }
 
       const data = await response.json()
-      console.log('[TEACHER DASHBOARD] Data received:', data)
 
       if (!data || data.length === 0) {
         setError('No courses assigned to you')
@@ -72,6 +117,8 @@ function TeacherDashboardPage() {
     }
   }
 
+
+
   const getCategoryColor = (category) => {
     const colors = {
       'Core': '#3b82f6',
@@ -86,14 +133,16 @@ function TeacherDashboardPage() {
     return colors[category] || '#6b7280'
   }
 
-  const getTotalCredits = () => {
-    let total = 0
+  const getActiveWindowCount = () => {
+    let count = 0
     Object.values(coursesByCategory).forEach((courses) => {
       courses.forEach((course) => {
-        total += course.credit || 0
+        if (course.has_window) {
+          count++
+        }
       })
     })
-    return total
+    return count
   }
 
   const getTotalCourses = () => {
@@ -114,8 +163,15 @@ function TeacherDashboardPage() {
     return total
   }
 
+
+
+
   const handleCourseClick = (course) => {
-    navigate(`/teacher-course/${course.id}/students`, { state: { course } })
+    navigate(`/teacher-course/${course.id}/students`, { 
+      state: { 
+        course
+      } 
+    })
   }
 
   return (
@@ -150,8 +206,7 @@ function TeacherDashboardPage() {
         {!loading && !error && Object.keys(coursesByCategory).length > 0 && (
           <>
             {/* Summary Stats */}
-            {/* Summary Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {/* Total Courses Card */}
               <StatCard
                 stat={{
@@ -178,18 +233,19 @@ function TeacherDashboardPage() {
                 }}
               />
 
-              {/* Total Credits Card */}
+              {/* Active Mark Entry Card */}
               <StatCard
                 stat={{
-                  title: "Total Credits",
-                  value: getTotalCredits(),
+                  title: "Active Mark Entry",
+                  value: getActiveWindowCount(),
                   icon: (
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   )
                 }}
               />
+
             </div>
 
             {/* Courses by Category */}
@@ -210,22 +266,25 @@ function TeacherDashboardPage() {
                           <th className="w-[7.28%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             S.No
                           </th>
-                          <th className="w-[14.28%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="w-[12%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Code
                           </th>
-                          <th className="w-[14.28%] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="w-[20%] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Course Name
                           </th>
-                          <th className="w-[14.28%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="w-[12%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Type
                           </th>
-                          <th className="w-[14.28%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="w-[10%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Credit
                           </th>
-                          <th className="w-[14.28%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="w-[12%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Students
                           </th>
-                          <th className="w-[14.28%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="w-[15%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Windows
+                          </th>
+                          <th className="w-[10%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Action
                           </th>
                         </tr>
@@ -272,6 +331,22 @@ function TeacherDashboardPage() {
                               </span>
                             </td>
                             <td className="px-4 py-4 text-center">
+                              {course.has_window ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                  Active
+                                </span>
+                              ) : course.has_missed_submission ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  Incomplete
+                                </span>
+                              ) : (
+                                <span className="text-xs text-gray-400">No Window</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-4 text-center">
                               <svg className="w-5 h-5 text-blue-500 hover:text-blue-700 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                               </svg>
@@ -300,6 +375,7 @@ function TeacherDashboardPage() {
           </div>
         )}
       </div>
+
     </MainLayout>
   )
 }

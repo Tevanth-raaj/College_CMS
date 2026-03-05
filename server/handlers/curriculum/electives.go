@@ -40,26 +40,26 @@ func GetHODProfile(w http.ResponseWriter, r *http.Request) {
 
 	// Query to get HOD's department and curriculum
 	query := `
-		SELECT 
-			u.id as user_id,
-			u.username,
-			u.email,
-			u.role,
-			d.id as dept_id,
-			d.department_name,
-			d.department_code,
-			c.id as curr_id,
-			c.name as curr_name,
-			c.academic_year
-		FROM users u
-		INNER JOIN teachers t ON u.email = t.email
-		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
-		INNER JOIN departments d ON dt.department_id = d.id
-		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
-		LEFT JOIN curriculum c ON dca.curriculum_id = c.id
-		WHERE u.email = ? AND u.role = 'hod' AND u.is_active = 1
-		LIMIT 1
-	`
+        SELECT 
+            u.id as user_id,
+            u.username,
+            u.email,
+            u.role,
+            d.id as dept_id,
+            d.department_name,
+            d.department_code,
+            c.id as curr_id,
+            c.name as curr_name,
+            c.academic_year
+        FROM users u
+        INNER JOIN teachers t ON u.email = t.email
+        INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+        INNER JOIN departments d ON dt.department_id = d.id
+        LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+        LEFT JOIN curriculum c ON dca.curriculum_id = c.id
+        WHERE u.email = ? AND u.role = 'hod' AND u.is_active = 1
+        LIMIT 1
+    `
 
 	var response models.HODProfileResponse
 	var deptID int
@@ -151,15 +151,15 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	// Get HOD's department and curriculum
 	var departmentID, curriculumID int
 	deptQuery := `
-		SELECT d.id, COALESCE(dca.curriculum_id, 0)
-		FROM users u
-		INNER JOIN teachers t ON u.email = t.email
-		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
-		INNER JOIN departments d ON dt.department_id = d.id
-		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
-		WHERE u.email = ? AND u.role = 'hod'
-		LIMIT 1
-	`
+        SELECT d.id, COALESCE(dca.curriculum_id, 0)
+        FROM users u
+        INNER JOIN teachers t ON u.email = t.email
+        INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+        INNER JOIN departments d ON dt.department_id = d.id
+        LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+        WHERE u.email = ? AND u.role = 'hod'
+        LIMIT 1
+    `
 
 	err := db.DB.QueryRow(deptQuery, email).Scan(&departmentID, &curriculumID)
 	if err != nil {
@@ -756,15 +756,15 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 	// Get HOD's user ID, department, and curriculum
 	var userID, departmentID, curriculumID int
 	deptQuery := `
-		SELECT u.id, d.id, COALESCE(dca.curriculum_id, 0)
-		FROM users u
-		INNER JOIN teachers t ON u.email = t.email
-		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
-		INNER JOIN departments d ON dt.department_id = d.id
-		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
-		WHERE u.email = ? AND u.role = 'hod'
-		LIMIT 1
-	`
+        SELECT u.id, d.id, COALESCE(dca.curriculum_id, 0)
+        FROM users u
+        INNER JOIN teachers t ON u.email = t.email
+        INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+        INNER JOIN departments d ON dt.department_id = d.id
+        LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+        WHERE u.email = ? AND u.role = 'hod'
+        LIMIT 1
+    `
 
 	err = db.DB.QueryRow(deptQuery, email).Scan(&userID, &departmentID, &curriculumID)
 	if err != nil {
@@ -961,10 +961,10 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 	// Insert user-provided selections with semester assignments
 	if len(req.CourseAssignments) > 0 {
 		insertQuery := `
-			INSERT INTO hod_elective_selections 
-			(department_id, curriculum_id, semester, course_id, slot_id, slot_name, academic_year, batch, approved_by_user_id, status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, (SELECT slot_name FROM elective_semester_slots WHERE id = ?), ?, ?, ?, ?, ?, ?)
-		`
+            INSERT INTO hod_elective_selections 
+            (department_id, curriculum_id, semester, course_id, slot_id, slot_name, academic_year, batch, approved_by_user_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, (SELECT slot_name FROM elective_semester_slots WHERE id = ?), ?, ?, ?, ?, ?, ?)
+        `
 
 		now := time.Now()
 		status := req.Status
@@ -1179,15 +1179,15 @@ func GetHODBatches(w http.ResponseWriter, r *http.Request) {
 
 	// Get batches from academic_details table
 	query := `
-		SELECT DISTINCT ad.batch
-		FROM academic_details ad
-		INNER JOIN departments d ON ad.department = d.department_name
-		INNER JOIN department_teachers dt ON d.id = dt.department_id
-		INNER JOIN teachers t ON dt.teacher_id = t.faculty_id
-		INNER JOIN users u ON t.email = u.email
-		WHERE u.email = ? AND u.role = 'hod' AND ad.batch IS NOT NULL AND ad.batch != ''
-		ORDER BY ad.batch DESC
-	`
+        SELECT DISTINCT ad.batch
+        FROM academic_details ad
+        INNER JOIN departments d ON ad.department = d.department_name
+        INNER JOIN department_teachers dt ON d.id = dt.department_id
+        INNER JOIN teachers t ON dt.teacher_id = t.faculty_id
+        INNER JOIN users u ON t.email = u.email
+        WHERE u.email = ? AND u.role = 'hod' AND ad.batch IS NOT NULL AND ad.batch != ''
+        ORDER BY ad.batch DESC
+    `
 
 	rows, err := db.DB.Query(query, email)
 	if err != nil {
@@ -1245,10 +1245,10 @@ func GetElectiveSemesterSlots(w http.ResponseWriter, r *http.Request) {
 
 	semesterParam := r.URL.Query().Get("semester")
 	query := `
-		SELECT id, semester, slot_name, slot_order
-		FROM elective_semester_slots
-		WHERE is_active = 1
-	`
+        SELECT id, semester, slot_name, slot_order
+        FROM elective_semester_slots
+        WHERE is_active = 1
+    `
 	args := []interface{}{}
 	if semesterParam != "" {
 		semester, err := strconv.Atoi(semesterParam)
@@ -1505,15 +1505,15 @@ func GetMinorVerticals(w http.ResponseWriter, r *http.Request) {
 	// Get HOD's curriculum
 	var curriculumID int
 	currQuery := `
-		SELECT COALESCE(dca.curriculum_id, 0)
-		FROM users u
-		INNER JOIN teachers t ON u.email = t.email
-		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
-		INNER JOIN departments d ON dt.department_id = d.id
-		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
-		WHERE u.email = ? AND u.role = 'hod'
-		LIMIT 1
-	`
+        SELECT COALESCE(dca.curriculum_id, 0)
+        FROM users u
+        INNER JOIN teachers t ON u.email = t.email
+        INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+        INNER JOIN departments d ON dt.department_id = d.id
+        LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+        WHERE u.email = ? AND u.role = 'hod'
+        LIMIT 1
+    `
 
 	err := db.DB.QueryRow(currQuery, email).Scan(&curriculumID)
 	if err != nil || curriculumID == 0 {
@@ -1729,15 +1729,15 @@ func SaveHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 	// Get HOD's info
 	var userID, departmentID, curriculumID int
 	deptQuery := `
-		SELECT u.id, d.id, COALESCE(dca.curriculum_id, 0)
-		FROM users u
-		INNER JOIN teachers t ON u.email = t.email
-		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
-		INNER JOIN departments d ON dt.department_id = d.id
-		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
-		WHERE u.email = ? AND u.role = 'hod'
-		LIMIT 1
-	`
+        SELECT u.id, d.id, COALESCE(dca.curriculum_id, 0)
+        FROM users u
+        INNER JOIN teachers t ON u.email = t.email
+        INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+        INNER JOIN departments d ON dt.department_id = d.id
+        LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+        WHERE u.email = ? AND u.role = 'hod'
+        LIMIT 1
+    `
 
 	err = db.DB.QueryRow(deptQuery, email).Scan(&userID, &departmentID, &curriculumID)
 	if err != nil {
@@ -1765,11 +1765,11 @@ func SaveHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 
 	// Delete existing minor selections for this dept/year/batch
 	deleteQuery := `
-		DELETE FROM hod_minor_selections 
-		WHERE department_id = ? 
-		AND academic_year = ?
-		AND (batch = ? OR (batch IS NULL AND ? = ''))
-	`
+        DELETE FROM hod_minor_selections 
+        WHERE department_id = ? 
+        AND academic_year = ?
+        AND (batch = ? OR (batch IS NULL AND ? = ''))
+    `
 	_, err = tx.Exec(deleteQuery, departmentID, req.AcademicYear, req.Batch, req.Batch)
 	if err != nil {
 		log.Println("Error deleting old minor selections:", err)
@@ -1783,10 +1783,10 @@ func SaveHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 
 	// Insert new minor selections
 	insertQuery := `
-		INSERT INTO hod_minor_selections 
-		(department_id, curriculum_id, vertical_id, semester, course_id, allowed_dept_ids, academic_year, batch, approved_by_user_id, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
+        INSERT INTO hod_minor_selections 
+        (department_id, curriculum_id, vertical_id, semester, course_id, allowed_dept_ids, academic_year, batch, approved_by_user_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
 
 	now := time.Now()
 	status := req.Status
@@ -1890,14 +1890,14 @@ func GetHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 	// Get HOD's department
 	var departmentID int
 	deptQuery := `
-		SELECT d.id
-		FROM users u
-		INNER JOIN teachers t ON u.email = t.email
-		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
-		INNER JOIN departments d ON dt.department_id = d.id
-		WHERE u.email = ? AND u.role = 'hod'
-		LIMIT 1
-	`
+        SELECT d.id
+        FROM users u
+        INNER JOIN teachers t ON u.email = t.email
+        INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+        INNER JOIN departments d ON dt.department_id = d.id
+        WHERE u.email = ? AND u.role = 'hod'
+        LIMIT 1
+    `
 
 	err := db.DB.QueryRow(deptQuery, email).Scan(&departmentID)
 	if err != nil {
@@ -1912,22 +1912,22 @@ func GetHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 
 	// Get minor selections
 	query := `
-		SELECT hms.vertical_id, 
-		       CASE 
-		           WHEN nc.semester_number IS NOT NULL THEN CONCAT('Semester ', nc.semester_number, ' - Vertical')
-		           ELSE 'Vertical Card'
-		       END as name,
-		       hms.semester, hms.course_id, 
-		       c.course_code, c.course_name, c.credit, hms.allowed_dept_ids
-		FROM hod_minor_selections hms
-		INNER JOIN normal_cards nc ON hms.vertical_id = nc.id
-		INNER JOIN courses c ON hms.course_id = c.id
-		WHERE hms.department_id = ?
-		AND hms.academic_year = ?
-		AND (hms.batch = ? OR (hms.batch IS NULL AND ? = ''))
-		AND hms.status = 'ACTIVE'
-		ORDER BY hms.semester, c.course_code
-	`
+        SELECT hms.vertical_id, 
+               CASE 
+                   WHEN nc.semester_number IS NOT NULL THEN CONCAT('Semester ', nc.semester_number, ' - Vertical')
+                   ELSE 'Vertical Card'
+               END as name,
+               hms.semester, hms.course_id, 
+               c.course_code, c.course_name, c.credit, hms.allowed_dept_ids
+        FROM hod_minor_selections hms
+        INNER JOIN normal_cards nc ON hms.vertical_id = nc.id
+        INNER JOIN courses c ON hms.course_id = c.id
+        WHERE hms.department_id = ?
+        AND hms.academic_year = ?
+        AND (hms.batch = ? OR (hms.batch IS NULL AND ? = ''))
+        AND hms.status = 'ACTIVE'
+        ORDER BY hms.semester, c.course_code
+    `
 
 	rows, err := db.DB.Query(query, departmentID, academicYear, batch, batch)
 	if err != nil {

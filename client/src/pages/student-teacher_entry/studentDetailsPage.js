@@ -179,7 +179,6 @@
         const url = editingStudent 
           ? `${API_BASE_URL}/students/${editingStudent.student_id || editingStudent.id}`
           : `${API_BASE_URL}/students`
-        console.log(formData)
         const method = editingStudent ? 'PUT' : 'POST'
         const response = await fetch(url, {
           method: method,

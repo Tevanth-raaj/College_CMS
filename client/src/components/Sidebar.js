@@ -151,7 +151,27 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin", "teacher", "coe"],
+        roles: ["admin", "teacher", "coe", "hod", "curriculum_entry_user"],
+      },
+      {
+        name: "Elective Selection",
+        path: "/elective-selection",
+        icon: (
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"
+            />
+          </svg>
+        ),
+        roles: ["student"],
       },
       {
         name: "Curriculum",
@@ -174,7 +194,7 @@ function Sidebar({ onExpandedChange }) {
         roles: ["admin", "curriculum_entry_user"],
       },
       {
-        name: "Student & Teacher",
+        name: "Register",
         path: "/student-teacher-dashboard",
         icon: (
           <svg
@@ -191,7 +211,7 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin"],
+        roles: ["admin", "hod"],
       },
       {
         name: "Course Allocation",
@@ -214,6 +234,26 @@ function Sidebar({ onExpandedChange }) {
         roles: ["admin"],
       },
       {
+        name: "Course Selection",
+        path: "/teacher/course-selection",
+        icon: (
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"
+            />
+          </svg>
+        ),
+        roles: ["teacher"],
+      },
+      {
         name: "Teacher Courses",
         path: "/teacher-courses",
         icon: (
@@ -231,7 +271,22 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin"],
+        roles: ["admin", "teacher"],
+      },
+      {
+        name: "Electives",
+        path: "/student/elective-selection",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3v-6"
+            />
+          </svg>
+        ),
+        roles: ["student"],
       },
       {
         name: "Mark Entry",
@@ -276,6 +331,41 @@ function Sidebar({ onExpandedChange }) {
               strokeLinejoin="round"
               strokeWidth={2}
               d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"
+            />
+          </svg>
+        ),
+        roles: ["admin", "coe"],
+      },
+      {
+        name: "Honour/Minor Import",
+        path: "/hod/honour-minor-eligibility",
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 4v16m8-8H4"
+            />
+          </svg>
+        ),
+        roles: ["hod"],
+      },
+      {
+        name: "Exam Absentees",
+        path: "/exam-absentees",
+        icon: (
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
             />
           </svg>
         ),
@@ -374,7 +464,7 @@ function Sidebar({ onExpandedChange }) {
         >
           <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0 bg-primary">
             <svg
-              className="w-6 h-6 text-white"
+              className="w-6 h-6"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -397,7 +487,7 @@ function Sidebar({ onExpandedChange }) {
                   WebkitTextFillColor: "transparent",
                 }}
               >
-                CMS
+                ACADEMICS
               </span>
               <span className="text-xs text-gray-500 font-medium whitespace-nowrap">
                 Curriculum Portal
@@ -413,7 +503,7 @@ function Sidebar({ onExpandedChange }) {
             title={sidebarPinned ? "Unpin sidebar" : "Pin sidebar"}
           >
             <svg
-              className="w-7 h-7"
+              className="w-6 h-6"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"

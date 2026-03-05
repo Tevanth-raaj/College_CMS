@@ -131,6 +131,64 @@ func GetTeacherByID(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(teacher)
 }
 
+// GetTeacherByEmail retrieves a single teacher by email
+func GetTeacherByEmail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	// Handle OPTIONS request for CORS
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		log.Printf("GetTeacherByEmail called without email parameter")
+		http.Error(w, "Email parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Fetching teacher by email: %s", email)
+
+	query := `
+		SELECT 
+			t.id, t.faculty_id, t.name, t.email, t.phone, t.profile_img, 
+			t.dept, d.department_name as department, t.desg, 
+			t.last_login, t.status
+		FROM teachers t
+		LEFT JOIN departments d ON t.dept = d.id
+		WHERE t.email = ? AND t.status = 1
+	`
+
+	var teacher Teacher
+
+	err := db.DB.QueryRow(query, email).Scan(
+		&teacher.ID, &teacher.FacultyID, &teacher.Name, &teacher.Email, &teacher.Phone,
+		&teacher.ProfileImg, &teacher.Dept, &teacher.Department, &teacher.Desg,
+		&teacher.LastLogin, &teacher.Status,
+	)
+
+	if err == sql.ErrNoRows {
+		log.Printf("Teacher not found with email: %s", email)
+		http.Error(w, fmt.Sprintf("Teacher not found with email: %s", email), http.StatusNotFound)
+		return
+	} else if err != nil {
+		log.Printf("Error querying teacher by email: %v", err)
+		http.Error(w, "Failed to fetch teacher", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Teacher found: ID=%d, Name=%s, FacultyID=%s", teacher.ID, teacher.Name, teacher.FacultyID)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"teacher": teacher,
+	})
+}
+
 // CreateTeacher creates a new teacher
 func CreateTeacher(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

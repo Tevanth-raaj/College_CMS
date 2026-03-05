@@ -44,16 +44,9 @@ function TeacherStudentMappingPage() {
     setLoading(true);
     try {
       const url = `${API_BASE_URL}/student-teacher-mapping/data?department_id=${selectedDepartment}&year=${selectedYear}&academic_year=${academicYear}`;
-      console.log("[MAPPING DEBUG] Fetching from URL:", url);
-      console.log("[MAPPING DEBUG] Filters - dept:", selectedDepartment, "year:", selectedYear, "academicYear:", academicYear);
       
       const response = await fetch(url);
       const data = await response.json();
-      
-      console.log("[MAPPING DEBUG] Response data:", data);
-      console.log("[MAPPING DEBUG] Teachers count:", (data.teachers || []).length);
-      console.log("[MAPPING DEBUG] Students count:", (data.students || []).length);
-      console.log("[MAPPING DEBUG] Students:", data.students);
       
       setTeachers(data.teachers || []);
       setStudents(data.students || []);

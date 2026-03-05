@@ -34,7 +34,6 @@ function TeacherCoursesPage() {
         url += '?' + params.toString()
       }
 
-      console.log('[TEACHER COURSES] Fetching from:', url)
       const response = await fetch(url)
 
       if (!response.ok) {
@@ -42,7 +41,6 @@ function TeacherCoursesPage() {
       }
 
       const data = await response.json()
-      console.log('[TEACHER COURSES] Data received:', data)
 
       if (!data || data.length === 0) {
         setError('No courses found for this teacher')

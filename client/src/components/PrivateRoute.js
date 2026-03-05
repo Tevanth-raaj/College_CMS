@@ -1,19 +1,17 @@
 import React from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
 
-const PrivateRoute = ({ children }) => {
-  const isAuthenticated = () => {
-    // Check if user is authenticated by verifying localStorage
-    const userId = localStorage.getItem('userId')
-    const userRole = localStorage.getItem('userRole')
-    return userId && userRole
-  }
+function PrivateRoute() {
+  const userRole = localStorage.getItem('userRole')
+  const userId = localStorage.getItem('userId')
 
-  if (!isAuthenticated()) {
+  if (!userRole || !userId) {
     return <Navigate to="/" replace />
   }
 
-  return children ? children : <Outlet />
+  return <Outlet />
 }
 
 export default PrivateRoute
+
+

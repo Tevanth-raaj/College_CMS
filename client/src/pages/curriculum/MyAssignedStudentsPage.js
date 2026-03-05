@@ -34,7 +34,6 @@ function MyAssignedStudentsPage() {
       }
 
       const data = await response.json()
-      console.log('[ASSIGNED STUDENTS] Data received:', data)
       
       setAssignedStudents(Array.isArray(data) ? data : [])
 

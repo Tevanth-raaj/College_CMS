@@ -635,7 +635,7 @@ func AddCourseToSemester(w http.ResponseWriter, r *http.Request) {
 	fetchQuery := `SELECT id, course_code, course_name, course_type, category, credit, 
 	               lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, COALESCE(` + "`tw/sl`" + `, 0) as tw_sl,
 	               COALESCE(theory_total_hrs, 0), COALESCE(tutorial_total_hrs, 0), COALESCE(practical_total_hrs, 0), COALESCE(activity_total_hrs, 0), COALESCE(total_hrs, 0),
-	               cia_marks, see_marks, total_marks 
+	               cia_marks, see_marks, COALESCE(total_marks, 0) 
 	               FROM courses WHERE id = ?`
 	err = db.DB.QueryRow(fetchQuery, courseID).Scan(&fullCourse.CourseID, &fullCourse.CourseCode, &fullCourse.CourseName,
 		&fullCourse.CourseType, &fullCourse.Category, &fullCourse.Credit,
@@ -761,38 +761,4 @@ func RemoveCourseFromSemester(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Course removed successfully"})
-}
-
-// GetCourseTypes retrieves all course types from the database
-func GetCourseTypes(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	query := `SELECT id, course_type FROM course_type WHERE status = 1 ORDER BY id`
-	rows, err := db.DB.Query(query)
-	if err != nil {
-		log.Printf("Error fetching course types: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to fetch course types"})
-		return
-	}
-	defer rows.Close()
-
-	var courseTypes []models.CourseType
-	for rows.Next() {
-		var ct models.CourseType
-		if err := rows.Scan(&ct.ID, &ct.Name); err != nil {
-			log.Printf("Error scanning course type: %v", err)
-			continue
-		}
-		courseTypes = append(courseTypes, ct)
-	}
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(courseTypes)
 }

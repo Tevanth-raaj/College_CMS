@@ -61,7 +61,6 @@ function ClusterManagementPage() {
         throw new Error('Failed to fetch available departments')
       }
       const data = await response.json()
-      console.log('Available departments:', data)
       setAvailableCurriculum(data || [])
     } catch (err) {
       console.error('Error fetching available departments:', err)
@@ -76,7 +75,6 @@ function ClusterManagementPage() {
         throw new Error('Failed to fetch cluster departments')
       }
       const data = await response.json()
-      console.log('Cluster departments data:', data)
       setClusterDepartments(data || [])
     } catch (err) {
       console.error('Error fetching cluster departments:', err)
@@ -210,14 +208,12 @@ function ClusterManagementPage() {
   }
 
   const getDepartmentName = (dept) => {
-    console.log('Getting name for dept:', dept)
     // If dept has a name property from backend, use it
     if (dept && dept.name) {
       return dept.name
     }
     // Otherwise look up by curriculum_id or id
     const regId = dept.curriculum_id || dept.id
-    console.log('Looking up curriculum by id:', regId, 'in curriculum array:', curriculum)
     const reg = curriculum.find(r => r.id === regId)
     return reg ? reg.name : `Department ${regId}`
   }
