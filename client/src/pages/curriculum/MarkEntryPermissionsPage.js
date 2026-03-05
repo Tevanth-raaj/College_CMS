@@ -88,7 +88,6 @@ function MarkEntryPermissionsPage() {
   const [closedWindowAppeals, setClosedWindowAppeals] = useState({}) // { "windowId|teacherId|courseId" → appeal }
   const [activeWindowAppeals, setActiveWindowAppeals] = useState({}) // { "windowId|teacherId|courseId" → appeal } for active windows
   const [appealDetailModal, setAppealDetailModal] = useState(null) // appeal object
-  const [updateDebug, setUpdateDebug] = useState(null)
 
   // Check if user has COE or admin role
   useEffect(() => {
@@ -795,7 +794,6 @@ function MarkEntryPermissionsPage() {
 
   const editWindow = async (win) => {
     const latestWindow = (await fetchWindowById(win.id)) || win
-    setUpdateDebug(null)
 
     setEditingWindow(latestWindow)
     setWindowName(latestWindow.window_name || '')
@@ -934,30 +932,6 @@ function MarkEntryPermissionsPage() {
 
     setWindowLoading(true)
     try {
-      console.debug('[MarkEntryPermissions][updateWindow] selected state', {
-        window_id: editingWindow.id,
-        windowScope,
-        windowDepartmentId,
-        windowSemester,
-        windowCourseId,
-        originalTeacherID,
-        originalUserID,
-        originalDepartmentID,
-        originalSemester,
-        originalCourseID,
-      })
-      console.debug('[MarkEntryPermissions][updateWindow] payload', payload)
-
-      setUpdateDebug({
-        phase: 'sending_update',
-        window_id: editingWindow.id,
-        selected_scope: windowScope,
-        selected_department_id: windowDepartmentId,
-        selected_semester: windowSemester,
-        selected_course_id: windowCourseId,
-        payload,
-      })
-
       const res = await fetch(`${API_BASE_URL}/mark-entry-windows/${editingWindow.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -972,37 +946,11 @@ function MarkEntryPermissionsPage() {
       }
 
       if (!res.ok) {
-        setUpdateDebug((prev) => ({
-          ...(prev || {}),
-          phase: 'update_failed',
-          response_status: res.status,
-          response_body: responseBody,
-        }))
         throw new Error('Failed to update window')
       }
 
       const refreshed = await fetchExistingWindows()
       const updatedWindow = (refreshed || []).find((windowItem) => String(windowItem.id) === String(editingWindow.id))
-
-      setUpdateDebug((prev) => ({
-        ...(prev || {}),
-        phase: 'update_success',
-        response_status: res.status,
-        response_body: responseBody,
-        persisted: updatedWindow
-          ? {
-              id: updatedWindow.id,
-              department_id: updatedWindow.department_id ?? null,
-              department_name: updatedWindow.department_name || null,
-              semester: updatedWindow.semester ?? null,
-              course_id: updatedWindow.course_id ?? null,
-              teacher_id: updatedWindow.teacher_id ?? null,
-              scope_description: getScopeDescription(updatedWindow),
-            }
-          : null,
-      }))
-
-          console.debug('[MarkEntryPermissions][updateWindow] persisted', updatedWindow)
 
       setMessage({ type: 'success', text: 'Window updated successfully.' })
       setEditingWindow(null)
@@ -1016,7 +964,6 @@ function MarkEntryPermissionsPage() {
 
   const cancelEdit = () => {
     setEditingWindow(null)
-    setUpdateDebug(null)
     setWindowName('')
     setWindowStartAt('')
     setWindowEndAt('')
@@ -1348,13 +1295,6 @@ function MarkEntryPermissionsPage() {
                     <p className="text-sm text-blue-900">
                       <span className="font-semibold">Editing:</span> {getScopeDescription(editingWindow)}
                     </p>
-                  </div>
-                )}
-
-                {updateDebug && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-                    <p className="text-xs font-semibold text-slate-700 mb-2">Update Debug</p>
-                    <pre className="text-[11px] text-slate-700 whitespace-pre-wrap break-words">{JSON.stringify(updateDebug, null, 2)}</pre>
                   </div>
                 )}
 
