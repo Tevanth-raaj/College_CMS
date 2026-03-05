@@ -233,12 +233,31 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/teacher-limits/export", curriculum.ExportTeacherLimits).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/academic-calendar/current", curriculum.GetCurrentAcademicCalendar).Methods("GET", "OPTIONS")
 
+	// Academic Calendar Admin routes
+	router.HandleFunc("/api/admin/academic-calendars", curriculum.GetAllAcademicCalendars).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars", curriculum.CreateAcademicCalendar).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars/{id}", curriculum.UpdateAcademicCalendar).Methods("PUT", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars/{id}", curriculum.DeleteAcademicCalendar).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars/advance", curriculum.AdvanceAcademicYear).Methods("POST", "OPTIONS")
+
+	// Honour Program Management routes
+	router.HandleFunc("/api/hod/honour-verticals", curriculum.GetHonourVerticals).Methods("GET", "OPTIONS")
+
 	// Minor Program Management routes
 	// TODO: Implement these handlers in curriculum package
 	router.HandleFunc("/api/hod/minor-verticals", curriculum.GetMinorVerticals).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/vertical-courses", curriculum.GetVerticalCourses).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/minor-selections", curriculum.GetHODMinorSelections).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/minor-selections", curriculum.SaveHODMinorSelections).Methods("POST", "OPTIONS")
+
+	// Open Elective Offering routes
+	router.HandleFunc("/api/hod/oe-cards", curriculum.GetOECards).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings", curriculum.GetHODOEOfferings).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings", curriculum.SaveHODOEOfferings).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings/incoming", curriculum.GetOEOfferedToMyDept).Methods("GET", "OPTIONS")
+
+	// Vertical Lock routes (honour/minor vertical tracking across semesters)
+	router.HandleFunc("/api/hod/vertical-locks", curriculum.GetVerticalLocks).Methods("GET", "OPTIONS")
 
 	// User Management routes
 	router.HandleFunc("/api/users", curriculum.GetUsers).Methods("GET", "OPTIONS")
