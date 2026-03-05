@@ -38,6 +38,10 @@ import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
 //404 page
 import NotFoundPage from "../components/NotFoundPage";
 
+// Layout components
+import PrivateRoute from "../components/PrivateRoute";
+import AppShell from "../components/AppShell";
+
 function App() {
   return (
     <Routes>
@@ -49,9 +53,15 @@ function App() {
           <Route path="teacher-dashboard" element={<TeacherDashboardPage />} />
 
           <Route path="/Student_details" element={<StudentDetailsPage />} />
-          <Route path="/student-teacher-dashboard" element={<TeacherStudentDashboard />} />
+          <Route
+            path="/student-teacher-dashboard"
+            element={<TeacherStudentDashboard />}
+          />
           <Route path="/teacher-details" element={<TeacherDetailsPage />} />
-          <Route path="/teacher-student-mapping" element={<TeacherStudentMappingPage />} />
+          <Route
+            path="/teacher-student-mapping"
+            element={<TeacherStudentMappingPage />}
+          />
 
           <Route path="Student_details" element={<StudentDetailsPage />} />
           <Route
