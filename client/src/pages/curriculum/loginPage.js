@@ -11,6 +11,10 @@ function LoginPage() {
   const googleButtonRef = useRef(null)
   const navigate = useNavigate()
 
+  useEffect(() => {
+    console.log('GOOGLE_CLIENT_ID:', GOOGLE_CLIENT_ID)
+  }, [])
+
   const persistLoginAndNavigate = useCallback((data) => {
     localStorage.setItem('userRole', data.user.role)
     localStorage.setItem('userEmail', data.user.email)

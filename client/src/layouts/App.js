@@ -32,6 +32,8 @@ import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
 import MarkEntryPermissionsPage from "../pages/curriculum/MarkEntryPermissionsPage";
+import HODMarkEntryDashboardPage from "../pages/curriculum/HODMarkEntryDashboardPage";
+import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
 import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
@@ -87,6 +89,11 @@ function App() {
             element={<MarkEntryPermissionsPage />}
           />
           <Route
+            path="mark-monitor"
+            element={<HODMarkEntryDashboardPage />}
+          />
+          <Route path="result-analysis" element={<ResultAnalysisPage />} />
+          <Route
             path="my-assigned-students"
             element={<MyAssignedStudentsPage />}
           />
@@ -95,6 +102,9 @@ function App() {
           <Route path="elective-selection" element={<ElectiveSelectionPage />} />
           <Route path="student/elective-selection" element={<ElectiveSelectionPage />} />
           <Route path="teacher/course-selection" element={<TeacherCourseSelectionPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="hr/faculty" element={<HRFacultyPage />} />
+          <Route path="hr/appeals-review" element={<HRAppealsReviewPage />} />
           <Route
             path="elective-management"
             element={<ElectiveManagementPage />}

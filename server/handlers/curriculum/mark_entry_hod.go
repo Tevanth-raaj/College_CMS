@@ -1453,6 +1453,7 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 
 	studentQuery := fmt.Sprintf(`
 		SELECT
+			DISTINCT
 			s.id,
 			COALESCE(s.enrollment_no, ''),
 			s.student_name
@@ -1524,6 +1525,7 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[GetTeacherEnteredStudents] matched mark rows=%d for teacher_id=%s course_id=%d", markRowCount, teacherID, courseID)
 
 	items := make([]map[string]interface{}, 0)
+	seenStudents := make(map[int]bool)
 	for rows.Next() {
 		var studentID int
 		var enrollmentNo string
@@ -1531,6 +1533,10 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 		if scanErr := rows.Scan(&studentID, &enrollmentNo, &studentName); scanErr != nil {
 			continue
 		}
+		if seenStudents[studentID] {
+			continue
+		}
+		seenStudents[studentID] = true
 		components := componentMapByStudent[studentID]
 		hasEntries := len(components) > 0
 		items = append(items, map[string]interface{}{

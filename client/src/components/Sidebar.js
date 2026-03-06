@@ -191,7 +191,47 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["admin", "curriculum_entry_user"],
+        roles: ["admin", "hod", "curriculum_entry_user"],
+      },
+      {
+        name: "Regulations",
+        path: "/regulations",
+        icon: (
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+            />
+          </svg>
+        ),
+        roles: ["admin", "hod", "curriculum_entry_user"],
+      },
+      {
+        name: "Users",
+        path: "/users",
+        icon: (
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17 20h5v-1a4 4 0 00-5-3.87M9 20H4v-1a4 4 0 015-3.87m8-8a4 4 0 11-8 0 4 4 0 018 0zM7 12a4 4 0 11-8 0 4 4 0 018 0z"
+            />
+          </svg>
+        ),
+        roles: ["admin"],
       },
       {
         name: "Register",
@@ -317,6 +357,61 @@ function Sidebar({ onExpandedChange }) {
         requiresWindow: true, // This menu item requires window assignment for non-teachers
       },
       {
+        name: "Mark Monitor",
+        path: "/mark-monitor",
+        icon: (
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+            />
+          </svg>
+        ),
+        roles: ["admin", "hod"],
+      },
+      {
+        name: "Result Analysis",
+        path: "/result-analysis",
+        icon: (
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M11 11V7m4 8v-6m4 10H5a2 2 0 01-2-2V7a2 2 0 012-2h5m4 0h5a2 2 0 012 2v10a2 2 0 01-2 2M9 7h6"
+            />
+          </svg>
+        ),
+        roles: ["admin", "hod"],
+      },
+      {
+        name: "My Assigned",
+        path: "/my-assigned-students",
+        icon: (
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17 20h5v-1a4 4 0 00-5-3.87M9 20H4v-1a4 4 0 015-3.87m8-8a4 4 0 11-8 0 4 4 0 018 0z"
+            />
+          </svg>
+        ),
+        roles: ["user", "faculty", "staff", "curriculum_entry_user", "coe", "admin"],
+      },
+      {
         name: "Mark Permissions",
         path: "/mark-entry-permissions",
         icon: (
@@ -389,7 +484,67 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
+        roles: ["admin", "hod"],
+      },
+      {
+        name: "HR Faculty",
+        path: "/hr/faculty",
+        icon: (
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17 20h5v-1a4 4 0 00-5-3.87M9 20H4v-1a4 4 0 015-3.87m8-8a4 4 0 11-8 0 4 4 0 018 0z"
+            />
+          </svg>
+        ),
+        roles: ["hr", "admin"],
+      },
+      {
+        name: "HR Appeals",
+        path: "/hr/appeals-review",
+        icon: (
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+            />
+          </svg>
+        ),
+        roles: ["hr", "admin"],
+      },
+      {
+        name: "Clusters",
+        path: "/clusters",
+        icon: (
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17 20h5v-2a2 2 0 00-2-2h-3m-6 4H6a2 2 0 01-2-2v-2m16-2V8a2 2 0 00-2-2h-4m-8 0H4a2 2 0 00-2 2v4"
+            />
+          </svg>
+        ),
         roles: ["admin"],
+      },
+      {
+        name: "Sharing",
+        path: "/sharing",
+        icon: (
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 12a3 3 0 100-6 3 3 0 000 6zm8 8a3 3 0 100-6 3 3 0 000 6zM8 12l8 2"
+            />
+          </svg>
+        ),
+        roles: ["admin", "hod"],
       },
       {
         name: "Elective Management",
