@@ -202,7 +202,7 @@ function ResultAnalysisPage() {
     ...RANGE_KEYS.map((bucket) => ({ key: `range_${bucket}`, label: `Range ${bucket}` })),
   ]
 
-  const filteredMetricRows = useMemo(() => {
+  const filteredMetricRows = (() => {
     const q = tableSearch.trim().toLowerCase()
     const metricQ = metricFilter.trim().toLowerCase()
     return metricRows.filter((metric) => {
@@ -211,7 +211,7 @@ function ResultAnalysisPage() {
       if (q && !label.includes(q) && !filteredCourseRows.some((row) => (`${row.course_code || ''} ${row.course_name || ''}`.toLowerCase().includes(q)))) return false
       return true
     })
-  }, [metricRows, metricFilter, tableSearch, filteredCourseRows])
+  })()
 
   const examTypeLabel = examType === 'ALL' ? 'All' : examType
 
