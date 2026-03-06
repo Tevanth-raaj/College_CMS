@@ -1052,7 +1052,7 @@ function MarkEntryPage() {
                     </span>
                   ) : (
                     <>
-                      <button
+                      {/* <button
                         onClick={handleFillRandomMarks}
                         disabled={savingMarks}
                         className="px-5 py-2 bg-gray-600 text-white text-sm font-medium rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
@@ -1065,7 +1065,7 @@ function MarkEntryPage() {
                         className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                       >
                         {savingMarks ? 'Saving...' : 'Save'}
-                      </button>
+                      </button> */}
                       {/* Auto-save status indicator */}
                       {autoSaveStatus && (
                         <div className="flex items-center gap-2 text-sm">
