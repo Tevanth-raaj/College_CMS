@@ -124,7 +124,7 @@ func main() {
 	fileServer := http.FileServer(uploadDir)
 	router.PathPrefix("/uploads/").Handler(http.StripPrefix("/uploads/", fileServer))
 
-	// Wrap with CORS middleware
+	// Wrap with CORS middlewarello
 	handler := middleware.CORSMiddleware(router)
 
 	fmt.Println("Server started at http://localhost:5000")
