@@ -22,6 +22,10 @@ function ResultAnalysisPage() {
   const [error, setError] = useState('')
   const [departmentName, setDepartmentName] = useState('')
   const [rows, setRows] = useState([])
+  const [tableSearch, setTableSearch] = useState('')
+  const [courseFilter, setCourseFilter] = useState('')
+  const [metricFilter, setMetricFilter] = useState('')
+  const [showTableFilters, setShowTableFilters] = useState(false)
 
   useEffect(() => {
     if (!canAccess) return
@@ -118,7 +122,18 @@ function ResultAnalysisPage() {
     }
   }
 
-  const columnHeaders = useMemo(() => rows.map((item) => item.course_code), [rows])
+  const filteredCourseRows = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase()
+    const courseQ = courseFilter.trim().toLowerCase()
+    return (Array.isArray(rows) ? rows : []).filter((row) => {
+      const courseText = `${row.course_code || ''} ${row.course_name || ''}`.toLowerCase()
+      if (q && !courseText.includes(q)) return false
+      if (courseQ && !courseText.includes(courseQ)) return false
+      return true
+    })
+  }, [rows, tableSearch, courseFilter])
+
+  const columnHeaders = useMemo(() => filteredCourseRows.map((item) => item.course_code), [filteredCourseRows])
 
   const componentMetrics = useMemo(() => {
     const componentMap = new Map()
@@ -187,6 +202,17 @@ function ResultAnalysisPage() {
     ...RANGE_KEYS.map((bucket) => ({ key: `range_${bucket}`, label: `Range ${bucket}` })),
   ]
 
+  const filteredMetricRows = (() => {
+    const q = tableSearch.trim().toLowerCase()
+    const metricQ = metricFilter.trim().toLowerCase()
+    return metricRows.filter((metric) => {
+      const label = String(metric.label || '').toLowerCase()
+      if (metricQ && !label.includes(metricQ)) return false
+      if (q && !label.includes(q) && !filteredCourseRows.some((row) => (`${row.course_code || ''} ${row.course_name || ''}`.toLowerCase().includes(q)))) return false
+      return true
+    })
+  })()
+
   const examTypeLabel = examType === 'ALL' ? 'All' : examType
 
   return (
@@ -229,6 +255,46 @@ function ResultAnalysisPage() {
       {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm mb-4">{error}</div>}
 
       <div className="bg-white border rounded-lg overflow-hidden">
+        <div className="px-3 py-2 border-b bg-gray-50 flex flex-wrap gap-2 items-center">
+          <button
+            onClick={() => setShowTableFilters((prev) => !prev)}
+            className="px-3 py-1.5 text-sm border rounded-lg"
+          >
+            {showTableFilters ? 'Hide Filters' : 'Show Filters'}
+          </button>
+          {showTableFilters && (
+            <>
+              <input
+                value={tableSearch}
+                onChange={(e) => setTableSearch(e.target.value)}
+                placeholder="Search table..."
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm min-w-[220px]"
+              />
+              <input
+                value={courseFilter}
+                onChange={(e) => setCourseFilter(e.target.value)}
+                placeholder="Filter courses"
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm min-w-[180px]"
+              />
+              <input
+                value={metricFilter}
+                onChange={(e) => setMetricFilter(e.target.value)}
+                placeholder="Filter metrics"
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm min-w-[180px]"
+              />
+            </>
+          )}
+          <button
+            onClick={() => {
+              setTableSearch('')
+              setCourseFilter('')
+              setMetricFilter('')
+            }}
+            className="px-3 py-1.5 text-sm border rounded-lg"
+          >
+            Clear Filters
+          </button>
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50">
@@ -242,12 +308,12 @@ function ResultAnalysisPage() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={Math.max(columnHeaders.length + 1, 2)} className="px-3 py-6 text-center text-gray-500">Loading...</td></tr>
-              ) : rows.length === 0 ? (
+              ) : filteredCourseRows.length === 0 || filteredMetricRows.length === 0 ? (
                 <tr><td colSpan={2} className="px-3 py-6 text-center text-gray-500">No analysis data.</td></tr>
-              ) : metricRows.map((metric) => (
+              ) : filteredMetricRows.map((metric) => (
                 <tr key={metric.key} className="border-t">
                   <td className="px-3 py-2 font-medium text-gray-800">{metric.label}</td>
-                  {rows.map((row) => (
+                  {filteredCourseRows.map((row) => (
                     <td key={`${metric.key}-${row.course_id}`} className="px-3 py-2 text-center text-gray-700">{valueByKey(row, metric.key)}</td>
                   ))}
                 </tr>

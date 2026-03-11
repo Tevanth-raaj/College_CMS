@@ -177,9 +177,11 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/mark-entry/overview", curriculum.GetHODMarkEntryOverview).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/window-monitor", curriculum.GetHODWindowMonitor).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/admin/mark-entry/window-monitor", curriculum.GetAdminWindowMonitor).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/mark-entry/random-fill", curriculum.AdminFillRandomMarksForWindow).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/teacher-students", curriculum.GetTeacherEnteredStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/result-analysis", curriculum.GetResultAnalysis).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/download", curriculum.DownloadMarkEntryReport).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/mark-entry/download", curriculum.DownloadMarkEntryReport).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions/request", curriculum.CreateMarkEntryExtensionRequest).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions", curriculum.GetMarkEntryExtensionRequests).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions/{id}/approve", curriculum.UpdateMarkEntryExtensionRequestStatus).Methods("POST", "OPTIONS")
@@ -187,6 +189,11 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/mark-entry/extensions/analytics", curriculum.GetMarkEntryExtensionAnalytics).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-submissions", curriculum.SubmitMarks).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/mark-submissions/check", curriculum.CheckMarkSubmission).Methods("GET", "OPTIONS")
+
+	// Mark Appeal routes
+	router.HandleFunc("/api/mark-appeals", curriculum.SubmitMarkAppeal).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/mark-appeals", curriculum.GetMarkAppeals).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/mark-appeals/{id}/resolve", curriculum.ResolveMarkAppeal).Methods("POST", "OPTIONS")
 
 	// Exam Absentees routes (COE role)
 	router.HandleFunc("/api/exam-absentees/preview", curriculum.PreviewAbsentees).Methods("POST", "OPTIONS")
@@ -209,6 +216,7 @@ func SetupRoutes() *mux.Router {
 
 	// Authentication routes
 	router.HandleFunc("/api/auth/login", curriculum.Login).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/auth/google", curriculum.GoogleLogin).Methods("POST", "OPTIONS")
 
 	// Elective Management routes
 	router.HandleFunc("/api/hod/profile", curriculum.GetHODProfile).Methods("GET", "OPTIONS")
@@ -228,12 +236,31 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/teacher-limits/export", curriculum.ExportTeacherLimits).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/academic-calendar/current", curriculum.GetCurrentAcademicCalendar).Methods("GET", "OPTIONS")
 
+	// Academic Calendar Admin routes
+	router.HandleFunc("/api/admin/academic-calendars", curriculum.GetAllAcademicCalendars).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars", curriculum.CreateAcademicCalendar).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars/{id}", curriculum.UpdateAcademicCalendar).Methods("PUT", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars/{id}", curriculum.DeleteAcademicCalendar).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/admin/academic-calendars/advance", curriculum.AdvanceAcademicYear).Methods("POST", "OPTIONS")
+
+	// Honour Program Management routes
+	router.HandleFunc("/api/hod/honour-verticals", curriculum.GetHonourVerticals).Methods("GET", "OPTIONS")
+
 	// Minor Program Management routes
 	// TODO: Implement these handlers in curriculum package
 	router.HandleFunc("/api/hod/minor-verticals", curriculum.GetMinorVerticals).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/vertical-courses", curriculum.GetVerticalCourses).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/minor-selections", curriculum.GetHODMinorSelections).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/minor-selections", curriculum.SaveHODMinorSelections).Methods("POST", "OPTIONS")
+
+	// Open Elective Offering routes
+	router.HandleFunc("/api/hod/oe-cards", curriculum.GetOECards).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings", curriculum.GetHODOEOfferings).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings", curriculum.SaveHODOEOfferings).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-offerings/incoming", curriculum.GetOEOfferedToMyDept).Methods("GET", "OPTIONS")
+
+	// Vertical Lock routes (honour/minor vertical tracking across semesters)
+	router.HandleFunc("/api/hod/vertical-locks", curriculum.GetVerticalLocks).Methods("GET", "OPTIONS")
 
 	// User Management routes
 	router.HandleFunc("/api/users", curriculum.GetUsers).Methods("GET", "OPTIONS")
@@ -244,6 +271,8 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/users/{id}/password", curriculum.ChangePassword).Methods("PUT", "OPTIONS")
 
 	// Student-Teacher Entry routes
+	router.HandleFunc("/api/students/import/template", studentteacher.DownloadStudentImportTemplate).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/students/import", studentteacher.ImportStudents).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/students", studentteacher.GetStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students/{id}", studentteacher.GetStudent).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students", studentteacher.CreateStudent).Methods("POST", "OPTIONS")

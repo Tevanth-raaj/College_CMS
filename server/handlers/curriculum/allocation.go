@@ -3,6 +3,7 @@ package curriculum
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"server/db"
@@ -12,6 +13,17 @@ import (
 
 	"github.com/gorilla/mux"
 )
+
+// MarkEntryWindow holds display info for an active or expired mark entry window.
+type MarkEntryWindow struct {
+	ID             int       `json:"id"`
+	DepartmentName string    `json:"department_name"`
+	Semester       *int      `json:"semester"`
+	StartAt        time.Time `json:"start_at"`
+	EndAt          time.Time `json:"end_at"`
+	ComponentNames []string  `json:"component_names"`
+	SubmittedAt    string    `json:"submitted_at,omitempty"`
+}
 
 // GetCourseAllocations retrieves courses for a specific semester and academic year with their faculty assignments
 func GetCourseAllocations(w http.ResponseWriter, r *http.Request) {
@@ -190,17 +202,10 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT 
 			ca.id, ca.course_id, c.course_code, c.course_name, ct.course_type, 
-			c.credit, COALESCE(c.category, 'General'),
-			cc.curriculum_id, nc.semester_number,
-			cur.name as curriculum_name,
-			dc.department_id
+			c.credit, COALESCE(c.category, 'General')
 		FROM teacher_course_allocation ca
 		JOIN courses c ON ca.course_id = c.id
 		LEFT JOIN course_type ct ON c.course_type = ct.id
-		LEFT JOIN curriculum_courses cc ON c.id = cc.course_id
-		LEFT JOIN normal_cards nc ON cc.semester_id = nc.id
-		LEFT JOIN curriculum cur ON cc.curriculum_id = cur.id
-		LEFT JOIN department_curriculum dc ON cur.id = dc.curriculum_id
 		WHERE ca.teacher_id = ?
 		ORDER BY c.course_code
 	`
@@ -218,32 +223,39 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		StudentID      int    `json:"student_id"`
 		StudentName    string `json:"student_name"`
 		LearningModeID *int   `json:"learning_mode_id"`
+		DepartmentID   *int   `json:"department_id"`
+		DepartmentName string `json:"department_name"`
 	}
 
-	type MarkEntryWindow struct {
-		ID             int       `json:"id"`
-		DepartmentName string    `json:"department_name"`
-		Semester       *int      `json:"semester"`
-		StartAt        time.Time `json:"start_at"`
-		EndAt          time.Time `json:"end_at"`
-		ComponentNames []string  `json:"component_names"`
+	type DepartmentInfo struct {
+		DepartmentID   *int   `json:"department_id"`
+		DepartmentName string `json:"department_name"`
+		Semester       *int   `json:"semester"`
+		CurriculumName string `json:"curriculum_name"`
 	}
 
 	type TeacherCourse struct {
-		ID             int                 `json:"id"`
-		CourseID       int                 `json:"course_id"`
-		CourseCode     string              `json:"course_code"`
-		CourseName     string              `json:"course_name"`
-		CourseType     string              `json:"course_type"`
-		Credit         int                 `json:"credit"`
-		Category       string              `json:"category"`
-		CurriculumID   *int                `json:"curriculum_id"`
-		Semester       *int                `json:"semester"`
-		CurriculumName string              `json:"curriculum_name"`
-		DepartmentID   *int                `json:"department_id"`
-		Enrollments    []StudentEnrollment `json:"enrollments"`
-		HasWindow      bool                `json:"has_window"`
-		Window         *MarkEntryWindow    `json:"window"`
+		ID                        int                 `json:"id"`
+		CourseID                  int                 `json:"course_id"`
+		CourseCode                string              `json:"course_code"`
+		CourseName                string              `json:"course_name"`
+		CourseType                string              `json:"course_type"`
+		Credit                    int                 `json:"credit"`
+		Category                  string              `json:"category"`
+		CurriculumID              *int                `json:"curriculum_id"`
+		Semester                  *int                `json:"semester"`
+		CurriculumName            string              `json:"curriculum_name"`
+		DepartmentID              *int                `json:"department_id"`
+		Departments               []DepartmentInfo    `json:"departments"`
+		Enrollments               []StudentEnrollment `json:"enrollments"`
+		HasWindow                 bool                `json:"has_window"`
+		Window                    *MarkEntryWindow    `json:"window"`
+		IsSubmitted               bool                `json:"is_submitted"`
+		SubmittedAt               string              `json:"submitted_at,omitempty"`
+		HasMissedSubmission       bool                `json:"has_missed_submission"`
+		MissedWindow              *MarkEntryWindow    `json:"missed_window"`
+		HasSubmittedExpiredWindow bool                `json:"has_submitted_expired_window"`
+		SubmittedExpiredWindow    *MarkEntryWindow    `json:"submitted_expired_window"`
 	}
 
 	var courses []TeacherCourse
@@ -251,32 +263,58 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	courseCount := 0
 	for rows.Next() {
 		var course TeacherCourse
-		var curriculumID, semester, departmentID sql.NullInt64
-		var curriculumName sql.NullString
 		err := rows.Scan(&course.ID, &course.CourseID, &course.CourseCode, &course.CourseName,
-			&course.CourseType, &course.Credit, &course.Category,
-			&curriculumID, &semester, &curriculumName, &departmentID)
+			&course.CourseType, &course.Credit, &course.Category)
 		if err != nil {
 			log.Printf("Error scanning course row: %v", err)
 			continue
 		}
-		if curriculumID.Valid {
-			id := int(curriculumID.Int64)
-			course.CurriculumID = &id
-		}
-		if semester.Valid {
-			sem := int(semester.Int64)
-			course.Semester = &sem
-		}
-		if curriculumName.Valid {
-			course.CurriculumName = curriculumName.String
-		}
-		if departmentID.Valid {
-			deptId := int(departmentID.Int64)
-			course.DepartmentID = &deptId
-		}
 		courseCount++
-		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s, Dept=%v, Sem=%v", courseCount, course.CourseID, course.CourseCode, course.CourseName, course.DepartmentID, course.Semester)
+		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s", courseCount, course.CourseID, course.CourseCode, course.CourseName)
+
+		deptQuery := `
+			SELECT DISTINCT d.id, d.department_name, nc.semester_number, cur.name
+			FROM curriculum_courses cc
+			JOIN normal_cards nc ON cc.semester_id = nc.id
+			JOIN curriculum cur ON cc.curriculum_id = cur.id
+			JOIN departments d ON d.current_curriculum_id = cur.id
+			WHERE cc.course_id = ?
+		`
+		deptRows, deptErr := db.DB.Query(deptQuery, course.CourseID)
+		if deptErr != nil {
+			log.Printf("Error fetching departments for course %d: %v", course.CourseID, deptErr)
+		} else {
+			course.Departments = []DepartmentInfo{}
+			for deptRows.Next() {
+				var info DepartmentInfo
+				var depID sql.NullInt64
+				var depName sql.NullString
+				var depSem sql.NullInt64
+				var curName sql.NullString
+				if err := deptRows.Scan(&depID, &depName, &depSem, &curName); err != nil {
+					continue
+				}
+				if depID.Valid {
+					v := int(depID.Int64)
+					info.DepartmentID = &v
+				}
+				if depName.Valid {
+					info.DepartmentName = depName.String
+				}
+				if depSem.Valid {
+					v := int(depSem.Int64)
+					info.Semester = &v
+				}
+				if curName.Valid {
+					info.CurriculumName = curName.String
+				}
+				course.Departments = append(course.Departments, info)
+			}
+			deptRows.Close()
+		}
+		if course.Departments == nil {
+			course.Departments = []DepartmentInfo{}
+		}
 
 		// Check if there's an active mark entry window for this course
 		windowOpen, windowIDs, windowComponents, err := resolveMarkEntryWindow(course.CourseID, facultyID)
@@ -410,16 +448,49 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 				course.Window = windowDetails
 				log.Printf("Window details for course %s: ID=%d, Start=%s, End=%s, Components=%v",
 					course.CourseCode, windowID, startAt, endAt, windowDetails.ComponentNames)
+
+				// Check if teacher has already submitted for this active window
+				var subAt time.Time
+				subErr := db.DB.QueryRow(`
+					SELECT submitted_at FROM mark_submissions
+					WHERE teacher_id = ? AND course_id = ? AND window_id = ?
+					LIMIT 1
+				`, facultyID, course.CourseID, windowID).Scan(&subAt)
+				if subErr == nil {
+					course.IsSubmitted = true
+					course.SubmittedAt = subAt.Format(time.RFC3339)
+				}
 			}
 		} else {
 			course.HasWindow = false
+
+			// Use the same dept+semester resolution logic as resolveMarkEntryWindow
+			// to find expired windows (missed or submitted-then-expired).
+			missedWin, submittedWin, resolveErr := resolveExpiredMarkEntryWindows(course.CourseID, facultyID)
+			if resolveErr != nil {
+				log.Printf("Error resolving expired windows for teacher=%s course=%d: %v", facultyID, course.CourseID, resolveErr)
+			}
+			if missedWin != nil {
+				log.Printf("Missed window %d found for teacher=%s course=%d", missedWin.ID, facultyID, course.CourseID)
+				course.HasMissedSubmission = true
+				course.MissedWindow = missedWin
+			}
+			if submittedWin != nil {
+				log.Printf("Submitted expired window %d found for teacher=%s course=%d", submittedWin.ID, facultyID, course.CourseID)
+				course.HasSubmittedExpiredWindow = true
+				course.SubmittedExpiredWindow = submittedWin
+			}
+			if missedWin == nil && submittedWin == nil {
+				log.Printf("No expired windows found for teacher=%s course=%d", facultyID, course.CourseID)
+			}
 		}
 
 		// Fetch allocated students for this course and teacher
 		studentQuery := `
-			SELECT DISTINCT s.id, s.student_name, s.learning_mode_id
+			SELECT DISTINCT s.id, s.student_name, s.learning_mode_id, s.department_id, COALESCE(d.department_name, '')
 			FROM course_student_teacher_allocation csta
 			JOIN students s ON csta.student_id = s.id
+			LEFT JOIN departments d ON s.department_id = d.id
 			WHERE csta.course_id = ? AND csta.teacher_id = ?
 			ORDER BY s.student_name
 		`
@@ -434,7 +505,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			for sRows.Next() {
 				studentCount++
 				var enrollment StudentEnrollment
-				if err := sRows.Scan(&enrollment.StudentID, &enrollment.StudentName, &enrollment.LearningModeID); err != nil {
+				if err := sRows.Scan(&enrollment.StudentID, &enrollment.StudentName, &enrollment.LearningModeID, &enrollment.DepartmentID, &enrollment.DepartmentName); err != nil {
 					log.Printf("Error scanning student row: %v", err)
 					continue
 				}
@@ -459,6 +530,180 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Returning %d courses to client", len(courses))
 	json.NewEncoder(w).Encode(courses)
+}
+
+// resolveExpiredMarkEntryWindows finds expired mark entry windows for a teacher+course using
+// the same department/semester matching logic as resolveMarkEntryWindow.
+// Returns (missedWindow, submittedWindow, error).
+// missedWindow: expired window with no submission by this teacher for this course.
+// submittedWindow: expired window where the teacher submitted before expiry.
+func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryWindow, *MarkEntryWindow, error) {
+	// 1. Teacher's departments from department_teachers
+	var teacherDeptIDs []int64
+	tRows, err := db.DB.Query(`SELECT department_id FROM department_teachers WHERE teacher_id = ? AND status = 1`, facultyID)
+	if err == nil {
+		for tRows.Next() {
+			var did int64
+			if tRows.Scan(&did) == nil {
+				teacherDeptIDs = append(teacherDeptIDs, did)
+			}
+		}
+		tRows.Close()
+	}
+
+	// 2. Course's departments via curriculum chain (same as resolveMarkEntryWindow)
+	var courseDeptIDs []int64
+	cRows, err := db.DB.Query(`
+		SELECT DISTINCT d.id
+		FROM curriculum_courses cc
+		JOIN normal_cards nc ON cc.semester_id = nc.id
+		JOIN departments d ON d.current_curriculum_id = nc.curriculum_id
+		WHERE cc.course_id = ?
+	`, courseID)
+	if err == nil {
+		for cRows.Next() {
+			var did int64
+			if cRows.Scan(&did) == nil {
+				courseDeptIDs = append(courseDeptIDs, did)
+			}
+		}
+		cRows.Close()
+	}
+
+	// Merge + deduplicate department IDs
+	deptSeen := make(map[int64]bool)
+	var allDeptIDs []int64
+	for _, did := range append(courseDeptIDs, teacherDeptIDs...) {
+		if !deptSeen[did] {
+			allDeptIDs = append(allDeptIDs, did)
+			deptSeen[did] = true
+		}
+	}
+
+	// 3. Course semesters via curriculum chain
+	var courseSemesters []int64
+	semRows, err := db.DB.Query(`
+		SELECT DISTINCT nc.semester_number
+		FROM curriculum_courses cc
+		JOIN normal_cards nc ON cc.semester_id = nc.id
+		WHERE cc.course_id = ? AND COALESCE(nc.card_type, 'semester') = 'semester' AND nc.semester_number IS NOT NULL
+	`, courseID)
+	if err == nil {
+		for semRows.Next() {
+			var sem int64
+			if semRows.Scan(&sem) == nil {
+				courseSemesters = append(courseSemesters, sem)
+			}
+		}
+		semRows.Close()
+	}
+
+	log.Printf("[resolveExpired] courseID=%d facultyID=%s teacherDepts=%v courseDepts=%v allDepts=%v sems=%v",
+		courseID, facultyID, teacherDeptIDs, courseDeptIDs, allDeptIDs, courseSemesters)
+
+	// 4. Build dynamic WHERE clauses (same pattern as resolveMarkEntryWindow)
+	var queryArgs []interface{}
+	queryArgs = append(queryArgs, facultyID, courseID)
+
+	var deptClause string
+	if len(allDeptIDs) == 0 {
+		deptClause = "1=1"
+	} else {
+		ph := make([]string, len(allDeptIDs))
+		for i, did := range allDeptIDs {
+			ph[i] = "?"
+			queryArgs = append(queryArgs, did)
+		}
+		deptClause = fmt.Sprintf("(w.department_id IS NULL OR w.department_id = 0 OR w.department_id IN (%s))", strings.Join(ph, ","))
+	}
+
+	var semClause string
+	if len(courseSemesters) == 0 {
+		semClause = "1=1"
+	} else {
+		ph := make([]string, len(courseSemesters))
+		for i, s := range courseSemesters {
+			ph[i] = "?"
+			queryArgs = append(queryArgs, s)
+		}
+		semClause = fmt.Sprintf("(w.semester IS NULL OR w.semester = 0 OR w.semester IN (%s))", strings.Join(ph, ","))
+	}
+
+	// Base: expired windows matching this course+teacher (ownership check via teacher_id/dept/semester)
+	baseSQL := fmt.Sprintf(`
+		SELECT w.id, w.start_at, w.end_at
+		FROM mark_entry_windows w
+		WHERE (w.teacher_id IS NULL OR w.teacher_id = ?)
+		  AND (w.course_id IS NULL OR w.course_id = ?)
+		  AND %s
+		  AND %s
+		  AND w.enabled = 1
+		  AND w.end_at < NOW()
+	`, deptClause, semClause)
+
+	// 5. Check for a submission for any matching expired window
+	submittedArgs := make([]interface{}, len(queryArgs))
+	copy(submittedArgs, queryArgs)
+	submittedArgs = append(submittedArgs, facultyID, courseID)
+	submittedSQL := fmt.Sprintf(`
+		SELECT w.id, w.start_at, w.end_at, ms.submitted_at
+		FROM mark_submissions ms
+		JOIN mark_entry_windows w ON w.id = ms.window_id
+		WHERE (w.teacher_id IS NULL OR w.teacher_id = ?)
+		  AND (w.course_id IS NULL OR w.course_id = ?)
+		  AND %s
+		  AND %s
+		  AND w.enabled = 1
+		  AND w.end_at < NOW()
+		  AND ms.teacher_id = ?
+		  AND ms.course_id = ?
+		ORDER BY w.end_at DESC
+		LIMIT 1
+	`, deptClause, semClause)
+
+	var submittedWin *MarkEntryWindow
+	var swID int
+	var swStart, swEnd, swSubAt time.Time
+	if err := db.DB.QueryRow(submittedSQL, submittedArgs...).Scan(&swID, &swStart, &swEnd, &swSubAt); err == nil {
+		submittedWin = &MarkEntryWindow{
+			ID:          swID,
+			StartAt:     swStart,
+			EndAt:       swEnd,
+			SubmittedAt: swSubAt.Format(time.RFC3339),
+		}
+		log.Printf("[resolveExpired] submitted window %d found for teacher=%s course=%d", swID, facultyID, courseID)
+	} else if err != sql.ErrNoRows {
+		log.Printf("[resolveExpired] submitted query error for teacher=%s course=%d: %v", facultyID, courseID, err)
+	}
+
+	// 6. Check for missed window (expired with no submission)
+	// Exclude windows that have a submission (handled above).
+	missedArgs := make([]interface{}, len(queryArgs))
+	copy(missedArgs, queryArgs)
+	missedArgs = append(missedArgs, facultyID, courseID)
+	missedSQL := baseSQL + `
+		  AND NOT EXISTS (
+			SELECT 1 FROM mark_submissions ms2
+			WHERE ms2.teacher_id = ? AND ms2.course_id = ? AND ms2.window_id = w.id
+		  )
+		ORDER BY w.end_at DESC
+		LIMIT 1
+	`
+	var missedWin *MarkEntryWindow
+	var mwID int
+	var mwStart, mwEnd time.Time
+	if err := db.DB.QueryRow(missedSQL, missedArgs...).Scan(&mwID, &mwStart, &mwEnd); err == nil {
+		missedWin = &MarkEntryWindow{
+			ID:      mwID,
+			StartAt: mwStart,
+			EndAt:   mwEnd,
+		}
+		log.Printf("[resolveExpired] missed window %d found for teacher=%s course=%d", mwID, facultyID, courseID)
+	} else if err != sql.ErrNoRows {
+		log.Printf("[resolveExpired] missed query error for teacher=%s course=%d: %v", facultyID, courseID, err)
+	}
+
+	return missedWin, submittedWin, nil
 }
 
 // GetCourseTeachers retrieves all teachers assigned to a specific course

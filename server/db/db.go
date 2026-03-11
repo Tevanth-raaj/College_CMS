@@ -334,6 +334,33 @@ func runMigrations() error {
 			  AND ea.id               != dupes.keep_id
 	`)
 
+	// Create mark_appeal_requests table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS mark_appeal_requests (
+			id          INT NOT NULL AUTO_INCREMENT,
+			teacher_id  VARCHAR(45) NOT NULL,
+			course_id   INT NOT NULL,
+			window_id   INT NOT NULL,
+			reason      TEXT NOT NULL,
+			status      ENUM('pending','resolved','rejected') NOT NULL DEFAULT 'pending',
+			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			resolved_at TIMESTAMP NULL,
+			resolved_by VARCHAR(100) NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_appeal (teacher_id, course_id, window_id),
+			KEY idx_appeal_window (window_id),
+			KEY idx_appeal_teacher (teacher_id),
+			KEY idx_appeal_status (status)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to create mark_appeal_requests table: %v", err)
+	} else {
+		log.Println("mark_appeal_requests table created/verified successfully")
+	}
+	// Fix collation on existing table (if it was created with utf8mb4_unicode_ci)
+	DB.Exec(`ALTER TABLE mark_appeal_requests CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`)
+
 	// Add is_active column to teacher_course_tracking if it doesn't exist
 	var isActiveExists int
 	err = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='teacher_course_tracking' AND COLUMN_NAME='is_active'").Scan(&isActiveExists)
@@ -1254,7 +1281,6 @@ func RemoveNameColumnFromNormalCards() error {
 	}
 
 	if !columnExists {
-		fmt.Println("Name column doesn't exist in normal_cards, skipping removal")
 		return nil
 	}
 
@@ -1268,7 +1294,6 @@ func RemoveNameColumnFromNormalCards() error {
 		return fmt.Errorf("failed to drop name column from normal_cards: %w", err)
 	}
 
-	fmt.Println("Successfully removed name column from normal_cards!")
 	return nil
 }
 
@@ -1298,7 +1323,6 @@ func CreateMarkEntryStudentPermissionsTables() error {
 		return fmt.Errorf("failed to create mark_entry_student_permissions table: %w", err)
 	}
 
-	fmt.Println("Successfully created mark_entry_student_permissions table!")
 	return nil
 }
 
@@ -1316,16 +1340,12 @@ func MigrateTeacherCourseLimitsTeacherID() error {
 	`).Scan(&dataType)
 	if err != nil {
 		// Table may not exist yet – skip
-		fmt.Println("MigrateTeacherCourseLimitsTeacherID: table not found, skipping")
 		return nil
 	}
 
 	if dataType == "varchar" {
-		fmt.Println("teacher_course_limits.teacher_id is already VARCHAR – no migration needed")
 		return nil
 	}
-
-	fmt.Printf("Migrating teacher_course_limits.teacher_id from %s to VARCHAR(50)...\n", dataType)
 
 	// Drop unique constraint – MySQL may name it 'uq_teacher_type' or 'teacher_id'.
 	DB.Exec(`ALTER TABLE teacher_course_limits DROP KEY uq_teacher_type`)
@@ -1349,7 +1369,6 @@ func MigrateTeacherCourseLimitsTeacherID() error {
 		return fmt.Errorf("MigrateTeacherCourseLimitsTeacherID: re-add unique key failed: %w", err)
 	}
 
-	fmt.Println("teacher_course_limits.teacher_id migrated to VARCHAR(50) successfully")
 	return nil
 }
 
@@ -1370,7 +1389,6 @@ func AddUserIdToMarkEntryWindows() error {
 	}
 
 	if columnExists {
-		fmt.Println("user_id column already exists in mark_entry_windows")
 		return nil
 	}
 
@@ -1384,7 +1402,6 @@ func AddUserIdToMarkEntryWindows() error {
 		return fmt.Errorf("failed to add user_id column to mark_entry_windows: %w", err)
 	}
 
-	fmt.Println("Successfully added user_id column to mark_entry_windows!")
 	return nil
 }
 
@@ -1404,7 +1421,6 @@ func AddWindowNameToMarkEntryWindows() error {
 	}
 
 	if columnExists {
-		fmt.Println("window_name column already exists in mark_entry_windows")
 		return nil
 	}
 
@@ -1416,6 +1432,5 @@ func AddWindowNameToMarkEntryWindows() error {
 		return fmt.Errorf("failed to add window_name column to mark_entry_windows: %w", err)
 	}
 
-	fmt.Println("Successfully added window_name column to mark_entry_windows!")
 	return nil
 }

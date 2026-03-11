@@ -14,6 +14,7 @@ function TeacherDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+
   useEffect(() => {
     // If we have teacherID, fetch courses directly
     if (teacherID) {
@@ -161,6 +162,7 @@ function TeacherDashboardPage() {
     })
     return total
   }
+
 
 
 
@@ -333,6 +335,13 @@ function TeacherDashboardPage() {
                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                                   Active
                                 </span>
+                              ) : course.has_missed_submission ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  Incomplete
+                                </span>
                               ) : (
                                 <span className="text-xs text-gray-400">No Window</span>
                               )}
@@ -366,6 +375,7 @@ function TeacherDashboardPage() {
           </div>
         )}
       </div>
+
     </MainLayout>
   )
 }

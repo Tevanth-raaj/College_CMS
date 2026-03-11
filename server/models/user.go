@@ -19,6 +19,10 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+type GoogleLoginRequest struct {
+	IDToken string `json:"id_token"`
+}
+
 type LoginResponse struct {
 	Success     bool    `json:"success"`
 	Message     string  `json:"message"`

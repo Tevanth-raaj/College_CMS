@@ -84,6 +84,11 @@ function MarkEntryPermissionsPage() {
   const [extensionEndDate, setExtensionEndDate] = useState('')
   const [extensionLoading, setExtensionLoading] = useState(false)
 
+  // Appeal states
+  const [closedWindowAppeals, setClosedWindowAppeals] = useState({}) // { "windowId|teacherId|courseId" → appeal }
+  const [activeWindowAppeals, setActiveWindowAppeals] = useState({}) // { "windowId|teacherId|courseId" → appeal } for active windows
+  const [appealDetailModal, setAppealDetailModal] = useState(null) // appeal object
+
   // Check if user has COE or admin role
   useEffect(() => {
     if (userRole !== 'coe' && userRole !== 'admin') {
@@ -394,8 +399,6 @@ function MarkEntryPermissionsPage() {
   const loadWindowRule = async () => {
     const query = buildWindowQuery()
     if (!query) {
-      // setWindowStartAt('')
-      // setWindowEndAt('')
       setWindowEnabled(true)
       return
     }
@@ -407,11 +410,7 @@ function MarkEntryPermissionsPage() {
       const data = await res.json()
 
       if (!data) {
-        setWindowStartAt('')
-        setWindowEndAt('')
         setWindowEnabled(true)
-        setSelectedPBLComponents([])
-        setSelectedUALComponents([])
         return
       }
 
@@ -477,6 +476,7 @@ function MarkEntryPermissionsPage() {
       start_at: startDate.toISOString(),
       end_at: endDate.toISOString(),
       enabled: windowEnabled,
+      window_name: windowName.trim(),
       component_ids: [...selectedPBLComponents, ...selectedUALComponents].length > 0
         ? [...selectedPBLComponents, ...selectedUALComponents]
         : null,
@@ -564,10 +564,23 @@ function MarkEntryPermissionsPage() {
   const fetchPendingWindows = async () => {
     setLoadingPendingWindows(true)
     try {
-      const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?status=active`)
-      if (!res.ok) throw new Error('Failed to fetch pending submissions')
-      const data = await res.json()
+      const [windowsRes, appealsRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?status=active`),
+        fetch(`${API_BASE_URL}/mark-appeals?status=pending`),
+      ])
+      if (!windowsRes.ok) throw new Error('Failed to fetch pending submissions')
+      const data = await windowsRes.json()
       setPendingWindows(data || [])
+      // Build appeal lookup for active windows
+      if (appealsRes.ok) {
+        const appealsData = await appealsRes.json()
+        const lookup = {}
+        ;(appealsData || []).forEach(a => {
+          const key = `${a.window_id}|${a.teacher_id}|${a.course_id}`
+          lookup[key] = a
+        })
+        setActiveWindowAppeals(lookup)
+      }
     } catch (error) {
       console.error('Error fetching pending submissions:', error)
       setPendingWindows([])
@@ -579,10 +592,23 @@ function MarkEntryPermissionsPage() {
   const fetchClosedPendingWindows = async () => {
     setLoadingClosedWindows(true)
     try {
-      const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?status=closed`)
-      if (!res.ok) throw new Error('Failed to fetch closed window submissions')
-      const data = await res.json()
+      const [windowsRes, appealsRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?status=closed`),
+        fetch(`${API_BASE_URL}/mark-appeals?status=pending`),
+      ])
+      if (!windowsRes.ok) throw new Error('Failed to fetch closed window submissions')
+      const data = await windowsRes.json()
       setClosedPendingWindows(data || [])
+      // Build appeal lookup
+      if (appealsRes.ok) {
+        const appealsData = await appealsRes.json()
+        const lookup = {}
+        ;(appealsData || []).forEach(a => {
+          const key = `${a.window_id}|${a.teacher_id}|${a.course_id}`
+          lookup[key] = a
+        })
+        setClosedWindowAppeals(lookup)
+      }
     } catch (error) {
       console.error('Error fetching closed window submissions:', error)
       setClosedPendingWindows([])
@@ -657,6 +683,7 @@ function MarkEntryPermissionsPage() {
       setExtensionModal(null)
       setSelectedTeachers(prev => ({ ...prev, [extensionModal.windowId]: new Set() }))
       fetchClosedPendingWindows()
+      fetchPendingWindows()
       fetchExistingWindows()
     } catch (error) {
       console.error('Error extending window:', error)
@@ -706,7 +733,7 @@ function MarkEntryPermissionsPage() {
     }
 
     // Set scope fields
-    setWindowDepartmentId(win.department_id || '')
+    setWindowDepartmentId(win.department_id ? String(win.department_id) : '')
     setWindowSemester(win.semester || '')
     setWindowCourseId(win.course_id || '')
 
@@ -842,6 +869,65 @@ function MarkEntryPermissionsPage() {
       component_ids: [...selectedPBLComponents, ...selectedUALComponents].length > 0
         ? [...selectedPBLComponents, ...selectedUALComponents]
         : null,
+      teacher_id: null,
+      user_id: null,
+      department_id: null,
+      semester: null,
+      course_id: null,
+    }
+
+    const originalTeacherID = editingWindow.teacher_id || null
+    const originalUserID = editingWindow.user_username || null
+    const originalDepartmentID = editingWindow.department_id ?? null
+    const originalSemester = editingWindow.semester ?? null
+    const originalCourseID = editingWindow.course_id ?? null
+    const isLikelyDepartmentScope =
+      windowScope === 'department_semester' ||
+      windowScope === 'department_semester_course' ||
+      (!originalTeacherID && !originalUserID && originalSemester !== null)
+
+    if (windowScope === 'teacher_course') {
+      payload.teacher_id = selectedTeacherId || originalTeacherID
+      payload.course_id = selectedCourseId ? parseInt(selectedCourseId, 10) : originalCourseID
+    }
+
+    if (windowScope === 'department_semester') {
+      if (windowDepartmentId === '0') payload.department_id = null
+      else if (windowDepartmentId) payload.department_id = parseInt(windowDepartmentId, 10)
+      else payload.department_id = originalDepartmentID
+
+      payload.semester = windowSemester ? parseInt(windowSemester, 10) : originalSemester
+    }
+
+    if (windowScope === 'department_semester_course') {
+      if (windowDepartmentId === '0') payload.department_id = null
+      else if (windowDepartmentId) payload.department_id = parseInt(windowDepartmentId, 10)
+      else payload.department_id = originalDepartmentID
+
+      payload.semester = windowSemester ? parseInt(windowSemester, 10) : originalSemester
+      payload.course_id = windowCourseId && windowCourseId !== 'all' ? parseInt(windowCourseId, 10) : originalCourseID
+    }
+
+    // Safety override for stale UI scope state during edit mode:
+    // if the original window is dept-scoped, always carry dept/semester/course explicitly.
+    if (isLikelyDepartmentScope) {
+      if (windowDepartmentId === '0') payload.department_id = null
+      else if (windowDepartmentId) payload.department_id = parseInt(windowDepartmentId, 10)
+      else payload.department_id = originalDepartmentID
+
+      payload.semester = windowSemester ? parseInt(windowSemester, 10) : originalSemester
+
+      if (windowCourseId === 'all') payload.course_id = null
+      else if (windowCourseId) payload.course_id = parseInt(windowCourseId, 10)
+      else payload.course_id = originalCourseID
+    }
+
+    if (!payload.teacher_id && !payload.user_id && !payload.semester && !payload.course_id) {
+      payload.teacher_id = originalTeacherID
+      payload.user_id = originalUserID
+      payload.department_id = payload.department_id ?? originalDepartmentID
+      payload.semester = payload.semester ?? originalSemester
+      payload.course_id = payload.course_id ?? originalCourseID
     }
 
     setWindowLoading(true)
@@ -851,10 +937,23 @@ function MarkEntryPermissionsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      if (!res.ok) throw new Error('Failed to update window')
+
+      let responseBody = null
+      try {
+        responseBody = await res.json()
+      } catch {
+        responseBody = null
+      }
+
+      if (!res.ok) {
+        throw new Error('Failed to update window')
+      }
+
+      const refreshed = await fetchExistingWindows()
+      const updatedWindow = (refreshed || []).find((windowItem) => String(windowItem.id) === String(editingWindow.id))
+
       setMessage({ type: 'success', text: 'Window updated successfully.' })
       setEditingWindow(null)
-      await fetchExistingWindows()
     } catch (error) {
       console.error('Error updating window:', error)
       setMessage({ type: 'error', text: 'Failed to update window.' })
@@ -876,6 +975,8 @@ function MarkEntryPermissionsPage() {
   const getScopeDescription = (window) => {
     if (window.teacher_id && window.course_id) {
       return `${window.teacher_name} - ${window.course_code} (Most Specific)`
+    } else if (window.user_id && window.course_id) {
+      return `${window.user_username || 'User'} - ${window.course_code}`
     } else if (window.department_id && window.semester && window.course_id) {
       return `${window.department_name} - Sem ${window.semester} - ${window.course_code}`
     } else if (window.department_id && window.semester) {
@@ -885,7 +986,14 @@ function MarkEntryPermissionsPage() {
     } else if (!window.department_id && window.semester) {
       return `All Departments - Semester ${window.semester}`
     }
-    return 'Unknown scope'
+
+    const parts = []
+    if (window.teacher_name) parts.push(window.teacher_name)
+    if (window.user_username) parts.push(window.user_username)
+    if (window.department_name) parts.push(window.department_name)
+    if (window.semester) parts.push(`Sem ${window.semester}`)
+    if (window.course_code) parts.push(window.course_code)
+    return parts.length > 0 ? parts.join(' - ') : 'General Window'
   }
 
   const getWindowStatus = (win) => {
@@ -967,6 +1075,11 @@ function MarkEntryPermissionsPage() {
             enabled: windowEnabled,
             window_name: windowName.trim(),
             component_ids: allComponents.length > 0 ? allComponents : null,
+            teacher_id: null,
+            user_id: selectedUserId || null,
+            department_id: windowDepartmentId && windowDepartmentId !== '0' ? parseInt(windowDepartmentId, 10) : null,
+            semester: windowSemester ? parseInt(windowSemester, 10) : null,
+            course_id: windowCourseId && windowCourseId !== 'all' ? parseInt(windowCourseId, 10) : null,
           })
         })
 
@@ -1303,7 +1416,7 @@ function MarkEntryPermissionsPage() {
                           <option value="0">All Departments</option>
                           {departments.map((department) => (
                             <option key={department.id} value={department.id}>
-                              {department.name}
+                              {department.department_name || department.name || `Department ${department.id}`}
                             </option>
                           ))}
                         </select>
@@ -1592,7 +1705,7 @@ function MarkEntryPermissionsPage() {
                       >
                         <option value="">All Departments</option>
                         {departments.map((dept) => (
-                          <option key={dept.id} value={dept.id}>{dept.name}</option>
+                          <option key={dept.id} value={dept.id}>{dept.department_name || dept.name || `Department ${dept.id}`}</option>
                         ))}
                       </select>
                     </div>
@@ -1696,7 +1809,11 @@ function MarkEntryPermissionsPage() {
                       onChange={(e) => setStudentFilters({ ...studentFilters, department: e.target.value })}
                       className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 bg-white">
                       <option value="">All Departments</option>
-                      {departments.map(dept => (<option key={dept.id} value={dept.name}>{dept.name}</option>))}
+                      {departments.map(dept => (
+                        <option key={dept.id} value={dept.department_name || dept.name || ''}>
+                          {dept.department_name || dept.name || `Department ${dept.id}`}
+                        </option>
+                      ))}
                     </select>
                     <input type="number" placeholder="Year (optional)" value={studentFilters.year}
                       onChange={(e) => setStudentFilters({ ...studentFilters, year: e.target.value })}
@@ -2163,7 +2280,7 @@ function MarkEntryPermissionsPage() {
                                 <table className="w-full text-sm">
                                   <thead className={currentView === 'completed' ? 'bg-green-50' : 'bg-red-50'}>
                                     <tr>
-                                      {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name', ...(currentView === 'completed' ? ['Submitted At'] : [])].map(h => (
+                                      {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name', ...(currentView === 'completed' ? ['Submitted At', 'Appeal'] : [])].map(h => (
                                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                                           {h}
                                         </th>
@@ -2187,6 +2304,27 @@ function MarkEntryPermissionsPage() {
                                             {teacher.submitted_at ? new Date(teacher.submitted_at).toLocaleString() : '—'}
                                           </td>
                                         )}
+                                        {currentView === 'completed' && (() => {
+                                          const appealKey = `${window.window_id}|${teacher.teacher_id}|${teacher.course_id}`
+                                          const appeal = activeWindowAppeals[appealKey]
+                                          return (
+                                            <td className="px-4 py-3">
+                                              {appeal ? (
+                                                <button
+                                                  onClick={() => setAppealDetailModal(appeal)}
+                                                  className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 border border-amber-300 text-amber-700 text-xs font-medium rounded-full hover:bg-amber-200 transition-colors"
+                                                >
+                                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                                                  </svg>
+                                                  Appeal
+                                                </button>
+                                              ) : (
+                                                <span className="text-gray-300 text-xs">—</span>
+                                              )}
+                                            </td>
+                                          )
+                                        })()}
                                       </tr>
                                     ))}
                                   </tbody>
@@ -2407,7 +2545,7 @@ function MarkEntryPermissionsPage() {
                                           />
                                         </th>
                                       )}
-                                      {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name', ...(currentView === 'completed' ? ['Submitted At'] : [])].map(h => (
+                                      {['#', 'Teacher ID', 'Teacher Name', 'Course Code', 'Course Name', ...(currentView === 'completed' ? ['Submitted At', 'Appeal'] : ['Appeal'])].map(h => (
                                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                                           {h}
                                         </th>
@@ -2448,6 +2586,28 @@ function MarkEntryPermissionsPage() {
                                               {teacher.submitted_at ? new Date(teacher.submitted_at).toLocaleString() : '—'}
                                             </td>
                                           )}
+                                          {/* Appeal column — shown for both pending and completed teachers */}
+                                          {(() => {
+                                            const appealKey = `${window.window_id}|${teacher.teacher_id}|${teacher.course_id}`
+                                            const appeal = closedWindowAppeals[appealKey]
+                                            return (
+                                              <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                                                {appeal ? (
+                                                  <button
+                                                    onClick={() => setAppealDetailModal(appeal)}
+                                                    className="inline-flex items-center space-x-1 px-2 py-1 bg-amber-100 border border-amber-300 text-amber-700 text-xs font-medium rounded-full hover:bg-amber-200 transition-colors"
+                                                  >
+                                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                                                    </svg>
+                                                    <span>Appeal</span>
+                                                  </button>
+                                                ) : (
+                                                  <span className="text-gray-300 text-xs">—</span>
+                                                )}
+                                              </td>
+                                            )
+                                          })()}
                                         </tr>
                                       )
                                     })}
@@ -2492,6 +2652,7 @@ function MarkEntryPermissionsPage() {
                         {extensionModal.teachers.map((t, i) => {
                           const win = closedPendingWindows.find(w => w.window_id === extensionModal.windowId)
                           const teacherData = win?.pending_teachers?.find(pt => pt.teacher_id === t.teacher_id && pt.course_id === t.course_id)
+                            || win?.completed_teachers?.find(pt => pt.teacher_id === t.teacher_id && pt.course_id === t.course_id)
                           return (
                             <div key={i} className="flex items-center gap-2 text-xs text-gray-600">
                               <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold flex-shrink-0">{i + 1}</span>
@@ -2533,6 +2694,126 @@ function MarkEntryPermissionsPage() {
                 </div>
               </div>
             )}
+
+            {/* Appeal Detail Modal */}
+            {appealDetailModal && (() => {
+              // Three categories:
+              // 1. Active window appeal — teacher submitted & window still open → delete submission, re-enter
+              // 2. Submitted + expired appeal — teacher submitted & window now closed → extend window for them
+              // 3. Missed submission appeal — teacher never submitted, window closed → extend window
+              const isActiveWindowAppeal = pendingWindows.some(w => w.window_id === appealDetailModal.window_id)
+              const isSubmittedExpiredAppeal = !isActiveWindowAppeal && closedPendingWindows.some(w =>
+                w.window_id === appealDetailModal.window_id &&
+                (w.completed_teachers || []).some(t => t.teacher_id === appealDetailModal.teacher_id && t.course_id === appealDetailModal.course_id)
+              )
+              const modalTitle = isActiveWindowAppeal
+                ? 'Post-Submission Appeal'
+                : isSubmittedExpiredAppeal
+                  ? 'Post-Submission Amendment Appeal'
+                  : 'Missed Submission Appeal'
+              const modalSubtitle = isActiveWindowAppeal
+                ? 'Teacher submitted marks but is requesting to amend them (window still active)'
+                : isSubmittedExpiredAppeal
+                  ? 'Teacher submitted before window closed and now wants to amend — extend window to allow re-entry'
+                  : 'Teacher missed the deadline — review and extend the window if approved'
+              return (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setAppealDetailModal(null)}>
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="px-6 py-5 bg-gradient-to-r from-amber-500 to-amber-600 text-white">
+                    <h3 className="text-lg font-bold">{modalTitle}</h3>
+                    <p className="text-amber-100 text-sm mt-1">{modalSubtitle}</p>
+                  </div>
+                  <div className="px-6 py-5 space-y-4">
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Teacher</p>
+                        <p className="font-medium text-gray-900">{appealDetailModal.teacher_name}</p>
+                        <p className="text-xs text-gray-500 font-mono">{appealDetailModal.teacher_id}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Course</p>
+                        <p className="font-medium text-gray-900">{appealDetailModal.course_name}</p>
+                        <p className="text-xs text-gray-500">{appealDetailModal.course_code}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Window</p>
+                        <p className="text-sm text-gray-700">{appealDetailModal.window_name || `#${appealDetailModal.window_id}`}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Submitted On</p>
+                        <p className="text-sm text-gray-700">{new Date(appealDetailModal.created_at).toLocaleString()}</p>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Reason</p>
+                      <p className="text-sm text-gray-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-3 leading-relaxed">
+                        {appealDetailModal.reason}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="px-6 py-4 bg-gray-50 border-t flex items-center justify-end gap-3">
+                    <button
+                      onClick={() => setAppealDetailModal(null)}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (isActiveWindowAppeal) {
+                          // Active window: delete the submission record so teacher can re-enter marks
+                          try {
+                            await fetch(`${API_BASE_URL}/mark-appeals/${appealDetailModal.id}/resolve`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                resolved_by: localStorage.getItem('username') || 'coe',
+                                status: 'resolved',
+                                delete_submission: true,
+                              }),
+                            })
+                          } catch (_) {}
+                          setAppealDetailModal(null)
+                          setMessage({ type: 'success', text: 'Appeal approved — mark submission cleared. Teacher can now re-enter marks.' })
+                          fetchPendingWindows()
+                        } else {
+                          // Closed window (missed OR submitted+expired): pre-select teacher, resolve appeal, open extension modal
+                          const wid = appealDetailModal.window_id
+                          const tid = appealDetailModal.teacher_id
+                          const cid = appealDetailModal.course_id
+                          setSelectedTeachers(prev => {
+                            const key = `${tid}|${cid}`
+                            const currentSet = new Set(prev[wid] || [])
+                            currentSet.add(key)
+                            return { ...prev, [wid]: currentSet }
+                          })
+                          try {
+                            await fetch(`${API_BASE_URL}/mark-appeals/${appealDetailModal.id}/resolve`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ resolved_by: localStorage.getItem('username') || 'coe', status: 'resolved' }),
+                            })
+                          } catch (_) {}
+                          setAppealDetailModal(null)
+                          setTimeout(() => openExtensionModal(wid), 50)
+                        }
+                      }}
+                      className="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors flex items-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        {isActiveWindowAppeal ? (
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        ) : (
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        )}
+                      </svg>
+                      {isActiveWindowAppeal ? 'Approve & Allow Re-entry' : isSubmittedExpiredAppeal ? 'Approve & Extend Window for Amendment' : 'Extend Window for this Teacher'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              )
+            })()}
           </div>
         )}
       </div>

@@ -32,14 +32,18 @@ import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
 import MarkEntryPermissionsPage from "../pages/curriculum/MarkEntryPermissionsPage";
-import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import HODMarkEntryDashboardPage from "../pages/curriculum/HODMarkEntryDashboardPage";
 import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
-import MarkEntryExtensionsPage from "../pages/curriculum/MarkEntryExtensionsPage";
+import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
+import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
 import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
+
+//404 page
+import NotFoundPage from "../components/NotFoundPage";
+
+// Layout components
 import PrivateRoute from "../components/PrivateRoute";
 import AppShell from "../components/AppShell";
-import NotFoundPage from "../components/NotFoundPage";
 
 function App() {
   return (
@@ -48,51 +52,101 @@ function App() {
 
       <Route element={<PrivateRoute />}>
         <Route element={<AppShell />}>
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/teacher-dashboard" element={<TeacherDashboardPage />} />
-
-          <Route path="/users" element={<UsersPage />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="teacher-dashboard" element={<TeacherDashboardPage />} />
 
           <Route path="/Student_details" element={<StudentDetailsPage />} />
-          <Route path="/student-teacher-dashboard" element={<TeacherStudentDashboard />} />
+          <Route
+            path="/student-teacher-dashboard"
+            element={<TeacherStudentDashboard />}
+          />
           <Route path="/teacher-details" element={<TeacherDetailsPage />} />
-          <Route path="/teacher-student-mapping" element={<TeacherStudentMappingPage />} />
+          <Route
+            path="/teacher-student-mapping"
+            element={<TeacherStudentMappingPage />}
+          />
 
-          <Route path="/course-allocation" element={<CourseAllocationPage />} />
-          <Route path="/teacher/course-selection" element={<TeacherCourseSelectionPage />} />
-          <Route path="/student/elective-selection" element={<ElectiveSelectionPage />} />
-          <Route path="/elective-management" element={<ElectiveManagementPage />} />
-          <Route path="/hod/elective-management" element={<HODElectivePage />} />
-          <Route path="/hod/honour-minor-eligibility" element={<HODHonourMinorEligibilityPage />} />
+          <Route path="Student_details" element={<StudentDetailsPage />} />
+          <Route
+            path="student-teacher-dashboard"
+            element={<TeacherStudentDashboard />}
+          />
+          <Route path="teacher-details" element={<TeacherDetailsPage />} />
+          <Route
+            path="teacher-student-mapping"
+            element={<TeacherStudentMappingPage />}
+          />
 
-          <Route path="/teacher-courses" element={<TeacherCoursesPage />} />
-          <Route path="/teacher-course/:courseId/students" element={<TeacherCourseStudentsPage />} />
+          <Route path="teacher-courses" element={<TeacherCoursesPage />} />
+          <Route
+            path="teacher-course/:courseId/students"
+            element={<TeacherCourseStudentsPage />}
+          />
 
-          <Route path="/mark-entry" element={<MarkEntryPage />} />
-          <Route path="/mark-entry-permissions" element={<MarkEntryPermissionsPage />} />
-          <Route path="/my-assigned-students" element={<MyAssignedStudentsPage />} />
-          <Route path="/hod/mark-entry-monitor" element={<HODMarkEntryDashboardPage />} />
-          <Route path="/hod/result-analysis" element={<ResultAnalysisPage />} />
-          <Route path="/mark-entry-extensions" element={<MarkEntryExtensionsPage />} />
-          <Route path="/exam-absentees" element={<AbsenteesPage />} />
+          <Route path="mark-entry" element={<MarkEntryPage />} />
+          <Route
+            path="mark-entry-permissions"
+            element={<MarkEntryPermissionsPage />}
+          />
+          <Route
+            path="mark-monitor"
+            element={<HODMarkEntryDashboardPage />}
+          />
+          <Route path="result-analysis" element={<ResultAnalysisPage />} />
+          <Route
+            path="my-assigned-students"
+            element={<MyAssignedStudentsPage />}
+          />
 
-          <Route path="/hr/faculty" element={<HRFacultyPage />} />
-          <Route path="/hr/appeals" element={<HRAppealsReviewPage />} />
+          <Route path="course-allocation" element={<CourseAllocationPage />} />
+          <Route path="elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="teacher/course-selection" element={<TeacherCourseSelectionPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="hr/faculty" element={<HRFacultyPage />} />
+          <Route path="hr/appeals-review" element={<HRAppealsReviewPage />} />
+          <Route
+            path="elective-management"
+            element={<ElectiveManagementPage />}
+          />
+          <Route path="hod/elective-management" element={<HODElectivePage />} />
+          <Route path="hod/honour-minor-eligibility" element={<HODHonourMinorEligibilityPage />} />
+          <Route path="academic-calendar" element={<AcademicCalendarPage />} />
+          <Route path="exam-absentees" element={<AbsenteesPage />} />
 
-          <Route path="/regulations" element={<RegulationPage />} />
-          <Route path="/curriculum/:id/editor" element={<RegulationEditorPage />} />
-          <Route path="/curriculum" element={<CurriculumMainPage />} />
-          <Route path="/curriculum/:id/overview" element={<DepartmentOverviewPage />} />
-          <Route path="/curriculum/:id/curriculum" element={<ManageCurriculumPage />} />
-          <Route path="/curriculum/:id/curriculum/semester/:semId" element={<SemesterDetailPage />} />
-          <Route path="/curriculum/:id/curriculum/honour/:cardId" element={<HonourCardPage />} />
-          <Route path="/curriculum/:id/peo-po-mapping" element={<PEOPOMappingPage />} />
+          <Route path="regulations" element={<RegulationPage />} />
+          <Route
+            path="curriculum/:id/editor"
+            element={<RegulationEditorPage />}
+          />
 
-          <Route path="/course/:courseId/syllabus" element={<SyllabusPage />} />
-          <Route path="/course/:courseId/mapping" element={<MappingPage />} />
+          <Route path="curriculum" element={<CurriculumMainPage />} />
+          <Route
+            path="curriculum/:id/overview"
+            element={<DepartmentOverviewPage />}
+          />
+          <Route
+            path="curriculum/:id/curriculum"
+            element={<ManageCurriculumPage />}
+          />
+          <Route
+            path="curriculum/:id/curriculum/semester/:semId"
+            element={<SemesterDetailPage />}
+          />
+          <Route
+            path="curriculum/:id/curriculum/honour/:cardId"
+            element={<HonourCardPage />}
+          />
 
-          <Route path="/clusters" element={<ClusterManagementPage />} />
-          <Route path="/sharing" element={<SharingManagementPage />} />
+          <Route path="course/:courseId/syllabus" element={<SyllabusPage />} />
+          <Route path="course/:courseId/mapping" element={<MappingPage />} />
+          <Route
+            path="curriculum/:id/peo-po-mapping"
+            element={<PEOPOMappingPage />}
+          />
+
+          <Route path="clusters" element={<ClusterManagementPage />} />
+          <Route path="sharing" element={<SharingManagementPage />} />
 
           <Route path="*" element={<NotFoundPage />} />
         </Route>

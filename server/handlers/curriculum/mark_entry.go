@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"server/db"
 	"server/models"
@@ -34,11 +35,20 @@ func normalizeFacultyIdentifier(raw string) string {
 	}
 
 	var facultyID sql.NullString
+
+	// 1. Already a faculty_id
 	err := db.DB.QueryRow(`SELECT faculty_id FROM teachers WHERE faculty_id = ? LIMIT 1`, identifier).Scan(&facultyID)
 	if err == nil && facultyID.Valid && strings.TrimSpace(facultyID.String) != "" {
 		return strings.TrimSpace(facultyID.String)
 	}
 
+	// 2. Numeric primary key (id column) from teachers table
+	err = db.DB.QueryRow(`SELECT faculty_id FROM teachers WHERE id = ? LIMIT 1`, identifier).Scan(&facultyID)
+	if err == nil && facultyID.Valid && strings.TrimSpace(facultyID.String) != "" {
+		return strings.TrimSpace(facultyID.String)
+	}
+
+	// 3. Username → email → faculty_id
 	var email sql.NullString
 	err = db.DB.QueryRow(`SELECT email FROM users WHERE username = ? LIMIT 1`, identifier).Scan(&email)
 	if err == nil && email.Valid && strings.TrimSpace(email.String) != "" {
@@ -725,6 +735,13 @@ func SubmitMarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve to faculty_id so mark_submissions is consistent with teacher_course_allocation
+	req.TeacherID = normalizeFacultyIdentifier(req.TeacherID)
+	if strings.TrimSpace(req.TeacherID) == "" {
+		http.Error(w, "Could not resolve faculty_id for given teacher_id", http.StatusBadRequest)
+		return
+	}
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
@@ -790,10 +807,41 @@ func CheckMarkSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve to faculty_id for consistent lookup in mark_submissions
+	teacherID = normalizeFacultyIdentifier(teacherID)
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
+	}
+
+	// If a specific window_id is supplied, bypass active-window resolution
+	// and check directly against that window (supports expired windows)
+	specificWindowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id"))
+	if specificWindowIDStr != "" {
+		specificWindowID, err := strconv.Atoi(specificWindowIDStr)
+		if err == nil && specificWindowID > 0 {
+			var exists bool
+			var submittedAt sql.NullTime
+			err = database.QueryRow(`
+				SELECT COUNT(*) > 0, MAX(submitted_at)
+				FROM mark_submissions
+				WHERE window_id = ? AND teacher_id = ? AND course_id = ?
+			`, specificWindowID, teacherID, courseID).Scan(&exists, &submittedAt)
+			if err != nil {
+				log.Printf("[CheckMarkSubmission] Error: %v", err)
+				http.Error(w, "Failed to check submission status", http.StatusInternalServerError)
+				return
+			}
+			resp := map[string]interface{}{"submitted": exists}
+			if exists && submittedAt.Valid {
+				resp["submitted_at"] = submittedAt.Time.Format(time.RFC3339)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
 	}
 
 	// Resolve active windows for this teacher+course

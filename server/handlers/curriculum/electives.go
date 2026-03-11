@@ -174,39 +174,39 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 
 	// Query vertical card courses with semester assignments
 	query := `
-        SELECT 
-            c.id,
-            c.course_code,
-            c.course_name,
-            c.course_type,
-            COALESCE(c.category, '') as category,
-            COALESCE(c.credit, 0) as credit,
-            nc.id as card_id,
-            nc.id as vertical_id,
-            COALESCE(nc.vertical_name, '') as vertical_name,
-            nc.semester_number as vertical_semester,
-            nc.card_type,
-            CASE WHEN hes.id IS NOT NULL THEN 1 ELSE 0 END as is_selected,
-            hes.semester as assigned_semester,
-            hes.slot_id as assigned_slot_id,
-            ess.slot_name as assigned_slot
-        FROM courses c
-        INNER JOIN curriculum_courses cc ON c.id = cc.course_id
-        INNER JOIN normal_cards nc ON cc.semester_id = nc.id
-        LEFT JOIN hod_elective_selections hes ON (
-            hes.course_id = c.id
-            AND hes.department_id = ?
-            AND hes.academic_year = ?
-            AND (hes.batch = ? OR hes.batch IS NULL OR ? = '')
-            AND hes.status = 'ACTIVE'
-        )
-        LEFT JOIN elective_semester_slots ess ON hes.slot_id = ess.id
-        WHERE cc.curriculum_id = ?
-            AND nc.card_type = 'vertical'
-            AND c.status = 1
-            AND nc.status = 1
-        ORDER BY nc.semester_number IS NULL, nc.semester_number, c.course_type, c.course_code
-    `
+		SELECT 
+			c.id,
+			c.course_code,
+			c.course_name,
+			c.course_type,
+			COALESCE(c.category, '') as category,
+			COALESCE(c.credit, 0) as credit,
+			nc.id as card_id,
+			nc.id as vertical_id,
+			COALESCE(nc.vertical_name, '') as vertical_name,
+			nc.semester_number as vertical_semester,
+			nc.card_type,
+			CASE WHEN hes.id IS NOT NULL THEN 1 ELSE 0 END as is_selected,
+			hes.semester as assigned_semester,
+			hes.slot_id as assigned_slot_id,
+			ess.slot_name as assigned_slot
+		FROM courses c
+		INNER JOIN curriculum_courses cc ON c.id = cc.course_id
+		INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+		LEFT JOIN hod_elective_selections hes ON (
+			hes.course_id = c.id
+			AND hes.department_id = ?
+			AND hes.academic_year = ?
+			AND (hes.batch = ? OR hes.batch IS NULL OR ? = '')
+			AND hes.status = 'ACTIVE'
+		)
+		LEFT JOIN elective_semester_slots ess ON hes.slot_id = ess.id
+		WHERE cc.curriculum_id = ?
+			AND nc.card_type IN ('vertical')
+			AND c.status = 1
+			AND nc.status = 1
+		ORDER BY nc.semester_number IS NULL, nc.semester_number, c.course_type, c.course_code
+	`
 
 	rows, err := db.DB.Query(query, departmentID, academicYear, batch, batch, curriculumID)
 	if err != nil {
@@ -264,11 +264,249 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		electives = append(electives, course)
 	}
 
+	// Fetch department-specific semester courses for Add On electives
+	deptCoursesQuery := `
+		SELECT DISTINCT c.id,
+			c.course_code,
+			c.course_name,
+			c.course_type,
+			COALESCE(c.category, '') as category,
+			COALESCE(c.credit, 0) as credit,
+			nc.id as card_id,
+			nc.id as vertical_id,
+			'Department Courses' as vertical_name,
+			nc.semester_number as vertical_semester,
+			'department_course' as card_type,
+			CASE WHEN hes.id IS NOT NULL THEN 1 ELSE 0 END as is_selected,
+			hes.semester as assigned_semester,
+			hes.slot_id as assigned_slot_id,
+			ess.slot_name as assigned_slot
+		FROM courses c
+		INNER JOIN curriculum_courses cc ON c.id = cc.course_id
+		INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+		LEFT JOIN hod_elective_selections hes ON (
+			hes.course_id = c.id
+			AND hes.department_id = ?
+			AND hes.academic_year = ?
+			AND (hes.batch = ? OR hes.batch IS NULL OR ? = '')
+			AND hes.status = 'ACTIVE'
+			AND hes.slot_id IN (SELECT id FROM elective_semester_slots WHERE slot_name = 'Add On')
+		)
+		LEFT JOIN elective_semester_slots ess ON hes.slot_id = ess.id
+		WHERE cc.curriculum_id = ?
+			AND nc.card_type NOT IN ('vertical', 'elective', 'open_elective', 'honour')
+			AND c.status = 1
+			AND nc.status = 1
+		ORDER BY nc.semester_number, c.course_code
+	`
+
+	deptRows, err := db.DB.Query(deptCoursesQuery, departmentID, academicYear, batch, batch, curriculumID)
+	if err != nil {
+		log.Println("Error fetching department courses:", err)
+	} else {
+		defer deptRows.Close()
+		for deptRows.Next() {
+			var course models.ElectiveCourse
+			var isSelected int
+			var assignedSemester sql.NullInt64
+			var assignedSlotID sql.NullInt64
+			var assignedSlot sql.NullString
+			err := deptRows.Scan(
+				&course.ID,
+				&course.CourseCode,
+				&course.CourseName,
+				&course.CourseType,
+				&course.Category,
+				&course.Credit,
+				&course.CardID,
+				&course.VerticalID,
+				&course.VerticalName,
+				&course.VerticalSemester,
+				&course.CardType,
+				&isSelected,
+				&assignedSemester,
+				&assignedSlotID,
+				&assignedSlot,
+			)
+			if err != nil {
+				log.Println("Error scanning department course:", err)
+				continue
+			}
+			course.IsSelected = isSelected == 1
+			if assignedSemester.Valid {
+				sem := int(assignedSemester.Int64)
+				course.AssignedSemester = &sem
+			}
+			if assignedSlotID.Valid {
+				slotID := int(assignedSlotID.Int64)
+				course.AssignedSlotID = &slotID
+			}
+			if assignedSlot.Valid {
+				slot := assignedSlot.String
+				course.AssignedSlot = &slot
+			}
+			electives = append(electives, course)
+		}
+	}
+
+	// Fetch courses offered TO this department by other departments via Minor Program Management
+	minorEligibleCourses := []models.MinorEligibleCourse{}
+	deptIDStr := fmt.Sprintf("%d", departmentID)
+	minorQuery := `
+		SELECT DISTINCT
+			c.id,
+			c.course_code,
+			c.course_name,
+			c.course_type,
+			COALESCE(c.category, '') as category,
+			COALESCE(c.credit, 0) as credit,
+			d.id as department_id,
+			d.department_name,
+			COALESCE(d.department_code, '') as department_code,
+			'Minor Offering' as slot_name,
+			hms.semester
+		FROM hod_minor_selections hms
+		INNER JOIN courses c ON hms.course_id = c.id
+		INNER JOIN departments d ON hms.department_id = d.id
+		WHERE hms.department_id != ?
+			AND hms.academic_year = ?
+			AND hms.status = 'ACTIVE'
+			AND JSON_CONTAINS(hms.allowed_dept_ids, ?)
+		ORDER BY d.department_name, hms.semester, c.course_code
+	`
+
+	minorRows, err := db.DB.Query(minorQuery, departmentID, academicYear, deptIDStr)
+	if err != nil {
+		log.Println("Error fetching minor eligible courses:", err)
+	} else {
+		defer minorRows.Close()
+		for minorRows.Next() {
+			var mc models.MinorEligibleCourse
+			err := minorRows.Scan(
+				&mc.ID,
+				&mc.CourseCode,
+				&mc.CourseName,
+				&mc.CourseType,
+				&mc.Category,
+				&mc.Credit,
+				&mc.DepartmentID,
+				&mc.DepartmentName,
+				&mc.DepartmentCode,
+				&mc.SlotName,
+				&mc.Semester,
+			)
+			if err != nil {
+				log.Println("Error scanning minor eligible course:", err)
+				continue
+			}
+			minorEligibleCourses = append(minorEligibleCourses, mc)
+		}
+	}
+
+	// Fetch previously-assigned Minor Slot courses for this department
+	// (courses from other departments that were assigned to Minor Slot 1/2)
+	minorAssignedQuery := `
+		SELECT DISTINCT
+			c.id,
+			c.course_code,
+			c.course_name,
+			c.course_type,
+			COALESCE(c.category, '') as category,
+			COALESCE(c.credit, 0) as credit,
+			0 as card_id,
+			0 as vertical_id,
+			COALESCE(
+				(SELECT CONCAT(d2.department_name, ' Minor')
+				 FROM hod_minor_selections hms2
+				 INNER JOIN departments d2 ON hms2.department_id = d2.id
+				 WHERE hms2.course_id = c.id
+				   AND hms2.department_id != ?
+				   AND hms2.status = 'ACTIVE'
+				 LIMIT 1),
+				'Minor Offering'
+			) as vertical_name,
+			NULL as vertical_semester,
+			'minor_assigned' as card_type,
+			1 as is_selected,
+			hes.semester as assigned_semester,
+			hes.slot_id as assigned_slot_id,
+			ess.slot_name as assigned_slot
+		FROM hod_elective_selections hes
+		INNER JOIN courses c ON hes.course_id = c.id
+		INNER JOIN elective_semester_slots ess ON hes.slot_id = ess.id
+		WHERE hes.department_id = ?
+			AND hes.academic_year = ?
+			AND (hes.batch = ? OR hes.batch IS NULL OR ? = '')
+			AND hes.status = 'ACTIVE'
+			AND LOWER(ess.slot_name) LIKE '%minor slot%'
+			AND c.id NOT IN (
+				SELECT cc2.course_id FROM curriculum_courses cc2
+				INNER JOIN normal_cards nc2 ON cc2.semester_id = nc2.id
+				WHERE cc2.curriculum_id = ? AND nc2.card_type IN ('vertical', 'open_elective') AND nc2.status = 1
+			)
+		ORDER BY c.course_code
+	`
+
+	minorAssignedRows, err := db.DB.Query(minorAssignedQuery, departmentID, departmentID, academicYear, batch, batch, curriculumID)
+	if err != nil {
+		log.Println("Error fetching minor assigned courses:", err)
+	} else {
+		defer minorAssignedRows.Close()
+		for minorAssignedRows.Next() {
+			var course models.ElectiveCourse
+			var isSelected int
+			var assignedSemester sql.NullInt64
+			var assignedSlotID sql.NullInt64
+			var assignedSlot sql.NullString
+			var verticalSemester sql.NullInt64
+			err := minorAssignedRows.Scan(
+				&course.ID,
+				&course.CourseCode,
+				&course.CourseName,
+				&course.CourseType,
+				&course.Category,
+				&course.Credit,
+				&course.CardID,
+				&course.VerticalID,
+				&course.VerticalName,
+				&verticalSemester,
+				&course.CardType,
+				&isSelected,
+				&assignedSemester,
+				&assignedSlotID,
+				&assignedSlot,
+			)
+			if err != nil {
+				log.Println("Error scanning minor assigned course:", err)
+				continue
+			}
+			course.IsSelected = isSelected == 1
+			if verticalSemester.Valid {
+				sem := int(verticalSemester.Int64)
+				course.VerticalSemester = &sem
+			}
+			if assignedSemester.Valid {
+				sem := int(assignedSemester.Int64)
+				course.AssignedSemester = &sem
+			}
+			if assignedSlotID.Valid {
+				slotID := int(assignedSlotID.Int64)
+				course.AssignedSlotID = &slotID
+			}
+			if assignedSlot.Valid {
+				slot := assignedSlot.String
+				course.AssignedSlot = &slot
+			}
+			electives = append(electives, course)
+		}
+	}
+
 	response := models.AvailableElectivesResponse{
-		Semester:           0, // Not applicable - showing all vertical courses
-		Batch:              batch,
-		AcademicYear:       academicYear,
-		AvailableElectives: electives,
+		Semester:             0, // Not applicable - showing all vertical courses
+		Batch:               batch,
+		AcademicYear:        academicYear,
+		AvailableElectives:  electives,
+		MinorEligibleCourses: minorEligibleCourses,
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -378,18 +616,52 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Count honour course assignments by semester and collect honour course IDs
+	// Count honour course assignments by semester and collect course IDs per semester
 	honourCourseCountBySemester := make(map[int]int)
-	honourCourseIDs := make([]int, 0)
-	professionalCourseIDs := make([]int, 0)
+	honourCourseIDsBySemester := make(map[int][]int)
+	minorCourseCountBySemester := make(map[int]int)
+	minorCourseIDsBySemester := make(map[int][]int)
+	professionalCourseIDsBySemester := make(map[int][]int)
+	addOnCourseIDsBySemester := make(map[int][]int)
+
+	// Track slot usage for honour and minor slots (each specific slot can have max 1 course)
+	slotCourseCount := make(map[int]int)
 
 	for _, assignment := range req.CourseAssignments {
 		slotName := slotMap[assignment.SlotID]
+		sem := assignment.Semester
 		if strings.Contains(strings.ToLower(slotName), "honour slot") {
-			honourCourseCountBySemester[assignment.Semester]++
-			honourCourseIDs = append(honourCourseIDs, assignment.CourseID)
+			honourCourseCountBySemester[sem]++
+			honourCourseIDsBySemester[sem] = append(honourCourseIDsBySemester[sem], assignment.CourseID)
+			
+			// Track individual honour slot usage
+			slotCourseCount[assignment.SlotID]++
+			if slotCourseCount[assignment.SlotID] > 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf("%s can have only 1 course", slotName),
+				})
+				return
+			}
+		} else if strings.Contains(strings.ToLower(slotName), "minor slot") {
+			minorCourseCountBySemester[sem]++
+			minorCourseIDsBySemester[sem] = append(minorCourseIDsBySemester[sem], assignment.CourseID)
+			
+			// Track individual minor slot usage
+			slotCourseCount[assignment.SlotID]++
+			if slotCourseCount[assignment.SlotID] > 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf("%s can have only 1 course", slotName),
+				})
+				return
+			}
 		} else if strings.Contains(strings.ToLower(slotName), "professional elective") {
-			professionalCourseIDs = append(professionalCourseIDs, assignment.CourseID)
+			professionalCourseIDsBySemester[sem] = append(professionalCourseIDsBySemester[sem], assignment.CourseID)
+		} else if strings.Contains(strings.ToLower(slotName), "add on") {
+			addOnCourseIDsBySemester[sem] = append(addOnCourseIDsBySemester[sem], assignment.CourseID)
 		}
 	}
 
@@ -405,15 +677,75 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate honour courses are not in professional electives
-	if len(honourCourseIDs) > 0 && len(professionalCourseIDs) > 0 {
-		for _, honourCourseID := range honourCourseIDs {
-			for _, profCourseID := range professionalCourseIDs {
-				if honourCourseID == profCourseID {
+	// Validate max 2 minor courses per semester
+	for semester, count := range minorCourseCountBySemester {
+		if count > 2 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Maximum 2 minor courses allowed per semester. Semester %d has %d minor courses.", semester, count),
+			})
+			return
+		}
+	}
+
+	// Per-semester validations: no overlap between slot types within the same semester
+	for sem := 4; sem <= 8; sem++ {
+		honourIDs := honourCourseIDsBySemester[sem]
+		minorIDs := minorCourseIDsBySemester[sem]
+		profIDs := professionalCourseIDsBySemester[sem]
+		addOnIDs := addOnCourseIDsBySemester[sem]
+
+		// Honour vs Professional
+		for _, hID := range honourIDs {
+			for _, pID := range profIDs {
+				if hID == pID {
 					w.WriteHeader(http.StatusBadRequest)
 					json.NewEncoder(w).Encode(map[string]interface{}{
 						"success": false,
-						"message": "Honour courses cannot be the same as professional elective courses. Please select different courses.",
+						"message": fmt.Sprintf("Semester %d: Honour and Professional Elective cannot share the same course. Please select different courses.", sem),
+					})
+					return
+				}
+			}
+		}
+
+		// Minor vs Professional
+		for _, mID := range minorIDs {
+			for _, pID := range profIDs {
+				if mID == pID {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"message": fmt.Sprintf("Semester %d: Minor and Professional Elective cannot share the same course. Please select different courses.", sem),
+					})
+					return
+				}
+			}
+		}
+
+		// Add On vs Professional
+		for _, aID := range addOnIDs {
+			for _, pID := range profIDs {
+				if aID == pID {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"message": fmt.Sprintf("Semester %d: Add On and Professional Elective cannot share the same course. Please select different courses.", sem),
+					})
+					return
+				}
+			}
+		}
+
+		// Add On vs Honour
+		for _, aID := range addOnIDs {
+			for _, hID := range honourIDs {
+				if aID == hID {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"message": fmt.Sprintf("Semester %d: Add On and Honour cannot share the same course. Please select different courses.", sem),
 					})
 					return
 				}
@@ -467,174 +799,162 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Delete existing selections for this department/batch/year/semester
-	deleteQuery := `
-        DELETE FROM hod_elective_selections 
-        WHERE department_id = ? 
-        AND academic_year = ?
-        AND semester = ?
-        AND (batch = ? OR (batch IS NULL AND ? = ''))
-    `
-	_, err = tx.Exec(deleteQuery, departmentID, req.AcademicYear, req.Semester, req.Batch, req.Batch)
+	// ==================== Vertical Lock Enforcement ====================
+	// For honour/minor slot courses, enforce that all semesters for the same batch
+	// use the same vertical. Auto-create lock on first assignment, enforce on subsequent.
+
+	// Step 1: Build semester→batch map from academic_calendar
+	semBatchMap := make(map[int]string)
+	batchRows, err := db.DB.Query(`
+		SELECT current_semester + 1 as next_sem, batch
+		FROM academic_calendar
+		WHERE is_current = 1 AND batch IS NOT NULL AND batch != ''
+	`)
 	if err != nil {
-		log.Println("Error deleting old selections:", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"message": "Error clearing previous selections",
-		})
-		return
+		log.Println("Error fetching semester-batch map:", err)
+	} else {
+		defer batchRows.Close()
+		for batchRows.Next() {
+			var nextSem int
+			var batch string
+			if err := batchRows.Scan(&nextSem, &batch); err == nil {
+				if nextSem >= 4 && nextSem <= 8 {
+					semBatchMap[nextSem] = batch
+				}
+			}
+		}
 	}
 
-	// Fetch open elective courses from curriculum
-	openElectivesQuery := `
-        SELECT DISTINCT c.id
-        FROM courses c
-        INNER JOIN curriculum_courses cc ON c.id = cc.course_id
-        INNER JOIN normal_cards nc ON cc.semester_id = nc.id
-        WHERE cc.curriculum_id = ?
-            AND nc.card_type = 'open_elective'
-            AND c.status = 1
-            AND nc.status = 1
-    `
-	openElectiveRows, err := tx.Query(openElectivesQuery, curriculumID)
-	if err != nil {
-		log.Println("Error fetching open electives:", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"message": "Error fetching open electives",
-		})
-		return
+	// Step 2: For each honour/minor course, look up its vertical and check/create lock
+	type lockKey struct {
+		batch    string
+		lockType string
 	}
-	defer openElectiveRows.Close()
+	// Collect the vertical we expect for each (batch, lock_type) in this save request
+	newLockExpectations := make(map[lockKey]struct {
+		verticalID   int
+		verticalName string
+		semester     int
+	})
 
-	openElectiveCourseIDs := []int{}
-	for openElectiveRows.Next() {
-		var courseID int
-		if err := openElectiveRows.Scan(&courseID); err != nil {
-			log.Println("Error scanning open elective course ID:", err)
+	for _, assignment := range req.CourseAssignments {
+		slotName := slotMap[assignment.SlotID]
+		isMinor := strings.Contains(strings.ToLower(slotName), "minor slot")
+
+		// Only enforce vertical locks for minor slots (not honour)
+		if !isMinor {
 			continue
 		}
-		openElectiveCourseIDs = append(openElectiveCourseIDs, courseID)
-	}
 
-	// Auto-allocate open electives per semester based on rules
-	autoAllocatedCount := 0
-	if len(openElectiveCourseIDs) > 0 {
-		// Get unique semesters from course assignments
-		semesterSet := make(map[int]bool)
-		for _, assignment := range req.CourseAssignments {
-			semesterSet[assignment.Semester] = true
+		batch := semBatchMap[assignment.Semester]
+		if batch == "" {
+			continue // No batch configured for this semester — skip lock enforcement
 		}
 
-		// For each semester, determine slot allocation
-		for semester := range semesterSet {
-			// Fetch slots for this semester
-			slotsQuery := `
-                SELECT id, slot_name, slot_order
-                FROM elective_semester_slots
-                WHERE semester = ?
-                ORDER BY slot_order
-            `
-			slotRows, err := tx.Query(slotsQuery, semester)
+		lockType := "minor"
+
+		verticalID, verticalName, err := lookupCourseVertical(assignment.CourseID, curriculumID)
+		if err != nil {
+			// Course might be from another dept (minor offering) — skip lock for those
+			continue
+		}
+
+		key := lockKey{batch: batch, lockType: lockType}
+		if existing, ok := newLockExpectations[key]; ok {
+			// Already have an expectation for this batch+type — must be same vertical
+			if existing.verticalID != verticalID {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf(
+						"All %s courses for batch %s must be from the same vertical. "+
+							"Semester %d uses '%s' but semester %d uses '%s'.",
+						lockType, batch, existing.semester, existing.verticalName,
+						assignment.Semester, verticalName),
+				})
+				return
+			}
+		} else {
+			newLockExpectations[key] = struct {
+				verticalID   int
+				verticalName string
+				semester     int
+			}{verticalID, verticalName, assignment.Semester}
+		}
+
+		// Check existing lock in database
+		var existingLockVerticalID int
+		var existingLockVerticalName string
+		lockErr := db.DB.QueryRow(`
+			SELECT vertical_id, vertical_name FROM honour_minor_vertical_locks
+			WHERE department_id = ? AND batch = ? AND lock_type = ?
+		`, departmentID, batch, lockType).Scan(&existingLockVerticalID, &existingLockVerticalName)
+
+		if lockErr == nil {
+			// Lock exists — enforce it
+			if existingLockVerticalID != verticalID {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf(
+						"Batch %s already has %s vertical locked to '%s'. "+
+							"Cannot assign course from '%s' vertical. "+
+							"All %s courses across semesters must be from the same vertical.",
+						batch, lockType, existingLockVerticalName, verticalName, lockType),
+				})
+				return
+			}
+		}
+		// If no lock exists (sql.ErrNoRows), we'll create one after successful save
+	}
+
+	// Step 3: Create any new locks that don't exist yet (inside the transaction)
+	for key, expectation := range newLockExpectations {
+		var existingID int
+		lockErr := tx.QueryRow(`
+			SELECT id FROM honour_minor_vertical_locks
+			WHERE department_id = ? AND batch = ? AND lock_type = ?
+		`, departmentID, key.batch, key.lockType).Scan(&existingID)
+
+		if lockErr != nil {
+			// No existing lock — create one
+			_, err := tx.Exec(`
+				INSERT INTO honour_minor_vertical_locks
+				(department_id, batch, lock_type, vertical_id, vertical_name, locked_by_user_id, first_semester, first_academic_year)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			`, departmentID, key.batch, key.lockType, expectation.verticalID, expectation.verticalName,
+				userID, expectation.semester, req.AcademicYear)
 			if err != nil {
-				log.Println("Error fetching semester slots:", err)
-				continue
+				log.Println("Error creating vertical lock:", err)
+				// Non-fatal — continue saving
 			}
+		}
+	}
+	// ==================== End Vertical Lock Enforcement ====================
 
-			var professionalElectiveSlots []struct {
-				ID        int
-				SlotName  string
-				SlotOrder int
-			}
-			var openElectiveSlotID int
+	// Delete existing selections for this department/batch/year for all relevant semesters
+	semesterSet := make(map[int]bool)
+	for _, assignment := range req.CourseAssignments {
+		semesterSet[assignment.Semester] = true
+	}
 
-			for slotRows.Next() {
-				var slotID, slotOrder int
-				var slotName string
-				if err := slotRows.Scan(&slotID, &slotName, &slotOrder); err != nil {
-					log.Println("Error scanning slot:", err)
-					continue
-				}
-
-				if strings.Contains(strings.ToLower(slotName), "open elective") {
-					openElectiveSlotID = slotID
-				} else if strings.Contains(strings.ToLower(slotName), "professional elective") {
-					professionalElectiveSlots = append(professionalElectiveSlots, struct {
-						ID        int
-						SlotName  string
-						SlotOrder int
-					}{slotID, slotName, slotOrder})
-				}
-			}
-			slotRows.Close()
-
-			// Apply rules:
-			// 1. If only one professional elective slot exists -> skip open electives
-			// 2. If open elective slot exists -> use it
-			// 3. Else use last professional elective slot
-			var targetSlotID int
-			if len(professionalElectiveSlots) == 1 && openElectiveSlotID == 0 {
-				// Rule 1: only one professional elective slot, no open elective slot -> skip
-				continue
-			} else if openElectiveSlotID != 0 {
-				// Rule 2: open elective slot exists
-				targetSlotID = openElectiveSlotID
-			} else if len(professionalElectiveSlots) > 0 {
-				// Rule 3: use last professional elective slot (highest slot_order)
-				lastSlot := professionalElectiveSlots[0]
-				for _, slot := range professionalElectiveSlots {
-					if slot.SlotOrder > lastSlot.SlotOrder {
-						lastSlot = slot
-					}
-				}
-				targetSlotID = lastSlot.ID
-			} else {
-				// No suitable slot found
-				continue
-			}
-
-			// Insert open electives into target slot for this semester
-			insertQuery := `
-                INSERT INTO hod_elective_selections 
-                (department_id, curriculum_id, semester, course_id, slot_id, slot_name, academic_year, batch, approved_by_user_id, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, (SELECT slot_name FROM elective_semester_slots WHERE id = ?), ?, ?, ?, ?, ?, ?)
-            `
-			now := time.Now()
-			status := req.Status
-			if status == "" {
-				status = "ACTIVE"
-			}
-			var batchVal interface{}
-			if req.Batch != "" {
-				batchVal = req.Batch
-			} else {
-				batchVal = nil
-			}
-
-			for _, openCourseID := range openElectiveCourseIDs {
-				_, err = tx.Exec(insertQuery,
-					departmentID,
-					curriculumID,
-					semester,
-					openCourseID,
-					targetSlotID,
-					targetSlotID,
-					req.AcademicYear,
-					batchVal,
-					userID,
-					status,
-					now,
-					now,
-				)
-				if err != nil {
-					log.Println("Error inserting open elective:", err)
-					// Continue with other courses
-					continue
-				}
-				autoAllocatedCount++
-			}
+	for semester := range semesterSet {
+		deleteQuery := `
+			DELETE FROM hod_elective_selections 
+			WHERE department_id = ? 
+			AND academic_year = ?
+			AND semester = ?
+			AND (batch = ? OR (batch IS NULL AND ? = ''))
+		`
+		_, err = tx.Exec(deleteQuery, departmentID, req.AcademicYear, semester, req.Batch, req.Batch)
+		if err != nil {
+			log.Println("Error deleting old selections for semester", semester, ":", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Error clearing previous selections",
+			})
+			return
 		}
 	}
 
@@ -686,6 +1006,122 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Auto-add OE courses offered TO this department into the "Open Elective" slot for the semester
+	autoAllocatedCount := 0
+	{
+		// Get unique semesters from course assignments
+		semesterSet := make(map[int]bool)
+		for _, assignment := range req.CourseAssignments {
+			semesterSet[assignment.Semester] = true
+		}
+
+		incomingOEQuery := `
+			SELECT oe.semester, oe.course_id
+			FROM hod_oe_offerings oe
+			WHERE oe.department_id != ?
+			AND oe.status = 'ACTIVE'
+			AND oe.academic_year = ?
+			AND (oe.batch = ? OR (oe.batch IS NULL AND ? = ''))
+			AND JSON_CONTAINS(oe.allowed_dept_ids, CAST(? AS JSON))
+		`
+		incomingRows, err := tx.Query(incomingOEQuery, departmentID, req.AcademicYear, req.Batch, req.Batch, departmentID)
+		if err != nil {
+			log.Println("Error fetching incoming OE offerings for auto-add:", err)
+		} else {
+			defer incomingRows.Close()
+
+			// Group incoming courses by semester
+			incomingBySem := make(map[int][]int)
+			for incomingRows.Next() {
+				var sem, courseID int
+				if err := incomingRows.Scan(&sem, &courseID); err != nil {
+					log.Println("Error scanning incoming OE:", err)
+					continue
+				}
+				incomingBySem[sem] = append(incomingBySem[sem], courseID)
+			}
+
+			for semester := range semesterSet {
+				coursesForSem := incomingBySem[semester]
+				if len(coursesForSem) == 0 {
+					continue
+				}
+
+				// Find the "Open Elective" slot for this semester
+				oeSlotQuery := `
+					SELECT id, slot_name
+					FROM elective_semester_slots
+					WHERE semester = ? AND LOWER(slot_name) = 'open elective' AND is_active = 1
+					LIMIT 1
+				`
+				var oeSlotID int
+				var oeSlotName string
+				err := tx.QueryRow(oeSlotQuery, semester).Scan(&oeSlotID, &oeSlotName)
+				if err != nil {
+					// No Open Elective slot for this semester, skip
+					continue
+				}
+
+				// Collect courses already in this OE slot
+				existingCourses := make(map[int]bool)
+				for _, assignment := range req.CourseAssignments {
+					if assignment.Semester == semester && assignment.SlotID == oeSlotID {
+						existingCourses[assignment.CourseID] = true
+					}
+				}
+				// Also check what's already saved in DB for this slot
+				checkQuery := `
+					SELECT course_id FROM hod_elective_selections
+					WHERE department_id = ? AND semester = ? AND slot_id = ? AND academic_year = ?
+					AND (batch = ? OR (batch IS NULL AND ? = ''))
+				`
+				checkRows, err := tx.Query(checkQuery, departmentID, semester, oeSlotID, req.AcademicYear, req.Batch, req.Batch)
+				if err == nil {
+					for checkRows.Next() {
+						var cid int
+						if err := checkRows.Scan(&cid); err == nil {
+							existingCourses[cid] = true
+						}
+					}
+					checkRows.Close()
+				}
+
+				incomingInsertQuery := `
+					INSERT INTO hod_elective_selections 
+					(department_id, curriculum_id, semester, course_id, slot_id, slot_name, academic_year, batch, approved_by_user_id, status, created_at, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`
+				now := time.Now()
+				autoStatus := req.Status
+				if autoStatus == "" {
+					autoStatus = "ACTIVE"
+				}
+				var batchVal interface{}
+				if req.Batch != "" {
+					batchVal = req.Batch
+				} else {
+					batchVal = nil
+				}
+
+				for _, oeCourseID := range coursesForSem {
+					if existingCourses[oeCourseID] {
+						continue
+					}
+					_, err = tx.Exec(incomingInsertQuery,
+						departmentID, curriculumID, semester, oeCourseID,
+						oeSlotID, oeSlotName, req.AcademicYear, batchVal,
+						userID, autoStatus, now, now,
+					)
+					if err != nil {
+						log.Println("Error auto-adding incoming OE to Open Elective slot:", err)
+						continue
+					}
+					autoAllocatedCount++
+				}
+			}
+		}
+	}
+
 	// Commit transaction
 	err = tx.Commit()
 	if err != nil {
@@ -702,7 +1138,7 @@ func SaveHODSelections(w http.ResponseWriter, r *http.Request) {
 	if len(req.CourseAssignments) > 0 {
 		message = fmt.Sprintf("%d elective courses assigned to semesters", len(req.CourseAssignments))
 		if autoAllocatedCount > 0 {
-			message = fmt.Sprintf("%s (%d open electives auto-allocated)", message, autoAllocatedCount)
+			message = fmt.Sprintf("%s (%d open elective courses auto-added to Open Elective slot)", message, autoAllocatedCount)
 		}
 	} else {
 		message = "All elective selections cleared"
@@ -872,12 +1308,12 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-        SELECT id, academic_year, current_semester, semester_start_date, semester_end_date,
-               elective_selection_start, elective_selection_end, is_current, created_at, updated_at
-        FROM academic_calendar
-        WHERE is_current = 1
-        ORDER BY current_semester
-    `
+		SELECT id, academic_year, year_level, current_semester, batch, semester_start_date, semester_end_date,
+		       elective_selection_start, elective_selection_end, is_current, created_at, updated_at
+		FROM academic_calendar
+		WHERE is_current = 1
+		ORDER BY current_semester
+	`
 
 	rows, err := db.DB.Query(query)
 	if err != nil {
@@ -893,12 +1329,15 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 
 	calendars := []models.AcademicCalendar{}
 	currentSemesters := []int{}
+	semesterBatchMap := make(map[int]string) // maps next_semester → batch
 	for rows.Next() {
 		var calendar models.AcademicCalendar
 		if err := rows.Scan(
 			&calendar.ID,
 			&calendar.AcademicYear,
+			&calendar.YearLevel,
 			&calendar.CurrentSemester,
+			&calendar.Batch,
 			&calendar.SemesterStartDate,
 			&calendar.SemesterEndDate,
 			&calendar.ElectiveSelectionStart,
@@ -912,6 +1351,11 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 		}
 		calendars = append(calendars, calendar)
 		currentSemesters = append(currentSemesters, calendar.CurrentSemester)
+		// Map the NEXT semester (what HOD assigns for) to the batch
+		nextSem := calendar.CurrentSemester + 1
+		if nextSem >= 4 && nextSem <= 8 && calendar.Batch != nil {
+			semesterBatchMap[nextSem] = *calendar.Batch
+		}
 	}
 
 	if len(calendars) == 0 {
@@ -932,9 +1376,103 @@ func GetCurrentAcademicCalendar(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"academic_year":     calendars[0].AcademicYear,
-		"current_semesters": currentSemesters,
-		"calendars":         calendars,
+		"academic_year":      calendars[0].AcademicYear,
+		"current_semesters":  currentSemesters,
+		"calendars":          calendars,
+		"semester_batch_map": semesterBatchMap,
+	})
+}
+
+// ==================== Honour Program Management ====================
+
+// GetHonourVerticals retrieves verticals from honour_cards with HONOUR in title
+func GetHonourVerticals(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Method not allowed",
+		})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Email parameter required",
+		})
+		return
+	}
+
+	var curriculumID int
+	currQuery := `
+		SELECT COALESCE(dca.curriculum_id, 0)
+		FROM users u
+		INNER JOIN teachers t ON u.email = t.email
+		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+		INNER JOIN departments d ON dt.department_id = d.id
+		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+		WHERE u.email = ? AND u.role = 'hod'
+		LIMIT 1
+	`
+
+	err := db.DB.QueryRow(currQuery, email).Scan(&curriculumID)
+	if err != nil || curriculumID == 0 {
+		log.Println("Error fetching curriculum for honour verticals:", err)
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Curriculum not found",
+		})
+		return
+	}
+
+	query := `
+		SELECT hv.id, hv.honour_card_id, 
+		       CONCAT(hc.title, ' - ', hv.name) as name,
+		       COUNT(DISTINCT hvc.course_id) as course_count
+		FROM honour_verticals hv
+		INNER JOIN honour_cards hc ON hv.honour_card_id = hc.id
+		LEFT JOIN honour_vertical_courses hvc ON hv.id = hvc.honour_vertical_id AND hvc.status = 1
+		WHERE hc.curriculum_id = ? AND hc.status = 1 AND hv.status = 1
+		  AND UPPER(hc.title) LIKE '%HONOUR%'
+		GROUP BY hv.id, hv.honour_card_id, hc.title, hv.name
+		HAVING COUNT(DISTINCT hvc.course_id) >= 1
+		ORDER BY hc.title, hv.name
+	`
+
+	rows, err := db.DB.Query(query, curriculumID)
+	if err != nil {
+		log.Println("Error fetching honour verticals:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+	defer rows.Close()
+
+	verticals := []models.MinorVerticalInfo{}
+	for rows.Next() {
+		var vertical models.MinorVerticalInfo
+		err := rows.Scan(&vertical.ID, &vertical.HonourCardID, &vertical.Name, &vertical.CourseCount)
+		if err != nil {
+			log.Println("Error scanning honour vertical:", err)
+			continue
+		}
+		verticals = append(verticals, vertical)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"verticals": verticals,
 	})
 }
 
@@ -988,18 +1526,20 @@ func GetMinorVerticals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get vertical cards from normal_cards with course counts
+	// Get minor verticals from honour_verticals under honour_cards with MINOR in title
 	query := `
-        SELECT nc.id, 0 as honour_card_id, 
-               COALESCE(nc.vertical_name, '') as name,
-               COUNT(DISTINCT cc.course_id) as course_count
-        FROM normal_cards nc
-        LEFT JOIN curriculum_courses cc ON nc.id = cc.semester_id
-        WHERE nc.curriculum_id = ? AND nc.card_type = 'vertical' AND nc.status = 1
-        GROUP BY nc.id, nc.semester_number, nc.vertical_name
-        HAVING COUNT(DISTINCT cc.course_id) >= 6
-        ORDER BY nc.semester_number IS NULL, nc.semester_number, nc.vertical_name
-    `
+		SELECT hv.id, hv.honour_card_id, 
+		       CONCAT(hc.title, ' - ', hv.name) as name,
+		       COUNT(DISTINCT hvc.course_id) as course_count
+		FROM honour_verticals hv
+		INNER JOIN honour_cards hc ON hv.honour_card_id = hc.id
+		LEFT JOIN honour_vertical_courses hvc ON hv.id = hvc.honour_vertical_id AND hvc.status = 1
+		WHERE hc.curriculum_id = ? AND hc.status = 1 AND hv.status = 1
+		  AND UPPER(hc.title) LIKE '%MINOR%'
+		GROUP BY hv.id, hv.honour_card_id, hc.title, hv.name
+		HAVING COUNT(DISTINCT hvc.course_id) >= 1
+		ORDER BY hc.title, hv.name
+	`
 
 	rows, err := db.DB.Query(query, curriculumID)
 	if err != nil {
@@ -1065,13 +1605,29 @@ func GetVerticalCourses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `
-        SELECT c.id, c.course_code, c.course_name, c.credit
-        FROM courses c
-        INNER JOIN curriculum_courses cc ON c.id = cc.course_id
-        WHERE cc.semester_id = ? AND c.status = 1
-        ORDER BY c.course_code
-    `
+	// Check source param to determine where to look for courses
+	source := r.URL.Query().Get("source")
+
+	var query string
+	if source == "honour_vertical" {
+		// Fetch from honour_vertical_courses
+		query = `
+			SELECT c.id, c.course_code, c.course_name, c.credit
+			FROM courses c
+			INNER JOIN honour_vertical_courses hvc ON c.id = hvc.course_id
+			WHERE hvc.honour_vertical_id = ? AND c.status = 1 AND hvc.status = 1
+			ORDER BY c.course_code
+		`
+	} else {
+		// Default: fetch from curriculum_courses (normal_cards)
+		query = `
+			SELECT c.id, c.course_code, c.course_name, c.credit
+			FROM courses c
+			INNER JOIN curriculum_courses cc ON c.id = cc.course_id
+			WHERE cc.semester_id = ? AND c.status = 1
+			ORDER BY c.course_code
+		`
+	}
 
 	rows, err := db.DB.Query(query, verticalID)
 	if err != nil {
@@ -1167,30 +1723,8 @@ func SaveHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate semester assignments (must be sem 5, 6, 7 with 2 courses each)
-	semesterCounts := make(map[int]int)
-	for _, assignment := range req.SemesterAssignments {
-		if assignment.Semester < 5 || assignment.Semester > 7 {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"message": "Minor courses must be in semesters 5, 6, or 7",
-			})
-			return
-		}
-		semesterCounts[assignment.Semester]++
-	}
-
-	for sem := 5; sem <= 7; sem++ {
-		if semesterCounts[sem] != 2 {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"message": fmt.Sprintf("Each semester (5, 6, 7) must have exactly 2 courses. Semester %d has %d courses.", sem, semesterCounts[sem]),
-			})
-			return
-		}
-	}
+	// No special validation needed for minor slots - they work like any other slots
+	// Minor Slot 1 and Minor Slot 2 are regular slots in elective_semester_slots
 
 	// Get HOD's info
 	var userID, departmentID, curriculumID int
@@ -1319,7 +1853,7 @@ func SaveHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 
 	response := models.SaveMinorResponse{
 		Success: true,
-		Message: fmt.Sprintf("Minor program saved successfully: %d courses across semesters 5-7", len(req.SemesterAssignments)),
+		Message: fmt.Sprintf("Minor program saved successfully: %d courses offered", len(req.SemesterAssignments)),
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -1448,4 +1982,756 @@ func GetHODMinorSelections(w http.ResponseWriter, r *http.Request) {
 		"success":   true,
 		"selection": response,
 	})
+}
+
+// ==================== Open Elective Offering Handlers ====================
+
+// GetOECards retrieves open elective cards available for offering
+func GetOECards(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Method not allowed",
+		})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Email parameter required",
+		})
+		return
+	}
+
+	// Get HOD's curriculum
+	var curriculumID int
+	currQuery := `
+		SELECT COALESCE(dca.curriculum_id, 0)
+		FROM users u
+		INNER JOIN teachers t ON u.email = t.email
+		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+		INNER JOIN departments d ON dt.department_id = d.id
+		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+		WHERE u.email = ? AND u.role = 'hod'
+		LIMIT 1
+	`
+
+	err := db.DB.QueryRow(currQuery, email).Scan(&curriculumID)
+	if err != nil || curriculumID == 0 {
+		log.Println("Error fetching curriculum:", err)
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Curriculum not found",
+		})
+		return
+	}
+
+	// Get open_elective cards with course counts
+	// Filter by type: "same" (default for offering workflow), "different", or "all"
+	oeType := r.URL.Query().Get("type")
+	var verticalFilter string
+	switch oeType {
+	case "different":
+		verticalFilter = "AND nc.vertical_name = 'Different Dept'"
+	case "all":
+		verticalFilter = ""
+	default:
+		// Default: only Same Dept cards (for offering to other depts)
+		verticalFilter = "AND nc.vertical_name = 'Same Dept'"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT nc.id,
+		       COALESCE(nc.vertical_name, CONCAT('Open Elective - Semester ', nc.semester_number), 'Open Elective') as name,
+		       nc.semester_number,
+		       COALESCE(nc.vertical_name, '') as vertical_name,
+		       COUNT(DISTINCT cc.course_id) as course_count
+		FROM normal_cards nc
+		LEFT JOIN curriculum_courses cc ON nc.id = cc.semester_id
+		WHERE nc.curriculum_id = ? AND nc.card_type = 'open_elective' AND nc.status = 1
+		%s
+		GROUP BY nc.id, nc.semester_number, nc.vertical_name
+		HAVING COUNT(DISTINCT cc.course_id) >= 1
+		ORDER BY nc.semester_number IS NULL, nc.semester_number, nc.vertical_name
+	`, verticalFilter)
+
+	rows, err := db.DB.Query(query, curriculumID)
+	if err != nil {
+		log.Println("Error fetching OE cards:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+	defer rows.Close()
+
+	cards := []models.OECardInfo{}
+	for rows.Next() {
+		var card models.OECardInfo
+		var semesterNumber sql.NullInt64
+		var cardName sql.NullString
+		var verticalName sql.NullString
+		err := rows.Scan(&card.ID, &cardName, &semesterNumber, &verticalName, &card.CourseCount)
+		if err != nil {
+			log.Println("Error scanning OE card:", err)
+			continue
+		}
+		if cardName.Valid {
+			card.Name = cardName.String
+		} else {
+			card.Name = "Open Elective"
+		}
+		if verticalName.Valid {
+			card.VerticalName = verticalName.String
+		}
+		if semesterNumber.Valid {
+			sem := int(semesterNumber.Int64)
+			card.Semester = &sem
+		}
+		cards = append(cards, card)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"cards":   cards,
+	})
+}
+
+// SaveHODOEOfferings saves HOD's open elective offerings to other departments
+func SaveHODOEOfferings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Method not allowed",
+		})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Email parameter required",
+		})
+		return
+	}
+
+	var req models.SaveOEOfferingRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		log.Println("Error decoding request:", err)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Invalid request body",
+		})
+		return
+	}
+
+	// Validate request
+	if req.OECardID == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "oe_card_id is required",
+		})
+		return
+	}
+
+	if len(req.AllowedDeptIDs) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "At least one department must be allowed",
+		})
+		return
+	}
+
+	if len(req.SemesterAssignments) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "No course assignments provided",
+		})
+		return
+	}
+
+	// Validate semester range (5-7)
+	for _, assignment := range req.SemesterAssignments {
+		if assignment.Semester < 5 || assignment.Semester > 7 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Open Elective courses must be offered in semesters 5, 6, or 7",
+			})
+			return
+		}
+	}
+
+	// Get HOD's info
+	var userID, departmentID, curriculumID int
+	deptQuery := `
+		SELECT u.id, d.id, COALESCE(dca.curriculum_id, 0)
+		FROM users u
+		INNER JOIN teachers t ON u.email = t.email
+		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+		INNER JOIN departments d ON dt.department_id = d.id
+		LEFT JOIN department_curriculum_active dca ON d.id = dca.department_id AND dca.is_active = 1
+		WHERE u.email = ? AND u.role = 'hod'
+		LIMIT 1
+	`
+
+	err = db.DB.QueryRow(deptQuery, email).Scan(&userID, &departmentID, &curriculumID)
+	if err != nil {
+		log.Println("Error fetching HOD info:", err)
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "HOD profile not found",
+		})
+		return
+	}
+
+	// Validate that the selected OE card is a "Same Department" card
+	var cardVerticalName string
+	cardCheckQuery := `
+		SELECT COALESCE(vertical_name, '') FROM normal_cards 
+		WHERE id = ? AND curriculum_id = ? AND card_type = 'open_elective' AND status = 1
+	`
+	err = db.DB.QueryRow(cardCheckQuery, req.OECardID, curriculumID).Scan(&cardVerticalName)
+	if err != nil {
+		log.Println("Error validating OE card:", err)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Invalid OE card selected",
+		})
+		return
+	}
+	if cardVerticalName != "Same Dept" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Only 'Same Dept' OE cards can be offered to other departments",
+		})
+		return
+	}
+
+	// Cross-department validation: for each allowed department, verify they have a
+	// "Different Dept" OE card that contains each offered course
+	uniqueCourses := map[int]bool{}
+	for _, assignment := range req.SemesterAssignments {
+		uniqueCourses[assignment.CourseID] = true
+	}
+
+	for _, targetDeptID := range req.AllowedDeptIDs {
+		// Get the target department's active curriculum
+		var targetCurrID int
+		err := db.DB.QueryRow(`
+			SELECT COALESCE(curriculum_id, 0) FROM department_curriculum_active 
+			WHERE department_id = ? AND is_active = 1 LIMIT 1
+		`, targetDeptID).Scan(&targetCurrID)
+		if err != nil || targetCurrID == 0 {
+			var deptName string
+			db.DB.QueryRow("SELECT COALESCE(department_name, CONCAT('ID:', id)) FROM departments WHERE id = ?", targetDeptID).Scan(&deptName)
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Department '%s' does not have an active curriculum", deptName),
+			})
+			return
+		}
+
+		// Check that each course exists in the target dept's "Different Dept" OE card
+		for courseID := range uniqueCourses {
+			var count int
+			validationQuery := `
+				SELECT COUNT(*) FROM curriculum_courses cc
+				INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+				WHERE nc.curriculum_id = ?
+				AND nc.card_type = 'open_elective'
+				AND nc.vertical_name = 'Different Dept'
+				AND nc.status = 1
+				AND cc.course_id = ?
+			`
+			err := db.DB.QueryRow(validationQuery, targetCurrID, courseID).Scan(&count)
+			if err != nil || count == 0 {
+				var courseName, courseCode, deptName string
+				db.DB.QueryRow("SELECT COALESCE(course_code,''), COALESCE(course_name,'') FROM courses WHERE id = ?", courseID).Scan(&courseCode, &courseName)
+				db.DB.QueryRow("SELECT COALESCE(department_name, CONCAT('ID:', id)) FROM departments WHERE id = ?", targetDeptID).Scan(&deptName)
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf("Course '%s - %s' is not in department '%s' Different Dept OE card. The target department must add this course to their Different Dept OE card first.", courseCode, courseName, deptName),
+				})
+				return
+			}
+		}
+	}
+
+	// Start transaction
+	tx, err := db.DB.Begin()
+	if err != nil {
+		log.Println("Error starting transaction:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+	defer tx.Rollback()
+
+	// Delete existing OE offerings for this dept/year/batch
+	deleteQuery := `
+		DELETE FROM hod_oe_offerings 
+		WHERE department_id = ? 
+		AND academic_year = ?
+		AND (batch = ? OR (batch IS NULL AND ? = ''))
+	`
+	_, err = tx.Exec(deleteQuery, departmentID, req.AcademicYear, req.Batch, req.Batch)
+	if err != nil {
+		log.Println("Error deleting old OE offerings:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Error clearing previous offerings",
+		})
+		return
+	}
+
+	// Insert new OE offerings
+	insertQuery := `
+		INSERT INTO hod_oe_offerings 
+		(department_id, curriculum_id, oe_card_id, semester, course_id, allowed_dept_ids, academic_year, batch, approved_by_user_id, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	now := time.Now()
+	status := req.Status
+	if status == "" {
+		status = "ACTIVE"
+	}
+
+	// Convert allowed_dept_ids to JSON
+	deptIDsJSON, err := json.Marshal(req.AllowedDeptIDs)
+	if err != nil {
+		log.Println("Error marshaling dept IDs:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Error processing department IDs",
+		})
+		return
+	}
+
+	for _, assignment := range req.SemesterAssignments {
+		var batchVal interface{}
+		if req.Batch != "" {
+			batchVal = req.Batch
+		} else {
+			batchVal = nil
+		}
+
+		_, err = tx.Exec(insertQuery,
+			departmentID,
+			curriculumID,
+			req.OECardID,
+			assignment.Semester,
+			assignment.CourseID,
+			string(deptIDsJSON),
+			req.AcademicYear,
+			batchVal,
+			userID,
+			status,
+			now,
+			now,
+		)
+		if err != nil {
+			log.Println("Error inserting OE offering:", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Error saving OE offerings",
+			})
+			return
+		}
+	}
+
+	// Commit transaction
+	err = tx.Commit()
+	if err != nil {
+		log.Println("Error committing transaction:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Error saving OE offerings",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Open Elective offerings saved successfully: %d courses across semesters", len(req.SemesterAssignments)),
+	})
+}
+
+// GetHODOEOfferings retrieves HOD's saved open elective offerings
+func GetHODOEOfferings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Method not allowed",
+		})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	academicYear := r.URL.Query().Get("academic_year")
+	batch := r.URL.Query().Get("batch")
+
+	if email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Email parameter required",
+		})
+		return
+	}
+
+	// Get HOD's department
+	var departmentID int
+	deptQuery := `
+		SELECT d.id
+		FROM users u
+		INNER JOIN teachers t ON u.email = t.email
+		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+		INNER JOIN departments d ON dt.department_id = d.id
+		WHERE u.email = ? AND u.role = 'hod'
+		LIMIT 1
+	`
+
+	err := db.DB.QueryRow(deptQuery, email).Scan(&departmentID)
+	if err != nil {
+		log.Println("Error fetching department:", err)
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Department not found",
+		})
+		return
+	}
+
+	// Get OE offerings
+	query := `
+		SELECT oe.oe_card_id, 
+		       COALESCE(nc.vertical_name, CONCAT('Open Elective - Semester ', nc.semester_number), 'Open Elective') as card_name,
+		       oe.semester, oe.course_id, 
+		       c.course_code, c.course_name, c.credit, oe.allowed_dept_ids
+		FROM hod_oe_offerings oe
+		INNER JOIN normal_cards nc ON oe.oe_card_id = nc.id
+		INNER JOIN courses c ON oe.course_id = c.id
+		WHERE oe.department_id = ?
+		AND oe.academic_year = ?
+		AND (oe.batch = ? OR (oe.batch IS NULL AND ? = ''))
+		AND oe.status = 'ACTIVE'
+		ORDER BY oe.semester, c.course_code
+	`
+
+	rows, err := db.DB.Query(query, departmentID, academicYear, batch, batch)
+	if err != nil {
+		log.Println("Error fetching OE offerings:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+	defer rows.Close()
+
+	var oeCardID int
+	var oeCardName string
+	assignments := []models.OEAssignmentInfo{}
+
+	for rows.Next() {
+		var tempCardID int
+		var tempCardName string
+		var assignment models.OEAssignmentInfo
+		var deptIDsJSON string
+
+		err := rows.Scan(&tempCardID, &tempCardName, &assignment.Semester, &assignment.CourseID,
+			&assignment.CourseCode, &assignment.CourseName, &assignment.Credit, &deptIDsJSON)
+		if err != nil {
+			log.Println("Error scanning OE offering:", err)
+			continue
+		}
+
+		// Parse JSON allowed_dept_ids
+		if err := json.Unmarshal([]byte(deptIDsJSON), &assignment.AllowedDeptIDs); err != nil {
+			log.Println("Error parsing dept IDs:", err)
+			assignment.AllowedDeptIDs = []int{}
+		}
+
+		oeCardID = tempCardID
+		oeCardName = tempCardName
+		assignments = append(assignments, assignment)
+	}
+
+	response := models.OEOfferingResponse{
+		OECardID:     oeCardID,
+		OECardName:   oeCardName,
+		AcademicYear: academicYear,
+		Batch:        batch,
+		Assignments:  assignments,
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"offering": response,
+	})
+}
+
+// GetOEOfferedToMyDept returns OE courses that other departments are offering TO the current HOD's department
+func GetOEOfferedToMyDept(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Method not allowed",
+		})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	academicYear := r.URL.Query().Get("academic_year")
+	batch := r.URL.Query().Get("batch")
+
+	if email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Email parameter required",
+		})
+		return
+	}
+
+	// Get HOD's department
+	var departmentID int
+	deptQuery := `
+		SELECT d.id
+		FROM users u
+		INNER JOIN teachers t ON u.email = t.email
+		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+		INNER JOIN departments d ON dt.department_id = d.id
+		WHERE u.email = ? AND u.role = 'hod'
+		LIMIT 1
+	`
+	err := db.DB.QueryRow(deptQuery, email).Scan(&departmentID)
+	if err != nil {
+		log.Println("Error fetching department:", err)
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Department not found",
+		})
+		return
+	}
+
+	// Find all OE offerings from other departments where my department is in the allowed_dept_ids
+	// MySQL JSON_CONTAINS can check if departmentID is in the JSON array
+	query := `
+		SELECT oe.department_id, dep.department_name as offering_dept_name,
+		       oe.semester, oe.course_id,
+		       c.course_code, c.course_name, c.credit,
+		       oe.academic_year
+		FROM hod_oe_offerings oe
+		INNER JOIN departments dep ON oe.department_id = dep.id
+		INNER JOIN courses c ON oe.course_id = c.id
+		WHERE oe.department_id != ?
+		AND oe.status = 'ACTIVE'
+		AND oe.academic_year = ?
+		AND (oe.batch = ? OR (oe.batch IS NULL AND ? = ''))
+		AND JSON_CONTAINS(oe.allowed_dept_ids, CAST(? AS JSON))
+		ORDER BY dep.department_name, oe.semester, c.course_code
+	`
+
+	rows, err := db.DB.Query(query, departmentID, academicYear, batch, batch, departmentID)
+	if err != nil {
+		log.Println("Error fetching OE offerings to dept:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+	defer rows.Close()
+
+	type IncomingOECourse struct {
+		OfferingDeptID   int    `json:"offering_dept_id"`
+		OfferingDeptName string `json:"offering_dept_name"`
+		Semester         int    `json:"semester"`
+		CourseID         int    `json:"course_id"`
+		CourseCode       string `json:"course_code"`
+		CourseName       string `json:"course_name"`
+		Credit           int    `json:"credit"`
+		AcademicYear     string `json:"academic_year"`
+	}
+
+	offerings := []IncomingOECourse{}
+	for rows.Next() {
+		var o IncomingOECourse
+		err := rows.Scan(&o.OfferingDeptID, &o.OfferingDeptName, &o.Semester,
+			&o.CourseID, &o.CourseCode, &o.CourseName, &o.Credit, &o.AcademicYear)
+		if err != nil {
+			log.Println("Error scanning incoming OE offering:", err)
+			continue
+		}
+		offerings = append(offerings, o)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"offerings": offerings,
+	})
+}
+
+// ==================== Vertical Lock Handlers ====================
+
+// GetVerticalLocks returns all honour/minor vertical locks for the HOD's department
+func GetVerticalLocks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Method not allowed",
+		})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Email parameter required",
+		})
+		return
+	}
+
+	// Get HOD's department
+	var departmentID int
+	deptQuery := `
+		SELECT d.id
+		FROM users u
+		INNER JOIN teachers t ON u.email = t.email
+		INNER JOIN department_teachers dt ON t.faculty_id = dt.teacher_id
+		INNER JOIN departments d ON dt.department_id = d.id
+		WHERE u.email = ? AND u.role = 'hod'
+		LIMIT 1
+	`
+	err := db.DB.QueryRow(deptQuery, email).Scan(&departmentID)
+	if err != nil {
+		log.Println("Error fetching department:", err)
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Department not found",
+		})
+		return
+	}
+
+	// Fetch all vertical locks for this department
+	query := `
+		SELECT id, department_id, batch, lock_type, vertical_id, vertical_name,
+		       locked_by_user_id, first_semester, first_academic_year
+		FROM honour_minor_vertical_locks
+		WHERE department_id = ?
+		ORDER BY batch, lock_type
+	`
+
+	rows, err := db.DB.Query(query, departmentID)
+	if err != nil {
+		log.Println("Error fetching vertical locks:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+	defer rows.Close()
+
+	locks := []models.VerticalLock{}
+	for rows.Next() {
+		var lock models.VerticalLock
+		if err := rows.Scan(
+			&lock.ID,
+			&lock.DepartmentID,
+			&lock.Batch,
+			&lock.LockType,
+			&lock.VerticalID,
+			&lock.VerticalName,
+			&lock.LockedByUserID,
+			&lock.FirstSemester,
+			&lock.FirstAcademicYear,
+		); err != nil {
+			log.Println("Error scanning vertical lock:", err)
+			continue
+		}
+		locks = append(locks, lock)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"locks":   locks,
+	})
+}
+
+// lookupCourseVertical finds the vertical_id and vertical_name for a given course_id via curriculum_courses → normal_cards
+func lookupCourseVertical(courseID int, curriculumID int) (int, string, error) {
+	var verticalID int
+	var verticalName string
+	query := `
+		SELECT nc.id, nc.vertical_name
+		FROM curriculum_courses cc
+		INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+		WHERE cc.course_id = ? AND cc.curriculum_id = ?
+		AND nc.card_type IN ('vertical', 'open_elective')
+		AND nc.status = 1
+		LIMIT 1
+	`
+	err := db.DB.QueryRow(query, courseID, curriculumID).Scan(&verticalID, &verticalName)
+	return verticalID, verticalName, err
 }

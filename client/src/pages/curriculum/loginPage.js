@@ -1,13 +1,123 @@
-import React, { useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { API_BASE_URL } from '../../config'
+import { API_BASE_URL, GOOGLE_CLIENT_ID } from '../../config'
 
 function LoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false)
+  const googleButtonRef = useRef(null)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    console.log('GOOGLE_CLIENT_ID:', GOOGLE_CLIENT_ID)
+  }, [])
+
+  const persistLoginAndNavigate = useCallback((data) => {
+    localStorage.setItem('userRole', data.user.role)
+    localStorage.setItem('userEmail', data.user.email)
+    localStorage.setItem('userId', data.user.id)
+    localStorage.setItem('user_id', data.user.id)
+    localStorage.setItem('username', data.user.username)
+
+    if ((data.user.role === 'teacher' || data.user.role === 'hod') && data.teacher_data) {
+      const teacherData = data.teacher_data
+      localStorage.setItem('teacherId', teacherData.teacher_id)
+      localStorage.setItem('teacher_id', teacherData.teacher_id)
+      localStorage.setItem('faculty_id', teacherData.faculty_id || '')
+      localStorage.setItem('teacher_name', teacherData.name || '')
+      localStorage.setItem('teacher_email', teacherData.email || '')
+      localStorage.setItem('teacher_dept', teacherData.dept || '')
+      localStorage.setItem('teacher_designation', teacherData.designation || '')
+      localStorage.setItem('userName', teacherData.name || data.user.username)
+    } else {
+      localStorage.setItem('userName', data.user.full_name || data.user.username)
+    }
+
+    const role = data.user.role
+    const roleRoutes = {
+      admin: '/dashboard',
+      hod: '/curriculum',
+      hr: '/hr/faculty',
+      teacher: '/teacher-dashboard',
+      student: '/student/elective-selection',
+    }
+
+    navigate(roleRoutes[role] || '/dashboard')
+  }, [navigate])
+
+  const handleGoogleCredential = useCallback(async (response) => {
+    if (!response?.credential) {
+      setError('Google sign-in failed. Please try again.')
+      return
+    }
+
+    setError('')
+    setIsGoogleLoading(true)
+    try {
+      const apiResponse = await fetch(`${API_BASE_URL}/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: response.credential }),
+      })
+
+      const data = await apiResponse.json()
+      if (!apiResponse.ok || !data.success) {
+        throw new Error(data.message || 'Google login failed')
+      }
+
+      persistLoginAndNavigate(data)
+    } catch (err) {
+      setError(err.message || 'Google sign-in failed. Please try again.')
+    } finally {
+      setIsGoogleLoading(false)
+    }
+  }, [persistLoginAndNavigate])
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) return
+
+    const initializeGoogle = () => {
+      if (!window.google?.accounts?.id || !googleButtonRef.current) return
+
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredential,
+      })
+
+      googleButtonRef.current.innerHTML = ''
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: 'outline',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'rectangular',
+        width: 360,
+      })
+    }
+
+    if (window.google?.accounts?.id) {
+      initializeGoogle()
+      return
+    }
+
+    const scriptId = 'google-identity-services'
+    let script = document.getElementById(scriptId)
+    if (!script) {
+      script = document.createElement('script')
+      script.id = scriptId
+      script.src = 'https://accounts.google.com/gsi/client'
+      script.async = true
+      script.defer = true
+      document.head.appendChild(script)
+    }
+
+    script.addEventListener('load', initializeGoogle)
+    return () => {
+      script.removeEventListener('load', initializeGoogle)
+    }
+  }, [handleGoogleCredential])
 
   const handleLogin = async (e) => {
     e.preventDefault()
@@ -25,45 +135,9 @@ function LoginPage() {
       const data = await response.json();
 
       if (data.success) {
-        // Store user info in localStorage
-        localStorage.setItem('userRole', data.user.role)
-        localStorage.setItem('userEmail', data.user.email)
-        localStorage.setItem('userId', data.user.id)
-        localStorage.setItem('user_id', data.user.id) // Store with underscore for consistency
-        localStorage.setItem('username', data.user.username) // Store username for API calls
-        
-        // Store teacher data if teacher role and teacher_data exists
-        if ((data.user.role === 'teacher' || data.user.role === 'hod') && data.teacher_data) {
-          const teacherData = data.teacher_data
-          localStorage.setItem('teacherId', teacherData.teacher_id)
-          localStorage.setItem('teacher_id', teacherData.teacher_id)
-          localStorage.setItem('faculty_id', teacherData.faculty_id || '')
-          localStorage.setItem('teacher_name', teacherData.name || '')
-          localStorage.setItem('teacher_email', teacherData.email || '')
-          localStorage.setItem('teacher_dept', teacherData.dept || '')
-          localStorage.setItem('teacher_designation', teacherData.designation || '')
-          localStorage.setItem('userName', teacherData.name || data.user.username)
-          console.log('Stored teacher data:', teacherData)
-        } else {
-          localStorage.setItem('userName', data.user.full_name || data.user.username)
-        }
-        
-        console.log('Login successful, stored email:', data.user.email);
-        
         setUsername('')
         setPassword('')
-        
-        // Navigate to first available page for the user's role
-        const role = data.user.role;
-        const roleRoutes = {
-          'admin': '/dashboard',
-          'hod': '/curriculum',
-          'hr': '/hr/faculty',
-          'teacher': '/teacher-dashboard',
-          'student': '/student/elective-selection'
-        };
-        
-        navigate(roleRoutes[role] || '/dashboard')
+        persistLoginAndNavigate(data)
       } else {
         setError(data.message || 'Invalid username or password')
         setIsLoading(false)
@@ -185,10 +259,30 @@ function LoginPage() {
               </div>
             )}
 
+            {GOOGLE_CLIENT_ID && (
+              <>
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-200"></div>
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-gray-500">or</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div ref={googleButtonRef} className="w-full flex justify-center" />
+                  {isGoogleLoading && (
+                    <p className="text-xs text-gray-500 text-center">Signing in with Google...</p>
+                  )}
+                </div>
+              </>
+            )}
+
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || isGoogleLoading}
               className="w-full btn-primary-custom disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
             >
               {isLoading ? (

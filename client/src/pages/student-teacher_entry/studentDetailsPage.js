@@ -102,6 +102,44 @@
     const [showForm, setShowForm] = useState(false)
     const [editingStudent, setEditingStudent] = useState(null)
 
+    // Import state
+    const [showImportModal, setShowImportModal] = useState(false)
+    const [importFile, setImportFile] = useState(null)
+    const [importLoading, setImportLoading] = useState(false)
+    const [importResult, setImportResult] = useState(null)
+
+    const handleDownloadTemplate = () => {
+      window.open(`${API_BASE_URL}/students/import/template`, '_blank')
+    }
+
+    const handleImportSubmit = async () => {
+      if (!importFile) return
+      setImportLoading(true)
+      setImportResult(null)
+      try {
+        const formData = new FormData()
+        formData.append('file', importFile)
+        const res = await fetch(`${API_BASE_URL}/students/import`, {
+          method: 'POST',
+          body: formData,
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Import failed')
+        setImportResult({ success: true, ...data })
+        if (data.inserted > 0) fetchStudents()
+      } catch (err) {
+        setImportResult({ success: false, error: err.message })
+      } finally {
+        setImportLoading(false)
+      }
+    }
+
+    const closeImportModal = () => {
+      setShowImportModal(false)
+      setImportFile(null)
+      setImportResult(null)
+    }
+
     // Auto-calculate age from DOB
     const calculateAge = (dob) => {
       if (!dob) return ''
@@ -491,6 +529,26 @@
               />
               <button
                 type="button"
+                onClick={handleDownloadTemplate}
+                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors flex items-center space-x-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                <span>Download Template</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowImportModal(true)}
+                className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors flex items-center space-x-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12" />
+                </svg>
+                <span>Import Students</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowForm(true)}
                 className="btn-primary-custom"
               >
@@ -517,6 +575,120 @@
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
               <p className="text-sm font-medium text-green-600">{success}</p>
+            </div>
+          )}
+
+          {/* Import Modal */}
+          {showImportModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+                {/* Modal Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900">Import Students from Excel</h3>
+                    <p className="text-sm text-gray-500 mt-0.5">Upload an .xlsx file to bulk-add students</p>
+                  </div>
+                  <button onClick={closeImportModal} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="px-6 py-5 space-y-4">
+                  {/* Template hint */}
+                  <div className="flex items-start space-x-3 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                    <svg className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="text-sm text-blue-700">
+                      Use the{' '}
+                      <button onClick={handleDownloadTemplate} className="font-semibold underline hover:no-underline">
+                        Excel template
+                      </button>
+                      {' '}to ensure correct column structure. The first row must be the header.
+                    </p>
+                  </div>
+
+                  {/* File picker */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Select Excel File (.xlsx)</label>
+                    <input
+                      type="file"
+                      accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                      onChange={(e) => { setImportFile(e.target.files[0] || null); setImportResult(null) }}
+                      className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 border border-gray-200 rounded-lg p-1"
+                    />
+                    {importFile && (
+                      <p className="text-xs text-gray-500 mt-1">{importFile.name} &mdash; {(importFile.size / 1024).toFixed(1)} KB</p>
+                    )}
+                  </div>
+
+                  {/* Result panel */}
+                  {importResult && (
+                    <div className="space-y-3">
+                      {importResult.success ? (
+                        <>
+                          <div className="flex items-center space-x-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                            <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                            </svg>
+                            <p className="text-sm font-medium text-green-700">
+                              {importResult.inserted} student{importResult.inserted !== 1 ? 's' : ''} imported successfully
+                              {importResult.skipped > 0 && `, ${importResult.skipped} blank row${importResult.skipped !== 1 ? 's' : ''} skipped`}
+                            </p>
+                          </div>
+                          {importResult.errors && importResult.errors.length > 0 && (
+                            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                              <p className="text-sm font-semibold text-yellow-800 mb-2">Rows with errors ({importResult.errors.length})</p>
+                              <div className="space-y-1 max-h-36 overflow-y-auto">
+                                {importResult.errors.map((e, i) => (
+                                  <p key={i} className="text-xs text-yellow-700">
+                                    <span className="font-medium">Row {e.row}:</span> {e.message}
+                                  </p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex items-start space-x-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                          <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                          </svg>
+                          <p className="text-sm text-red-700">{importResult.error}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Footer */}
+                <div className="flex items-center justify-end space-x-3 px-6 py-4 border-t border-gray-100 bg-gray-50">
+                  <button
+                    type="button"
+                    onClick={closeImportModal}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleImportSubmit}
+                    disabled={!importFile || importLoading}
+                    className="px-5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                  >
+                    {importLoading ? (
+                      <>
+                        <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        <span>Importing...</span>
+                      </>
+                    ) : (
+                      <span>Upload &amp; Import</span>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

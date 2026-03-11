@@ -20,6 +20,7 @@ function MarkEntryPage() {
   const [absentees, setAbsentees] = useState([]) // [{student_id, mark_category_id}]
   const [applicableWindows, setApplicableWindows] = useState([])
   const [selectedWindowId, setSelectedWindowId] = useState(null)
+  const [selectedDepartment, setSelectedDepartment] = useState('all') // 'all' or department_id
   const [autoSaveStatus, setAutoSaveStatus] = useState('') // '', 'saving', 'saved', 'error'
   const autoSaveTimerRef = useRef(null)
   const pendingMarksRef = useRef({})
@@ -178,6 +179,22 @@ function MarkEntryPage() {
       setSelectedWindowId(null)
     }
   }
+
+  useEffect(() => {
+    if (!isTeacher) return
+
+    const selectedWindow = applicableWindows.find((w) => w.id === selectedWindowId) || applicableWindows[0]
+    if (!selectedWindow) {
+      setSelectedDepartment('all')
+      return
+    }
+
+    if (selectedWindow.department_id) {
+      setSelectedDepartment(String(selectedWindow.department_id))
+    } else {
+      setSelectedDepartment('all')
+    }
+  }, [isTeacher, applicableWindows, selectedWindowId])
 
   const fetchMarkCategories = async () => {
     try {
@@ -344,7 +361,12 @@ function MarkEntryPage() {
     }
   }
 
-  // Update students when course changes
+  // Reset department filter when course changes
+  useEffect(() => {
+    setSelectedDepartment('all')
+  }, [selectedCourse?.course_id])
+
+  // Update students when course, learning mode, or department changes
   useEffect(() => {
     if (!selectedCourse) return
 
@@ -357,11 +379,14 @@ function MarkEntryPage() {
       enrichStudentsWithEnrollmentNumbers(selectedCourse.enrollments).then((enrichedStudents) => {
         setAllStudents(enrichedStudents)
         
-        // Filter students by learning mode (UAL=1, PBL=2)
+        // Filter students by learning mode (UAL=1, PBL=2) AND department
         const learningModeId = learningMode === 'UAL' ? 1 : 2
-        const filteredStudents = enrichedStudents.filter(
-          (student) => student.learning_mode_id === learningModeId
-        )
+        const filteredStudents = enrichedStudents.filter((student) => {
+          const matchesLearningMode = student.learning_mode_id === learningModeId
+          const matchesDept = selectedDepartment === 'all' || 
+            String(student.department_id) === String(selectedDepartment)
+          return matchesLearningMode && matchesDept
+        })
         
         setStudents(filteredStudents)
       })
@@ -373,7 +398,7 @@ function MarkEntryPage() {
       })
       setStudentMarks(newMarks)
     }
-  }, [selectedCourse, learningMode, username, teacherId])
+  }, [selectedCourse, learningMode, selectedDepartment, username, teacherId])
 
   const fetchUserAssignedStudents = async () => {
     try {
@@ -403,11 +428,14 @@ function MarkEntryPage() {
         return
       }
       
-      // Filter by learning mode (include students with missing learning_mode_id)
+      // Filter by learning mode AND department
       const learningModeId = learningMode === 'UAL' ? 1 : 2
-      const filteredStudents = studentList.filter(
-        (student) => !student.learning_mode_id || student.learning_mode_id === learningModeId
-      )
+      const filteredStudents = studentList.filter((student) => {
+        const matchesLearningMode = !student.learning_mode_id || student.learning_mode_id === learningModeId
+        const matchesDept = selectedDepartment === 'all' || 
+          String(student.department_id) === String(selectedDepartment)
+        return matchesLearningMode && matchesDept
+      })
       
       setStudents(filteredStudents)
       
@@ -776,7 +804,7 @@ function MarkEntryPage() {
       setSavingMarks(false)
     }
   }
-  const handleFillOnes = () => {
+  const handleFillRandomMarks = () => {
     const updated = { ...studentMarks }
     students.forEach((student) => {
       if (!updated[student.student_id]) {
@@ -784,11 +812,13 @@ function MarkEntryPage() {
       }
       filteredMarkCategories.forEach((category) => {
         if (isCellAbsent(student.student_id, category.id)) return
-        updated[student.student_id][category.id] = 1
+        const maxMarks = Number(category.max_marks) || 0
+        const randomScore = Math.floor(Math.random() * (Math.floor(maxMarks) + 1))
+        updated[student.student_id][category.id] = randomScore
       })
     })
     setStudentMarks(updated)
-    setMessage({ type: 'success', text: 'Filled mark cells with 1 for current students/components.' })
+    setMessage({ type: 'success', text: 'Filled mark cells with random integer scores based on each component max.' })
   }
 
   const handleSaveMarks = async () => {
@@ -855,17 +885,17 @@ function MarkEntryPage() {
                 ))}
               </select>
               {selectedCourse && (
-                <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
-                  <div>
-                    <span className="font-medium text-gray-700">Category:</span> {selectedCourse.category}
+                  <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
+                    <div>
+                      <span className="font-medium text-gray-700">Category:</span> {selectedCourse.category}
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Credit:</span> {selectedCourse.credit}
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Students:</span> {selectedCourse.enrollments?.length || 0}
+                    </div>
                   </div>
-                  <div>
-                    <span className="font-medium text-gray-700">Credit:</span> {selectedCourse.credit}
-                  </div>
-                  <div>
-                    <span className="font-medium text-gray-700">Students:</span> {selectedCourse.enrollments?.length || 0}
-                  </div>
-                </div>
               )}
             </div>
           </div>
@@ -917,6 +947,67 @@ function MarkEntryPage() {
           </div>
         )}
 
+        {/* Department Filter - shown when students are from multiple departments */}
+        {selectedCourse && (() => {
+          const deptMap = new Map()
+          ;(allStudents || []).forEach(s => {
+            if (s.department_id && s.department_name) {
+              deptMap.set(String(s.department_id), s.department_name)
+            }
+          })
+          const departments = Array.from(deptMap, ([id, name]) => ({ id, name }))
+
+          const selectedWindow = applicableWindows.find((w) => w.id === selectedWindowId) || applicableWindows[0]
+          const lockedDeptId = selectedWindow?.department_id ? String(selectedWindow.department_id) : null
+          const isWindowLocked = Boolean(lockedDeptId)
+          
+          // Show filter if multi-dept students OR if window is dept-locked
+          if (departments.length <= 1 && !isWindowLocked) return null
+          return (
+            <div className={`rounded-lg p-4 border shadow-sm ${isWindowLocked ? 'bg-amber-50 border-amber-200' : 'bg-teal-50 border-teal-100'}`}>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex-1">
+                  <h4 className="text-sm font-semibold text-gray-700 mb-1">
+                    {isWindowLocked ? 'Department (Window Restricted)' : 'Department Filter'}
+                  </h4>
+                  <p className="text-xs text-gray-600">
+                    {isWindowLocked 
+                      ? `Mark entry window is open only for ${deptMap.get(lockedDeptId) || 'this department'}. Only students from this department are shown.`
+                      : 'This course has students from multiple departments. Filter by department to enter marks separately.'}
+                  </p>
+                </div>
+                <div className="min-w-[240px]">
+                  <select
+                    value={selectedDepartment}
+                    onChange={(e) => setSelectedDepartment(e.target.value)}
+                    disabled={isWindowLocked}
+                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none text-sm ${
+                      isWindowLocked 
+                        ? 'border-amber-300 bg-amber-100 text-amber-800 cursor-not-allowed'
+                        : 'border-teal-300 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white'
+                    }`}
+                  >
+                    {!isWindowLocked && <option value="all">All Departments ({allStudents.length} students)</option>}
+                    {departments.map(dept => {
+                      const count = allStudents.filter(s => String(s.department_id) === dept.id).length
+                      return (
+                        <option key={dept.id} value={dept.id}>
+                          {dept.name} ({count} students)
+                        </option>
+                      )
+                    })}
+                  </select>
+                </div>
+              </div>
+              {selectedDepartment !== 'all' && (
+                <div className={`mt-2 text-xs ${isWindowLocked ? 'text-amber-700' : 'text-teal-700'}`}>
+                  Showing students from: <span className="font-semibold">{deptMap.get(selectedDepartment)}</span>
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
         {/* Debug: Applicable Window Selector (faculty only, shown only if multiple windows apply) */}
         {isTeacher && selectedCourse && applicableWindows.length > 1 && (
           <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 shadow-sm">
@@ -933,7 +1024,7 @@ function MarkEntryPage() {
                 >
                   {applicableWindows.map((window) => (
                     <option key={window.id} value={window.id}>
-                      Window #{window.id} | {window.start_at} to {window.end_at}
+                      {window.window_name || `Window #${window.id}`} | {window.start_at} to {window.end_at}
                     </option>
                   ))}
                 </select>
@@ -961,12 +1052,12 @@ function MarkEntryPage() {
                     </span>
                   ) : (
                     <>
-                      <button
-                        onClick={handleFillOnes}
+                      {/* <button
+                        onClick={handleFillRandomMarks}
                         disabled={savingMarks}
                         className="px-5 py-2 bg-gray-600 text-white text-sm font-medium rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                       >
-                        Fill 1s
+                        Fill Random
                       </button>
                       <button
                         onClick={handleSaveMarks}
@@ -974,7 +1065,7 @@ function MarkEntryPage() {
                         className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                       >
                         {savingMarks ? 'Saving...' : 'Save'}
-                      </button>
+                      </button> */}
                       {/* Auto-save status indicator */}
                       {autoSaveStatus && (
                         <div className="flex items-center gap-2 text-sm">
@@ -1101,19 +1192,9 @@ function MarkEntryPage() {
                               return (
                                 <td key={category.id} className="px-3 py-3 text-center border-r border-gray-200" style={{ minWidth: '140px', maxWidth: '180px' }}>
                                   {isSubmitted ? (
-                                    isCellAbsent(student.student_id, category.id) ? (
-                                      <span className="inline-flex items-center gap-1 text-red-400 text-xs font-medium tracking-wide">
-                                        <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                          <circle cx="12" cy="12" r="10" />
-                                          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-                                        </svg>
-                                        Absent
-                                      </span>
-                                    ) : (
                                       <span className="inline-block w-20 px-2 py-1 text-center text-sm font-medium text-gray-700 bg-gray-100 rounded border border-gray-200">
                                         {earned ?? '—'}
                                       </span>
-                                    )
                                   ) : isCellAbsent(student.student_id, category.id) ? (
                                     <span className="inline-flex items-center gap-1 text-red-300 text-xs font-medium tracking-wide">
                                       <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
