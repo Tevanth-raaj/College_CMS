@@ -108,7 +108,6 @@ func main() {
 	if err := db.MigrateTeacherCourseLimitsTeacherID(); err != nil {
 		log.Fatal("Failed to migrate teacher_course_limits teacher_id column:", err)
 	}
-
 	// Add window_name to mark_entry_windows for auto-generated window names
 	if err := db.AddWindowNameToMarkEntryWindows(); err != nil {
 		log.Fatal("Failed to add window_name to mark_entry_windows:", err)
@@ -125,7 +124,7 @@ func main() {
 	fileServer := http.FileServer(uploadDir)
 	router.PathPrefix("/uploads/").Handler(http.StripPrefix("/uploads/", fileServer))
 
-	// Wrap with CORS middleware
+	// Wrap with CORS middlewarello
 	handler := middleware.CORSMiddleware(router)
 
 	// Get port from environment or default to 5000

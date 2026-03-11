@@ -251,13 +251,17 @@ const ElectiveSelectionPage = () => {
 
     setIsSubmitting(true);
     try {
+      const selectionIds = Object.values(selections)
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+
       const response = await fetch(
         `${API_BASE_URL}/students/electives/selections?email=${userEmail}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            selections: selections,
+            selection_ids: selectionIds,
             semester: electiveData.next_semester
           })
         }

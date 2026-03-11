@@ -202,17 +202,10 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT 
 			ca.id, ca.course_id, c.course_code, c.course_name, ct.course_type, 
-			c.credit, COALESCE(c.category, 'General'),
-			cc.curriculum_id, nc.semester_number,
-			cur.name as curriculum_name,
-			dc.department_id
+			c.credit, COALESCE(c.category, 'General')
 		FROM teacher_course_allocation ca
 		JOIN courses c ON ca.course_id = c.id
 		LEFT JOIN course_type ct ON c.course_type = ct.id
-		LEFT JOIN curriculum_courses cc ON c.id = cc.course_id
-		LEFT JOIN normal_cards nc ON cc.semester_id = nc.id
-		LEFT JOIN curriculum cur ON cc.curriculum_id = cur.id
-		LEFT JOIN department_curriculum dc ON cur.id = dc.curriculum_id
 		WHERE ca.teacher_id = ?
 		ORDER BY c.course_code
 	`
@@ -230,6 +223,15 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		StudentID      int    `json:"student_id"`
 		StudentName    string `json:"student_name"`
 		LearningModeID *int   `json:"learning_mode_id"`
+		DepartmentID   *int   `json:"department_id"`
+		DepartmentName string `json:"department_name"`
+	}
+
+	type DepartmentInfo struct {
+		DepartmentID   *int   `json:"department_id"`
+		DepartmentName string `json:"department_name"`
+		Semester       *int   `json:"semester"`
+		CurriculumName string `json:"curriculum_name"`
 	}
 
 	type TeacherCourse struct {
@@ -244,6 +246,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		Semester                  *int                `json:"semester"`
 		CurriculumName            string              `json:"curriculum_name"`
 		DepartmentID              *int                `json:"department_id"`
+		Departments               []DepartmentInfo    `json:"departments"`
 		Enrollments               []StudentEnrollment `json:"enrollments"`
 		HasWindow                 bool                `json:"has_window"`
 		Window                    *MarkEntryWindow    `json:"window"`
@@ -260,32 +263,58 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	courseCount := 0
 	for rows.Next() {
 		var course TeacherCourse
-		var curriculumID, semester, departmentID sql.NullInt64
-		var curriculumName sql.NullString
 		err := rows.Scan(&course.ID, &course.CourseID, &course.CourseCode, &course.CourseName,
-			&course.CourseType, &course.Credit, &course.Category,
-			&curriculumID, &semester, &curriculumName, &departmentID)
+			&course.CourseType, &course.Credit, &course.Category)
 		if err != nil {
 			log.Printf("Error scanning course row: %v", err)
 			continue
 		}
-		if curriculumID.Valid {
-			id := int(curriculumID.Int64)
-			course.CurriculumID = &id
-		}
-		if semester.Valid {
-			sem := int(semester.Int64)
-			course.Semester = &sem
-		}
-		if curriculumName.Valid {
-			course.CurriculumName = curriculumName.String
-		}
-		if departmentID.Valid {
-			deptId := int(departmentID.Int64)
-			course.DepartmentID = &deptId
-		}
 		courseCount++
-		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s, Dept=%v, Sem=%v", courseCount, course.CourseID, course.CourseCode, course.CourseName, course.DepartmentID, course.Semester)
+		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s", courseCount, course.CourseID, course.CourseCode, course.CourseName)
+
+		deptQuery := `
+			SELECT DISTINCT d.id, d.department_name, nc.semester_number, cur.name
+			FROM curriculum_courses cc
+			JOIN normal_cards nc ON cc.semester_id = nc.id
+			JOIN curriculum cur ON cc.curriculum_id = cur.id
+			JOIN departments d ON d.current_curriculum_id = cur.id
+			WHERE cc.course_id = ?
+		`
+		deptRows, deptErr := db.DB.Query(deptQuery, course.CourseID)
+		if deptErr != nil {
+			log.Printf("Error fetching departments for course %d: %v", course.CourseID, deptErr)
+		} else {
+			course.Departments = []DepartmentInfo{}
+			for deptRows.Next() {
+				var info DepartmentInfo
+				var depID sql.NullInt64
+				var depName sql.NullString
+				var depSem sql.NullInt64
+				var curName sql.NullString
+				if err := deptRows.Scan(&depID, &depName, &depSem, &curName); err != nil {
+					continue
+				}
+				if depID.Valid {
+					v := int(depID.Int64)
+					info.DepartmentID = &v
+				}
+				if depName.Valid {
+					info.DepartmentName = depName.String
+				}
+				if depSem.Valid {
+					v := int(depSem.Int64)
+					info.Semester = &v
+				}
+				if curName.Valid {
+					info.CurriculumName = curName.String
+				}
+				course.Departments = append(course.Departments, info)
+			}
+			deptRows.Close()
+		}
+		if course.Departments == nil {
+			course.Departments = []DepartmentInfo{}
+		}
 
 		// Check if there's an active mark entry window for this course
 		windowOpen, windowIDs, windowComponents, err := resolveMarkEntryWindow(course.CourseID, facultyID)
@@ -458,9 +487,10 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 
 		// Fetch allocated students for this course and teacher
 		studentQuery := `
-			SELECT DISTINCT s.id, s.student_name, s.learning_mode_id
+			SELECT DISTINCT s.id, s.student_name, s.learning_mode_id, s.department_id, COALESCE(d.department_name, '')
 			FROM course_student_teacher_allocation csta
 			JOIN students s ON csta.student_id = s.id
+			LEFT JOIN departments d ON s.department_id = d.id
 			WHERE csta.course_id = ? AND csta.teacher_id = ?
 			ORDER BY s.student_name
 		`
@@ -475,7 +505,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			for sRows.Next() {
 				studentCount++
 				var enrollment StudentEnrollment
-				if err := sRows.Scan(&enrollment.StudentID, &enrollment.StudentName, &enrollment.LearningModeID); err != nil {
+				if err := sRows.Scan(&enrollment.StudentID, &enrollment.StudentName, &enrollment.LearningModeID, &enrollment.DepartmentID, &enrollment.DepartmentName); err != nil {
 					log.Printf("Error scanning student row: %v", err)
 					continue
 				}

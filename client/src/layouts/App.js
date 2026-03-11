@@ -32,8 +32,11 @@ import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
 import MarkEntryPermissionsPage from "../pages/curriculum/MarkEntryPermissionsPage";
+import HODMarkEntryDashboardPage from "../pages/curriculum/HODMarkEntryDashboardPage";
+import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
+import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
 
 //404 page
 import NotFoundPage from "../components/NotFoundPage";
@@ -86,17 +89,30 @@ function App() {
             element={<MarkEntryPermissionsPage />}
           />
           <Route
+            path="mark-monitor"
+            element={<HODMarkEntryDashboardPage />}
+          />
+          <Route path="result-analysis" element={<ResultAnalysisPage />} />
+          <Route
             path="my-assigned-students"
             element={<MyAssignedStudentsPage />}
           />
 
           <Route path="course-allocation" element={<CourseAllocationPage />} />
+          <Route path="elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="teacher/course-selection" element={<TeacherCourseSelectionPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="hr/faculty" element={<HRFacultyPage />} />
+          <Route path="hr/appeals-review" element={<HRAppealsReviewPage />} />
           <Route
             path="elective-management"
             element={<ElectiveManagementPage />}
           />
           <Route path="hod/elective-management" element={<HODElectivePage />} />
+          <Route path="hod/honour-minor-eligibility" element={<HODHonourMinorEligibilityPage />} />
           <Route path="academic-calendar" element={<AcademicCalendarPage />} />
+          <Route path="exam-absentees" element={<AbsenteesPage />} />
 
           <Route path="regulations" element={<RegulationPage />} />
           <Route

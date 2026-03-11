@@ -177,9 +177,11 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/mark-entry/overview", curriculum.GetHODMarkEntryOverview).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/window-monitor", curriculum.GetHODWindowMonitor).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/admin/mark-entry/window-monitor", curriculum.GetAdminWindowMonitor).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/mark-entry/random-fill", curriculum.AdminFillRandomMarksForWindow).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/teacher-students", curriculum.GetTeacherEnteredStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/result-analysis", curriculum.GetResultAnalysis).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/mark-entry/download", curriculum.DownloadMarkEntryReport).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/mark-entry/download", curriculum.DownloadMarkEntryReport).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions/request", curriculum.CreateMarkEntryExtensionRequest).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions", curriculum.GetMarkEntryExtensionRequests).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/extensions/{id}/approve", curriculum.UpdateMarkEntryExtensionRequestStatus).Methods("POST", "OPTIONS")
@@ -214,6 +216,7 @@ func SetupRoutes() *mux.Router {
 
 	// Authentication routes
 	router.HandleFunc("/api/auth/login", curriculum.Login).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/auth/google", curriculum.GoogleLogin).Methods("POST", "OPTIONS")
 
 	// Elective Management routes
 	router.HandleFunc("/api/hod/profile", curriculum.GetHODProfile).Methods("GET", "OPTIONS")
@@ -269,6 +272,8 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/users/{id}/password", curriculum.ChangePassword).Methods("PUT", "OPTIONS")
 
 	// Student-Teacher Entry routes
+	router.HandleFunc("/api/students/import/template", studentteacher.DownloadStudentImportTemplate).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/students/import", studentteacher.ImportStudents).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/students", studentteacher.GetStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students/{id}", studentteacher.GetStudent).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students", studentteacher.CreateStudent).Methods("POST", "OPTIONS")

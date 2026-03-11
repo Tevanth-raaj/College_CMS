@@ -452,36 +452,54 @@ const HRFacultyPage = () => {
         </div>
 
         {/* Main Content */}
-        <div className="flex-1 flex overflow-hidden bg-gray-50">
+        <div className="flex-1 overflow-hidden bg-gray-50">
           {/* Faculty List */}
-          <div className="w-full bg-white flex flex-col transition-all duration-300">
-            <div className="flex-1 overflow-y-auto">
-              <div className="max-w-7xl mx-auto px-8 py-8">
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                  <table className="min-w-full">
-                    <thead className="sticky top-0 bg-gradient-to-r from-gray-50 to-gray-100 z-10">
+          <div className="w-full h-full flex flex-col">
+            <div className="flex-1 px-8 py-8 overflow-hidden">
+              <div className="max-w-7xl mx-auto h-full">
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-auto h-full">
+                  <table className="min-w-full relative">
+                    <thead className="sticky top-0 bg-gradient-to-r from-gray-50 to-gray-100 z-10 shadow-sm">
                       <tr className="border-b-2 border-gray-200">
-                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider bg-gradient-to-r from-gray-50 to-gray-100">
                           Faculty ID
                         </th>
-                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider bg-gradient-to-r from-gray-50 to-gray-100">
                           Name
                         </th>
-                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider bg-gradient-to-r from-gray-50 to-gray-100">
                           Email
                         </th>
-                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                        <th className="px-6 py-5 text-left text-xs font-bold text-gray-700 uppercase tracking-wider bg-gradient-to-r from-gray-50 to-gray-100">
                           Status
                         </th>
-                        <th className="px-6 py-5 text-center text-xs font-bold text-gray-700 uppercase tracking-wider">
-                          Courses Assigned
-                        </th>
+                        {courseTypes.map((courseType, idx) => {
+                          // Get proper abbreviation for course type
+                          const getAbbreviation = (name) => {
+                            const lowerName = name.toLowerCase();
+                            // Check for combined types first
+                            if (lowerName.includes('theory') && lowerName.includes('lab')) return 'TL';
+                            if (lowerName.includes('tutorial')) return 'TL';
+                            if (lowerName.includes('theory')) return 'T';
+                            if (lowerName.includes('lab')) return 'L';
+                            // Fallback to first letter if no match
+                            return name.substring(0, 1).toUpperCase();
+                          };
+                          
+                          return (
+                            <th key={courseType.id} className="px-4 py-5 text-center text-xs font-bold text-gray-700 uppercase tracking-wider bg-gradient-to-r from-gray-50 to-gray-100">
+                              <div className="flex flex-col items-center">
+                                <span className="mb-1">{getAbbreviation(courseType.name)}</span>
+                              </div>
+                            </th>
+                          );
+                        })}
                       </tr>
                     </thead>
                     <tbody className="bg-white">
                       {filteredFaculty.length === 0 ? (
                         <tr>
-                          <td colSpan="5" className="px-6 py-20 text-center text-gray-500">
+                          <td colSpan={4 + courseTypes.length} className="px-6 py-20 text-center text-gray-500">
                             <div className="flex flex-col items-center">
                               <svg className="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -492,54 +510,60 @@ const HRFacultyPage = () => {
                           </td>
                         </tr>
                       ) : (
-                        filteredFaculty.map((f) => (
-                          <tr 
-                            key={f.id} 
-                            onClick={() => handleFacultyClick(f)}
-                            className="cursor-pointer hover:bg-blue-50 transition-all border-b border-gray-100"
-                          >
-                            <td className="px-6 py-5 whitespace-nowrap">
-                              <span className="text-sm font-bold text-gray-900 bg-gray-100 px-3 py-1 rounded">{f.faculty_id}</span>
-                            </td>
-                            <td className="px-6 py-5 whitespace-nowrap">
-                              <div className="flex items-center">
-                                {f.profile_img?.Valid && f.profile_img.String ? (
-                                  <img
-                                    src={f.profile_img.String}
-                                    alt={f.name}
-                                    className="h-10 w-10 rounded-full mr-3 object-cover border-2 border-gray-200 shadow"
-                                  />
-                                ) : (
-                                  <div className="h-10 w-10 rounded-full bg-gradient-to-br from-primary to-primary_medium flex items-center justify-center mr-3 shadow text-white font-bold text-sm">
-                                    {f.name.charAt(0).toUpperCase()}
-                                  </div>
-                                )}
-                                <span className="text-base font-semibold text-gray-900">{f.name}</span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-5 whitespace-nowrap">
-                              <span className="text-sm text-gray-600">{f.email}</span>
-                            </td>
-                            <td className="px-6 py-5 whitespace-nowrap">
-                              <span className={`px-3 py-1.5 inline-flex text-xs leading-5 font-bold rounded-full ${
-                                f.status 
-                                  ? 'bg-green-100 text-green-700' 
-                                  : 'bg-red-100 text-red-700'
-                              }`}>
-                                {f.status ? 'Active' : 'Inactive'}
-                              </span>
-                            </td>
-                            <td className="px-6 py-5 whitespace-nowrap text-center">
-                              <div className="flex justify-center gap-1">
-                                {(f.course_limits || []).map((limit, idx) => (
-                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold  text-primary">
-                                    {limit.max_count}
+                        filteredFaculty.map((f) => {
+                          // Create a map for quick lookup
+                          const limitsMap = {};
+                          (f.course_limits || []).forEach(limit => {
+                            limitsMap[limit.course_type_id] = limit.max_count;
+                          });
+                          
+                          return (
+                            <tr 
+                              key={f.id} 
+                              onClick={() => handleFacultyClick(f)}
+                              className="cursor-pointer hover:bg-blue-50 transition-all border-b border-gray-100"
+                            >
+                              <td className="px-6 py-5 whitespace-nowrap">
+                                <span className="text-sm font-bold text-gray-900 bg-gray-100 px-3 py-1 rounded">{f.faculty_id}</span>
+                              </td>
+                              <td className="px-6 py-5 whitespace-nowrap">
+                                <div className="flex items-center">
+                                  {f.profile_img?.Valid && f.profile_img.String ? (
+                                    <img
+                                      src={f.profile_img.String}
+                                      alt={f.name}
+                                      className="h-10 w-10 rounded-full mr-3 object-cover border-2 border-gray-200 shadow"
+                                    />
+                                  ) : (
+                                    <div className="h-10 w-10 rounded-full bg-gradient-to-br from-primary to-primary_medium flex items-center justify-center mr-3 shadow text-white font-bold text-sm">
+                                      {f.name.charAt(0).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <span className="text-base font-semibold text-gray-900">{f.name}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-5 whitespace-nowrap">
+                                <span className="text-sm text-gray-600">{f.email}</span>
+                              </td>
+                              <td className="px-6 py-5 whitespace-nowrap">
+                                <span className={`px-3 py-1.5 inline-flex text-xs leading-5 font-bold rounded-full ${
+                                  f.status 
+                                    ? 'bg-green-100 text-green-700' 
+                                    : 'bg-red-100 text-red-700'
+                                }`}>
+                                  {f.status ? 'Active' : 'Inactive'}
+                                </span>
+                              </td>
+                              {courseTypes.map((courseType) => (
+                                <td key={courseType.id} className="px-4 py-5 whitespace-nowrap text-center">
+                                  <span className="text-sm font-semibold text-primary">
+                                    {limitsMap[courseType.id] || 0}
                                   </span>
-                                ))}
-                              </div>
-                            </td>
-                          </tr>
-                        ))
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
