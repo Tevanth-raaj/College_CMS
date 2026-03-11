@@ -312,6 +312,13 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 		practicalTotal := payload.PracticalTotalHrs
 		activityTotal := payload.ActivityTotalHrs
 
+		courseTypeID, err := resolveCourseTypeID(payload.CourseType)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid course type"})
+			return
+		}
+
 		// First check: prevent duplicate course codes in the same curriculum (active courses only)
 		// Check both curriculum_courses (normal cards) and honour_vertical_courses (honour cards)
 		// Skip this check if course_code is "NA" (case-insensitive, trimmed)
@@ -378,7 +385,7 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 				result, err := db.DB.Exec(insertCourseQuery,
 					payload.CourseCode,
 					payload.CourseName,
-					payload.CourseType,
+					courseTypeID,
 					payload.Category,
 					payload.Credit,
 					payload.LectureHrs,
@@ -433,7 +440,9 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 	// This is different from semester courses which use curriculum_courses
 
 	// Insert into honour_vertical_courses mapping table
-	query := "INSERT INTO honour_vertical_courses (honour_vertical_id, course_id) VALUES (?, ?)"
+	query := `INSERT INTO honour_vertical_courses (honour_vertical_id, course_id, status)
+	          VALUES (?, ?, 1)
+	          ON DUPLICATE KEY UPDATE status = 1`
 	_, err = db.DB.Exec(query, verticalID, courseID)
 	if err != nil {
 		log.Println("Error adding course to vertical:", err)

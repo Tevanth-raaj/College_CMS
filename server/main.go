@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"server/db"
 	"server/middleware"
@@ -127,6 +128,12 @@ func main() {
 	// Wrap with CORS middleware
 	handler := middleware.CORSMiddleware(router)
 
-	fmt.Println("Server started at http://localhost:5000")
-	log.Fatal(http.ListenAndServe(":5000", handler))
+	// Get port from environment or default to 5000
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "5000"
+	}
+
+	fmt.Printf("Server started at http://localhost:%s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
