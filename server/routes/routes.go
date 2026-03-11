@@ -258,6 +258,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/oe-offerings", curriculum.GetHODOEOfferings).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/oe-offerings", curriculum.SaveHODOEOfferings).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/hod/oe-offerings/incoming", curriculum.GetOEOfferedToMyDept).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-validate-courses", curriculum.ValidateOECourseEligibility).Methods("GET", "OPTIONS")
 
 	// Vertical Lock routes (honour/minor vertical tracking across semesters)
 	router.HandleFunc("/api/hod/vertical-locks", curriculum.GetVerticalLocks).Methods("GET", "OPTIONS")
