@@ -56,6 +56,81 @@ type ElectiveSelection struct {
 	CardID     int    `json:"card_id"`
 }
 
+func isOpenElectiveCategory(category, slotName string) bool {
+	cat := strings.ToLower(strings.TrimSpace(category))
+	slot := strings.ToLower(strings.TrimSpace(slotName))
+	return strings.Contains(cat, "open elective") || strings.Contains(cat, "oe - open elective") || strings.Contains(slot, "open elective")
+}
+
+func getEligibleOpenElectiveCourseSet(curriculumID int) (map[int]struct{}, error) {
+	eligible := make(map[int]struct{})
+	if curriculumID <= 0 {
+		return eligible, nil
+	}
+
+	query := `
+		SELECT DISTINCT c.id
+		FROM courses c
+		INNER JOIN curriculum_courses cc ON c.id = cc.course_id
+		INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+		WHERE cc.curriculum_id = ?
+		  AND LOWER(nc.card_type) = 'open_elective'
+		  AND c.status = 1
+		  AND nc.status = 1
+	`
+
+	rows, err := db.DB.Query(query, curriculumID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var courseID int
+		if err := rows.Scan(&courseID); err != nil {
+			continue
+		}
+		eligible[courseID] = struct{}{}
+	}
+
+	return eligible, nil
+}
+
+func resolveStudentCurriculumID(studentID, departmentID int) (int, error) {
+	var curriculum sql.NullInt64
+	err := db.DB.QueryRow(`
+		SELECT curriculum_id
+		FROM academic_details
+		WHERE student_id = ?
+	`, studentID).Scan(&curriculum)
+	if err != nil {
+		return 0, err
+	}
+
+	if curriculum.Valid && curriculum.Int64 > 0 {
+		return int(curriculum.Int64), nil
+	}
+
+	var departmentCurriculum sql.NullInt64
+	err = db.DB.QueryRow(`
+		SELECT current_curriculum_id
+		FROM departments
+		WHERE id = ?
+	`, departmentID).Scan(&departmentCurriculum)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	if departmentCurriculum.Valid && departmentCurriculum.Int64 > 0 {
+		return int(departmentCurriculum.Int64), nil
+	}
+
+	return 0, nil
+}
+
 // GetAvailableElectives returns electives available for a student based on HOD selections
 func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	// Get email from query parameter (from logged in user)
@@ -108,11 +183,11 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Found department_id: %d", departmentID)
 
-	// Step 3: Get semester and batch from academic_details
+	// Step 3: Get semester and batch from academic_details (curriculum can be NULL)
 	var currentSemester int
 	var batch string
 	err = db.DB.QueryRow(`
-		SELECT semester, batch 
+		SELECT semester, batch
 		FROM academic_details 
 		WHERE student_id = ?
 	`, studentID).Scan(&currentSemester, &batch)
@@ -128,8 +203,23 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	studentCurriculumID, err := resolveStudentCurriculumID(studentID, departmentID)
+	if err != nil {
+		log.Printf("Error resolving curriculum_id for student %d: %v", studentID, err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
 	nextSemester := currentSemester + 1
-	log.Printf("Student department_id: %d, current semester: %d, next semester: %d, batch: %s", departmentID, currentSemester, nextSemester, batch)
+	log.Printf("Student department_id: %d, curriculum_id: %d, current semester: %d, next semester: %d, batch: %s", departmentID, studentCurriculumID, currentSemester, nextSemester, batch)
+
+	eligibleOpenElectiveCourseIDs, err := getEligibleOpenElectiveCourseSet(studentCurriculumID)
+	if err != nil {
+		log.Printf("Error fetching eligible open electives for curriculum_id %d: %v", studentCurriculumID, err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("Eligible open-elective course count for curriculum %d: %d", studentCurriculumID, len(eligibleOpenElectiveCourseIDs))
 
 	// Step 3b: Check elective selection window from academic_calendar
 	var windowStart, windowEnd string
@@ -199,11 +289,11 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			ess.slot_name,
 			ess.is_active,
 			ess.slot_order,
-			COALESCE(hes.id, 0) as hod_selection_id
+			COALESCE(hes.id, 0) as hod_selection_id,
+			COALESCE(hes.department_id, 0) as hod_department_id
 		FROM elective_semester_slots ess
 		LEFT JOIN hod_elective_selections hes ON ess.id = hes.slot_id 
 			AND hes.semester = ?
-			AND hes.department_id = ?
 			AND (hes.batch = ? OR hes.batch IS NULL)
 			AND hes.status = 'ACTIVE'
 		LEFT JOIN courses c ON hes.course_id = c.id
@@ -212,10 +302,10 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		ORDER BY ess.slot_order, ess.slot_name, c.category, c.course_code
 	`
 
-	log.Printf("Executing electives query with params: semester=%d, dept=%d, batch=%s, studentID=%d",
-		nextSemester, departmentID, batch, studentID)
+	log.Printf("Executing electives query with params: semester=%d, batch=%s, studentID=%d",
+		nextSemester, batch, studentID)
 
-	rows, err := db.DB.Query(query, nextSemester, departmentID, batch, nextSemester)
+	rows, err := db.DB.Query(query, nextSemester, batch, nextSemester)
 	if err != nil {
 		log.Printf("Error fetching available electives: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -232,6 +322,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		rowCount++
 		var elective ElectiveOption
+		var hodDepartmentID int
 		var isActive bool
 		var slotOrder int
 		err := rows.Scan(
@@ -245,10 +336,25 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			&isActive,
 			&slotOrder,
 			&elective.HodSelectionID,
+			&hodDepartmentID,
 		)
 		if err != nil {
 			log.Printf("Error scanning elective: %v", err)
 			continue
+		}
+
+		if elective.CourseID > 0 {
+			if isOpenElectiveCategory(elective.Category, elective.SlotName) {
+				if _, ok := eligibleOpenElectiveCourseIDs[elective.CourseID]; !ok {
+					log.Printf("Skipping OE course %d (%s) for student %d: not in student curriculum %d", elective.CourseID, elective.CourseCode, studentID, studentCurriculumID)
+					continue
+				}
+			} else {
+				if hodDepartmentID != departmentID {
+					log.Printf("Skipping non-OE course %d (%s) for student %d: HOD dept %d != student dept %d", elective.CourseID, elective.CourseCode, studentID, hodDepartmentID, departmentID)
+					continue
+				}
+			}
 		}
 
 		// Log each row for debugging
@@ -403,7 +509,7 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current semester, department, batch
+	// Get current semester, department and batch (curriculum can be NULL)
 	var currentSemester, departmentID int
 	var batch string
 	err = db.DB.QueryRow(`
@@ -414,6 +520,13 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 	`, studentID).Scan(&currentSemester, &departmentID, &batch)
 	if err != nil {
 		log.Printf("Error fetching student details: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	studentCurriculumID, err := resolveStudentCurriculumID(studentID, departmentID)
+	if err != nil {
+		log.Printf("Error resolving curriculum_id for student %d: %v", studentID, err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -440,15 +553,42 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var requestBody struct {
-		Selections map[string]interface{} `json:"selections"` // slotName -> hod_selection_id (int)
-		Semester   int                    `json:"semester"`
+		SelectionIDs []int                  `json:"selection_ids"` // hod_selection_id list from frontend
+		Selections   map[string]interface{} `json:"selections"`    // backward compatibility
+		Semester     int                    `json:"semester"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	if len(requestBody.Selections) == 0 {
+
+	selectionIDs := requestBody.SelectionIDs
+	if len(selectionIDs) == 0 && len(requestBody.Selections) > 0 {
+		for _, val := range requestBody.Selections {
+			switch v := val.(type) {
+			case float64:
+				id := int(v)
+				if id > 0 {
+					selectionIDs = append(selectionIDs, id)
+				}
+			case string:
+				parsed, parseErr := strconv.Atoi(v)
+				if parseErr == nil && parsed > 0 {
+					selectionIDs = append(selectionIDs, parsed)
+				}
+			}
+		}
+	}
+
+	if len(selectionIDs) == 0 {
 		http.Error(w, "No selections provided", http.StatusBadRequest)
+		return
+	}
+
+	eligibleOpenElectiveCourseIDs, err := getEligibleOpenElectiveCourseSet(studentCurriculumID)
+	if err != nil {
+		log.Printf("Error fetching eligible open electives for curriculum_id %d: %v", studentCurriculumID, err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
@@ -469,14 +609,14 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prepare: validate hod_selection_id belongs to this student's department/batch/semester
+	// Prepare: validate hod_selection_id belongs to this student's semester/batch and fetch metadata
 	// and fetch the course_id so we can also record it in student_courses
 	validateStmt, err := tx.Prepare(`
-		SELECT hes.course_id
+		SELECT hes.course_id, hes.department_id, COALESCE(c.category, ''), COALESCE(ess.slot_name, '')
 		FROM hod_elective_selections hes
+		INNER JOIN courses c ON c.id = hes.course_id
 		INNER JOIN elective_semester_slots ess ON hes.slot_id = ess.id
 		WHERE hes.id = ?
-		  AND hes.department_id = ?
 		  AND hes.semester = ?
 		  AND (hes.batch = ? OR hes.batch IS NULL)
 		  AND hes.status = 'ACTIVE'
@@ -510,39 +650,43 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 	defer courseStmt.Close()
 
 	successCount := 0
-	for slotName, val := range requestBody.Selections {
-		// Parse hod_selection_id (JSON numbers come as float64)
-		var hodSelID int
-		switch v := val.(type) {
-		case float64:
-			hodSelID = int(v)
-		case string:
-			parsed, parseErr := strconv.Atoi(v)
-			if parseErr != nil {
-				log.Printf("Invalid hod_selection_id for slot %s: %v", slotName, v)
-				continue
-			}
-			hodSelID = parsed
-		default:
-			log.Printf("Unexpected type for slot %s: %T", slotName, v)
-			continue
-		}
+	seenSelectionIDs := make(map[int]struct{})
+	for _, hodSelID := range selectionIDs {
 		if hodSelID == 0 {
-			log.Printf("Skipping zero hod_selection_id for slot %s", slotName)
+			log.Printf("Skipping zero hod_selection_id")
 			continue
 		}
+		if _, exists := seenSelectionIDs[hodSelID]; exists {
+			continue
+		}
+		seenSelectionIDs[hodSelID] = struct{}{}
 
 		// Validate: ensure this hod_selection_id is valid for this student's dept/batch/semester
-		var courseID int
-		err := validateStmt.QueryRow(hodSelID, departmentID, requestBody.Semester, batch).Scan(&courseID)
+		var courseID, hodDepartmentID int
+		var courseCategory, slotName string
+		err := validateStmt.QueryRow(hodSelID, requestBody.Semester, batch).Scan(&courseID, &hodDepartmentID, &courseCategory, &slotName)
 		if err == sql.ErrNoRows {
-			log.Printf("Invalid or unauthorised hod_selection_id %d for slot %s (dept %d, sem %d, batch %s)", hodSelID, slotName, departmentID, requestBody.Semester, batch)
-			http.Error(w, fmt.Sprintf("Invalid selection for slot '%s': course not available for your department/batch", slotName), http.StatusBadRequest)
+			log.Printf("Invalid hod_selection_id %d (sem %d, batch %s)", hodSelID, requestBody.Semester, batch)
+			http.Error(w, "Invalid selection", http.StatusBadRequest)
 			return
 		} else if err != nil {
 			log.Printf("Error validating hod_selection_id %d: %v", hodSelID, err)
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
+		}
+
+		if isOpenElectiveCategory(courseCategory, slotName) {
+			if _, ok := eligibleOpenElectiveCourseIDs[courseID]; !ok {
+				log.Printf("Rejected OE selection hod_selection_id=%d course_id=%d for student %d: not in curriculum %d", hodSelID, courseID, studentID, studentCurriculumID)
+				http.Error(w, "Invalid Open Elective selection: not offered in your curriculum", http.StatusBadRequest)
+				return
+			}
+		} else {
+			if hodDepartmentID != departmentID {
+				log.Printf("Rejected non-OE selection hod_selection_id=%d for student %d: HOD dept %d != student dept %d", hodSelID, studentID, hodDepartmentID, departmentID)
+				http.Error(w, "Invalid selection: course not available for your department", http.StatusBadRequest)
+				return
+			}
 		}
 
 		// Insert into student_elective_choices

@@ -279,11 +279,22 @@ const TeacherCourseSelectionPage = () => {
   };
 
   // Helper functions
-  const getSelectedCount = (type) => {
+  const getSelectedCount = (type, source = null) => {
+    if (source) {
+      return selectedCourses.filter(c => c.course_type === type && c.course_source === source).length;
+    }
     return selectedCourses.filter(c => c.course_type === type).length;
   };
 
-  const getRequiredCount = (type) => {
+  const getRequiredCount = (type, source = null) => {
+    // Fixed requirements for each course type
+    const typeName = (type || '').toLowerCase();
+    if (typeName === 'theory' && source === 'core') return 2;
+    if (typeName === 'theory' && source === 'extra') return 2;
+    if (typeName === 'theory' && !source) return 4; // Total theory
+    if (typeName === 'lab') return 1;
+    if (typeName === 'theory_with_lab') return 1;
+    // Fallback to allocation summary if type doesn't match fixed rules
     return allocationSummary?.type_summaries?.find(t => t.type_name === type)?.allocated || 0;
   };
 
@@ -300,18 +311,37 @@ const TeacherCourseSelectionPage = () => {
       setSelectedCourses(selectedCourses.filter(c => c.course_id !== String(course.id)));
       setError('');
     } else {
-      const required = getRequiredCount(course.course_type);
-      const selected = getSelectedCount(course.course_type);
+      // Check limits based on course type and source
+      const courseType = course.course_type;
+      const courseSource = course.courseSource; // 'core' or 'extra'
       
-      if (selected >= required) {
-        setError(`You can only select ${required} ${course.course_type} courses`);
-        setTimeout(() => setError(''), 4000);
-        return;
+      if (courseType === 'theory') {
+        // For theory courses, check source-specific limits
+        const required = getRequiredCount(courseType, courseSource);
+        const selected = getSelectedCount(courseType, courseSource);
+        const sourceName = courseSource === 'core' ? 'Core' : 'Student Elective';
+        
+        if (selected >= required) {
+          setError(`You can only select ${required} ${sourceName} Theory courses`);
+          setTimeout(() => setError(''), 4000);
+          return;
+        }
+      } else {
+        // For other course types, check overall limit
+        const required = getRequiredCount(courseType);
+        const selected = getSelectedCount(courseType);
+        
+        if (selected >= required) {
+          setError(`You can only select ${required} ${courseType} courses`);
+          setTimeout(() => setError(''), 4000);
+          return;
+        }
       }
 
       setSelectedCourses([...selectedCourses, {
         course_id: String(course.id),
         course_type: course.course_type,
+        course_source: course.courseSource,
         semester: course.semester,
         course_name: course.course_name
       }]);
@@ -325,14 +355,32 @@ const TeacherCourseSelectionPage = () => {
       return;
     }
 
-    // Validate all types are satisfied
-    const allocSummary = allocationSummary?.type_summaries || [];
-    for (const typeInfo of allocSummary) {
-      const selected = getSelectedCount(typeInfo.type_name);
-      if (selected !== typeInfo.allocated) {
-        setError(`Please select exactly ${typeInfo.allocated} ${typeInfo.type_name} courses (currently ${selected})`);
-        return;
-      }
+    // Validate all types are satisfied using fixed requirements
+    // Check core theory
+    const coreTheorySelected = getSelectedCount('theory', 'core');
+    if (coreTheorySelected !== 2) {
+      setError(`Please select exactly 2 Core Theory courses (currently ${coreTheorySelected})`);
+      return;
+    }
+    
+    // Check student elective theory
+    const electiveTheorySelected = getSelectedCount('theory', 'extra');
+    if (electiveTheorySelected !== 2) {
+      setError(`Please select exactly 2 Student Elective Theory courses (currently ${electiveTheorySelected})`);
+      return;
+    }
+    
+    // Check other types
+    const theoryWithLabSelected = getSelectedCount('theory_with_lab');
+    if (theoryWithLabSelected !== 1) {
+      setError(`Please select exactly 1 Theory with Lab course (currently ${theoryWithLabSelected})`);
+      return;
+    }
+    
+    const labSelected = getSelectedCount('lab');
+    if (labSelected !== 1) {
+      setError(`Please select exactly 1 Lab course (currently ${labSelected})`);
+      return;
     }
 
     setSaving(true);
@@ -399,8 +447,8 @@ const TeacherCourseSelectionPage = () => {
     );
   }
 
-  // Calculate progress
-  const totalRequired = allocationSummary?.type_summaries?.reduce((sum, type) => sum + type.allocated, 0) || 0;
+  // Calculate progress using fixed requirements
+  const totalRequired = 2 + 2 + 1 + 1; // Core Theory + Elective Theory + Theory with Lab + Lab = 6
   const totalSelected = selectedCourses.length;
   const progressPercent = totalRequired > 0 ? (totalSelected / totalRequired) * 100 : 0;
 
@@ -534,13 +582,18 @@ const TeacherCourseSelectionPage = () => {
                   Requirements
                 </h2>
                 
-                {allocationSummary?.type_summaries?.map(type => {
-                  const selected = getSelectedCount(type.type_name);
-                  const isComplete = selected === type.allocated;
+                {[
+                  { name: 'theory', source: 'core', displayName: 'Theory (Core)', required: 2 },
+                  { name: 'theory', source: 'extra', displayName: 'Theory (Student Elective)', required: 2 },
+                  { name: 'theory_with_lab', displayName: 'Theory with Lab', required: 1 },
+                  { name: 'lab', displayName: 'Lab', required: 1 }
+                ].map((type, idx) => {
+                  const selected = getSelectedCount(type.name, type.source);
+                  const isComplete = selected === type.required;
                   return (
-                    <div key={type.type_name} className="mb-4 pb-4 border-b border-gray-100 last:border-0">
+                    <div key={`${type.name}-${type.source || 'all'}-${idx}`} className="mb-4 pb-4 border-b border-gray-100 last:border-0">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-700">{type.type_name}</span>
+                        <span className="text-sm font-medium text-gray-700">{type.displayName}</span>
                         {isComplete && (
                           <svg className="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                             <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
@@ -552,14 +605,14 @@ const TeacherCourseSelectionPage = () => {
                           {selected}
                         </span>
                         <span className="text-gray-400">/</span>
-                        <span className="text-xl font-semibold text-gray-900">{type.allocated}</span>
+                        <span className="text-xl font-semibold text-gray-900">{type.required}</span>
                       </div>
                       <div className="mt-2 w-full bg-gray-200 rounded-full h-1.5">
                         <div 
                           className={`h-1.5 rounded-full transition-all ${
                             isComplete ? 'bg-green-500' : 'bg-primary'
                           }`}
-                          style={{ width: `${type.allocated > 0 ? (selected / type.allocated) * 100 : 0}%` }}
+                          style={{ width: `${type.required > 0 ? (selected / type.required) * 100 : 0}%` }}
                         ></div>
                       </div>
                     </div>
@@ -627,12 +680,12 @@ const TeacherCourseSelectionPage = () => {
             <div className="lg:col-span-2">              {/* Course Categories Info */}
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="card-custom p-4">
-                  <h3 className="text-sm font-semibold text-gray-900">Core Courses</h3>
-                  <p className="text-xs text-gray-600 mt-1">Required courses all students must take</p>
+                  <h3 className="text-sm font-semibold text-gray-900">Core Theory Courses (Select 2)</h3>
+                  <p className="text-xs text-gray-600 mt-1">Required core courses for all students</p>
                 </div>
                 <div className="card-custom p-4">
-                  <h3 className="text-sm font-semibold text-gray-900">Student-Chosen Electives</h3>
-                  <p className="text-xs text-gray-600 mt-1">Courses chosen by students in your department</p>
+                  <h3 className="text-sm font-semibold text-gray-900">Student Elective Theory (Select 2)</h3>
+                  <p className="text-xs text-gray-600 mt-1">Theory courses chosen by students</p>
                 </div>
               </div>
               {/* Search and Filter */}
