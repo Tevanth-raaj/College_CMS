@@ -106,7 +106,45 @@ func checkAndRunAllocations() {
 
 	// 4. Check result and mark window as inactive so it doesn't run again
 	if w.Code == http.StatusOK {
-		log.Printf("✅ Automatic allocation completed AND saved for Academic Year %s\n", academicYear)
+		log.Printf("✅ Automatic teacher allocation completed for Academic Year %s\n", academicYear)
+		
+		// 5. Now run student-teacher-course allocation
+		log.Printf("🎓 Starting student-teacher-course allocation...\n")
+		
+		wStudent := httptest.NewRecorder()
+		rStudent := httptest.NewRequest("POST", "/api/allocations/students/run", nil)
+		rStudent.Header.Set("Content-Type", "application/json")
+		rStudent = rStudent.WithContext(ctx)
+		
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("🔥 CRITICAL ERROR during student allocation: %v", rec)
+				}
+			}()
+			
+			allocation.AllocateStudentsToTeachers(wStudent, rStudent)
+		}()
+		
+		if wStudent.Code == http.StatusOK {
+			log.Printf("✅ Student-teacher-course allocation completed successfully\n")
+			
+			// Parse response to show summary
+			var studentResult map[string]interface{}
+			if err := json.NewDecoder(wStudent.Body).Decode(&studentResult); err == nil {
+				if success, ok := studentResult["success"].(bool); ok && success {
+					if totalStudents, ok := studentResult["total_students_allocated"].(float64); ok {
+						log.Printf("📊 Total students allocated: %.0f", totalStudents)
+					}
+					if successfulCourses, ok := studentResult["successful_courses"].(float64); ok {
+						log.Printf("📚 Successful courses: %.0f", successfulCourses)
+					}
+				}
+			}
+		} else {
+			log.Printf("⚠️  Student allocation failed with status: %d", wStudent.Code)
+			log.Printf("   Response: %s", wStudent.Body.String())
+		}
 		
 		// IMPORTANT: Set is_active to 0 so the scheduler doesn't process this same window again!
 		_, dbErr := db.DB.Exec(`

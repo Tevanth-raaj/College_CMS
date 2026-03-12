@@ -326,5 +326,10 @@ func SetupRoutes() *mux.Router {
 	// Automatic Allocation routes
 	router.HandleFunc("/api/allocations/run", allocation.RunAutoAllocation).Methods("POST", "OPTIONS")
 
+	// Student-Teacher-Course Allocation routes
+	router.HandleFunc("/api/allocations/students/run", allocation.AllocateStudentsToTeachers).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/allocations/students/course/{course_id}", allocation.AllocateSingleCourse).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/allocations/students/course/{course_id}/view", allocation.GetAllocationByCourse).Methods("GET", "OPTIONS")
+
 	return router
 }

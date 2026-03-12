@@ -109,9 +109,12 @@ function MarkEntryPage() {
     }
   }
 
-  // Auto-detect learning mode when course is selected
+  // Auto-detect learning mode when course is selected (only if not already set)
   useEffect(() => {
     if (!selectedCourse || !selectedCourse.enrollments || selectedCourse.enrollments.length === 0) return
+    
+    // Only auto-detect if learningMode is not already set
+    if (learningMode !== null) return
     
     // Detect which learning modes students have
     const learningModes = selectedCourse.enrollments
@@ -121,13 +124,13 @@ function MarkEntryPage() {
     const hasUAL = learningModes.includes(1)
     const hasPBL = learningModes.includes(2)
     
-    // Set default mode: prefer UAL if present, otherwise PBL
-    if (hasUAL) {
-      setLearningMode('UAL')
-      console.log('Auto-detected learning mode: UAL')
-    } else if (hasPBL) {
+    // Set default mode: prefer PBL if present, otherwise UAL
+    if (hasPBL) {
       setLearningMode('PBL')
       console.log('Auto-detected learning mode: PBL')
+    } else if (hasUAL) {
+      setLearningMode('UAL')
+      console.log('Auto-detected learning mode: UAL')
     } else {
       setLearningMode('UAL') // Default fallback
       console.log('No learning mode detected, defaulting to: UAL')
@@ -234,6 +237,8 @@ function MarkEntryPage() {
       }
       if (!response.ok) throw new Error('Failed to fetch mark categories')
       const data = await response.json()
+      console.log('Received mark categories:', data)
+      console.log('Current learning mode:', learningMode)
       setMarkCategories(data || [])
     } catch (error) {
       console.error('Error fetching mark categories:', error)
@@ -388,7 +393,16 @@ function MarkEntryPage() {
           return matchesLearningMode && matchesDept
         })
         
-        setStudents(filteredStudents)
+        // Deduplicate students by student_id to prevent duplicate key errors
+        const uniqueStudents = Array.from(
+          new Map(filteredStudents.map(student => [student.student_id, student])).values()
+        )
+        
+        console.log('Filtered students for', learningMode, ':', filteredStudents.length)
+        console.log('Unique students after deduplication:', uniqueStudents.length)
+        console.log('Duplicate students removed:', filteredStudents.length - uniqueStudents.length)
+        
+        setStudents(uniqueStudents)
       })
       
       // Initialize marks for new students
@@ -437,7 +451,16 @@ function MarkEntryPage() {
         return matchesLearningMode && matchesDept
       })
       
-      setStudents(filteredStudents)
+      // Deduplicate students by student_id to prevent duplicate key errors
+      const uniqueStudents = Array.from(
+        new Map(filteredStudents.map(student => [student.student_id, student])).values()
+      )
+      
+      console.log('User assigned: Filtered students for', learningMode, ':', filteredStudents.length)
+      console.log('User assigned: Unique students after deduplication:', uniqueStudents.length)
+      console.log('User assigned: Duplicate students removed:', filteredStudents.length - uniqueStudents.length)
+      
+      setStudents(uniqueStudents)
       
       // Initialize marks
       const newMarks = {}
@@ -601,6 +624,10 @@ function MarkEntryPage() {
     const learningModeId = learningMode === 'UAL' ? 1 : 2
     return category.learning_mode_id === learningModeId
   })
+
+  console.log('All mark categories:', markCategories.length)
+  console.log('Filtered mark categories for', learningMode, ':', filteredMarkCategories.length)
+  console.log('Categories:', filteredMarkCategories.map(c => ({ id: c.id, name: c.name, learning_mode_id: c.learning_mode_id })))
 
   // All marks are considered complete when every student×category cell is either
   // absent (blocked) or has a value entered.
