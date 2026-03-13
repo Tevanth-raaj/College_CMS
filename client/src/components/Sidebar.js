@@ -174,6 +174,26 @@ function Sidebar({ onExpandedChange }) {
         roles: ["student"],
       },
       {
+        name: "Elective Excemption",
+        path: "/student/elective-exemption",
+        icon: (
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 8c-1.657 0-3 1.343-3 3v1H8a2 2 0 00-2 2v3a2 2 0 002 2h8a2 2 0 002-2v-3a2 2 0 00-2-2h-1v-1c0-1.657-1.343-3-3-3zm-1 4v-1a1 1 0 112 0v1h-2zm-6 8h14"
+            />
+          </svg>
+        ),
+        roles: ["student"],
+      },
+      {
         name: "Curriculum",
         path: "/curriculum",
         icon: (
@@ -317,7 +337,12 @@ function Sidebar({ onExpandedChange }) {
         name: "Electives",
         path: "/student/elective-selection",
         icon: (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -400,7 +425,12 @@ function Sidebar({ onExpandedChange }) {
         name: "My Assigned",
         path: "/my-assigned-students",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -409,7 +439,14 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["user", "faculty", "staff", "curriculum_entry_user", "coe", "admin"],
+        roles: [
+          "user",
+          "faculty",
+          "staff",
+          "curriculum_entry_user",
+          "coe",
+          "admin",
+        ],
       },
       {
         name: "Mark Permissions",
@@ -435,7 +472,12 @@ function Sidebar({ onExpandedChange }) {
         name: "Honour/Minor Import",
         path: "/hod/honour-minor-eligibility",
         icon: (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -490,7 +532,12 @@ function Sidebar({ onExpandedChange }) {
         name: "HR Faculty",
         path: "/hr/faculty",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -505,7 +552,12 @@ function Sidebar({ onExpandedChange }) {
         name: "HR Appeals",
         path: "/hr/appeals-review",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -520,7 +572,12 @@ function Sidebar({ onExpandedChange }) {
         name: "Clusters",
         path: "/clusters",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -535,7 +592,12 @@ function Sidebar({ onExpandedChange }) {
         name: "Sharing",
         path: "/sharing",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
