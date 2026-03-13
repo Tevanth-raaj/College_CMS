@@ -300,6 +300,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/students/electives/available", studentteacher.GetAvailableElectives).Methods("GET", "OPTIONS")         // ?email=
 	router.HandleFunc("/api/students/electives/selections", studentteacher.SaveElectiveSelections).Methods("POST", "OPTIONS")      // ?email=
 	router.HandleFunc("/api/students/electives/selections", studentteacher.GetStudentElectiveSelections).Methods("GET", "OPTIONS") // ?email=
+	router.HandleFunc("/api/students/elective-exemption-requests", studentteacher.CreateElectiveExemptionRequest).Methods("POST", "OPTIONS")
 
 	// HR routes
 	router.HandleFunc("/api/hr/faculty", studentteacher.GetAllFaculty).Methods("GET", "OPTIONS")
