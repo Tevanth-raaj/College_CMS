@@ -18,12 +18,14 @@ function MarkEntryPage() {
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [markErrors, setMarkErrors] = useState({}) // key: `${studentId}_${categoryId}`
   const [absentees, setAbsentees] = useState([]) // [{student_id, mark_category_id}]
-  const [applicableWindows, setApplicableWindows] = useState([])
-  const [selectedWindowId, setSelectedWindowId] = useState(null)
-  const [selectedDepartment, setSelectedDepartment] = useState('all') // 'all' or department_id
   const [autoSaveStatus, setAutoSaveStatus] = useState('') // '', 'saving', 'saved', 'error'
   const autoSaveTimerRef = useRef(null)
   const pendingMarksRef = useRef({})
+
+  // Missed-window appeal states (for teachers who never submitted before the window closed)
+  const [missedWindowAppeals, setMissedWindowAppeals] = useState({}) // { courseId → appeal | null }
+  const [appealReason, setAppealReason] = useState('')
+  const [appealSubmitting, setAppealSubmitting] = useState(false)
 
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
@@ -41,6 +43,7 @@ function MarkEntryPage() {
     } else {
       setMessage({ type: 'error', text: 'User credentials not found. Please login again.' })
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTeacher, teacherId, username, userRole])
 
   const fetchTeacherCourses = async () => {
@@ -109,12 +112,9 @@ function MarkEntryPage() {
     }
   }
 
-  // Auto-detect learning mode when course is selected (only if not already set)
+  // Auto-detect learning mode when course is selected
   useEffect(() => {
     if (!selectedCourse || !selectedCourse.enrollments || selectedCourse.enrollments.length === 0) return
-    
-    // Only auto-detect if learningMode is not already set
-    if (learningMode !== null) return
     
     // Detect which learning modes students have
     const learningModes = selectedCourse.enrollments
@@ -124,13 +124,13 @@ function MarkEntryPage() {
     const hasUAL = learningModes.includes(1)
     const hasPBL = learningModes.includes(2)
     
-    // Set default mode: prefer PBL if present, otherwise UAL
-    if (hasPBL) {
-      setLearningMode('PBL')
-      console.log('Auto-detected learning mode: PBL')
-    } else if (hasUAL) {
+    // Set default mode: prefer UAL if present, otherwise PBL
+    if (hasUAL) {
       setLearningMode('UAL')
       console.log('Auto-detected learning mode: UAL')
+    } else if (hasPBL) {
+      setLearningMode('PBL')
+      console.log('Auto-detected learning mode: PBL')
     } else {
       setLearningMode('UAL') // Default fallback
       console.log('No learning mode detected, defaulting to: UAL')
@@ -143,61 +143,8 @@ function MarkEntryPage() {
     if (userRole !== 'teacher' && !hasActiveWindow) return
     fetchMarkCategories()
     loadExistingMarks()
-  }, [selectedCourse, learningMode, hasActiveWindow, userRole, selectedWindowId])
-
-  useEffect(() => {
-    if (!isTeacher || !selectedCourse || !facultyIdentifier) {
-      setApplicableWindows([])
-      setSelectedWindowId(null)
-      return
-    }
-    fetchApplicableWindows()
-  }, [isTeacher, selectedCourse?.course_id, facultyIdentifier])
-
-  const fetchApplicableWindows = async () => {
-    try {
-      const params = new URLSearchParams({
-        teacher_id: facultyIdentifier,
-        course_id: String(selectedCourse.course_id),
-      })
-      const response = await fetch(`${API_BASE_URL}/mark-entry/applicable-windows?${params.toString()}`)
-      if (!response.ok) {
-        setApplicableWindows([])
-        setSelectedWindowId(null)
-        return
-      }
-
-      const data = await response.json()
-      const windows = Array.isArray(data) ? data : []
-      setApplicableWindows(windows)
-
-      if (windows.length === 0) {
-        setSelectedWindowId(null)
-      } else if (!windows.some((w) => w.id === selectedWindowId)) {
-        setSelectedWindowId(windows[0].id)
-      }
-    } catch (error) {
-      console.error('Error fetching applicable windows:', error)
-      setApplicableWindows([])
-      setSelectedWindowId(null)
-    }
-  }
-
-  useEffect(() => {
-    if (!isTeacher) return
-
-    const selectedWindow = applicableWindows.find((w) => w.id === selectedWindowId) || applicableWindows[0]
-    if (!selectedWindow) {
-      setSelectedDepartment('all')
-      return
-    }
-
-    if (selectedWindow.department_id) {
-      setSelectedDepartment(String(selectedWindow.department_id))
-    } else {
-      setSelectedDepartment('all')
-    }
-  }, [isTeacher, applicableWindows, selectedWindowId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCourse, learningMode, hasActiveWindow, userRole])
 
   const fetchMarkCategories = async () => {
     try {
@@ -206,29 +153,12 @@ function MarkEntryPage() {
         return
       }
 
-      // Auto-detect learning modes from enrolled students
-      const enrollments = selectedCourse.enrollments || []
-      const uniqueLearningModes = [...new Set(
-        enrollments
-          .map(s => s.learning_mode_id)
-          .filter(mode => mode === 1 || mode === 2)
-      )]
-      
-      // If no learning modes detected, default to both UAL and PBL
-      const learningModesParam = uniqueLearningModes.length > 0 
-        ? uniqueLearningModes.join(',') 
-        : '1,2'
+      // Use the selected learning mode from the PBL/UAL switch
+      const learningModesParam = learningMode === 'UAL' ? 1 : 2
       
       console.log('Requesting mark categories for learning modes:', learningModesParam)
-      const params = new URLSearchParams({
-        teacher_id: facultyIdentifier,
-        learning_modes: learningModesParam,
-      })
-      if (selectedWindowId) {
-        params.set('window_id', String(selectedWindowId))
-      }
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?${params.toString()}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?teacher_id=${facultyIdentifier}&learning_modes=${learningModesParam}`
       )
       if (response.status === 403) {
         setMarkCategories([])
@@ -237,8 +167,6 @@ function MarkEntryPage() {
       }
       if (!response.ok) throw new Error('Failed to fetch mark categories')
       const data = await response.json()
-      console.log('Received mark categories:', data)
-      console.log('Current learning mode:', learningMode)
       setMarkCategories(data || [])
     } catch (error) {
       console.error('Error fetching mark categories:', error)
@@ -267,20 +195,70 @@ function MarkEntryPage() {
   const isCellAbsent = (studentId, categoryId) =>
     absentees.some(a => a.student_id === studentId && a.mark_category_id === categoryId)
 
+  const getInnovativePracticeBaseName = (name = '') => {
+    const normalized = String(name).replace(/\s+/g, ' ').trim()
+    const match = normalized.match(/^(Innovative Practice\s+[12])\s*-\s*\(\s*[12]\s*\)$/i)
+    return match ? match[1] : null
+  }
+
+  const buildDisplayCategories = (categories = []) => {
+    const display = []
+    const groupedMap = new Map()
+
+    categories.forEach((category) => {
+      const baseName = getInnovativePracticeBaseName(category.name)
+      if (!baseName) {
+        display.push({
+          ...category,
+          display_name: category.name,
+          component_ids: [category.id],
+        })
+        return
+      }
+
+      const key = `${category.learning_mode_id || 0}|${baseName.toLowerCase()}`
+      if (!groupedMap.has(key)) {
+        const grouped = {
+          ...category,
+          name: baseName,
+          display_name: baseName,
+          component_ids: [category.id],
+          max_marks: category.max_marks,
+        }
+        groupedMap.set(key, grouped)
+        display.push(grouped)
+      } else {
+        const grouped = groupedMap.get(key)
+        grouped.component_ids.push(category.id)
+        grouped.max_marks = Math.max(grouped.max_marks || 0, category.max_marks || 0)
+      }
+    })
+
+    return display
+  }
+
+  const getDisplayMarkValue = (studentId, category) => {
+    const componentIds = category.component_ids || [category.id]
+    for (const componentId of componentIds) {
+      const value = studentMarks[studentId]?.[componentId]
+      if (value !== '' && value !== null && value !== undefined) return value
+    }
+    return ''
+  }
+
+  const isDisplayCellAbsent = (studentId, category) => {
+    const componentIds = category.component_ids || [category.id]
+    return componentIds.every((componentId) => isCellAbsent(studentId, componentId))
+  }
+
   const loadExistingMarks = async () => {
     try {
       if (!facultyIdentifier) {
         setMessage({ type: 'error', text: 'User identifier not found. Please login again.' })
         return
       }
-      const params = new URLSearchParams({
-        teacher_id: facultyIdentifier,
-      })
-      if (selectedWindowId) {
-        params.set('window_id', String(selectedWindowId))
-      }
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/student-marks?${params.toString()}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/student-marks?teacher_id=${facultyIdentifier}`
       )
       if (response.status === 403) {
         setStudentMarks({})
@@ -330,48 +308,7 @@ function MarkEntryPage() {
     }
   }
 
-  const enrichStudentsWithEnrollmentNumbers = async (enrollments) => {
-    try {
-      // Fetch all students to get enrollment numbers and learning mode
-      const response = await fetch(`${API_BASE_URL}/students`)
-      if (!response.ok) throw new Error('Failed to fetch students')
-      const allStudents = await response.json()
-      
-      // Create maps for student data
-      const enrollmentMap = {}
-      const registerMap = {}
-      const learningModeMap = {}
-      if (Array.isArray(allStudents)) {
-        allStudents.forEach((student) => {
-          enrollmentMap[student.student_id] = student.enrollment_no || ''
-          registerMap[student.student_id] = student.register_no || ''
-          learningModeMap[student.student_id] = student.learning_mode_id
-        })
-      }
-      
-      // Enrich enrollments with enrollment numbers, register numbers, and learning mode
-      return enrollments.map((student) => ({
-        ...student,
-        enrollment_no: enrollmentMap[student.student_id] || '',
-        register_no: registerMap[student.student_id] || '',
-        learning_mode_id: student.learning_mode_id || learningModeMap[student.student_id]
-      }))
-    } catch (error) {
-      console.error('Error fetching enrollment numbers:', error)
-      // Return original enrollments if fetch fails
-      return enrollments.map((student) => ({
-        ...student,
-        enrollment_no: '',
-      }))
-    }
-  }
-
-  // Reset department filter when course changes
-  useEffect(() => {
-    setSelectedDepartment('all')
-  }, [selectedCourse?.course_id])
-
-  // Update students when course, learning mode, or department changes
+  // Update students when course changes
   useEffect(() => {
     if (!selectedCourse) return
 
@@ -379,40 +316,28 @@ function MarkEntryPage() {
     if (!isTeacher && username) {
       fetchUserAssignedStudents()
     }
-    // For teachers, use enrollments from course
+    // For teachers, use enrollments from course (already includes enrollment_no, register_no, learning_mode_id)
     else if (selectedCourse.enrollments) {
-      enrichStudentsWithEnrollmentNumbers(selectedCourse.enrollments).then((enrichedStudents) => {
-        setAllStudents(enrichedStudents)
-        
-        // Filter students by learning mode (UAL=1, PBL=2) AND department
-        const learningModeId = learningMode === 'UAL' ? 1 : 2
-        const filteredStudents = enrichedStudents.filter((student) => {
-          const matchesLearningMode = student.learning_mode_id === learningModeId
-          const matchesDept = selectedDepartment === 'all' || 
-            String(student.department_id) === String(selectedDepartment)
-          return matchesLearningMode && matchesDept
-        })
-        
-        // Deduplicate students by student_id to prevent duplicate key errors
-        const uniqueStudents = Array.from(
-          new Map(filteredStudents.map(student => [student.student_id, student])).values()
-        )
-        
-        console.log('Filtered students for', learningMode, ':', filteredStudents.length)
-        console.log('Unique students after deduplication:', uniqueStudents.length)
-        console.log('Duplicate students removed:', filteredStudents.length - uniqueStudents.length)
-        
-        setStudents(uniqueStudents)
-      })
+      const enrollments = selectedCourse.enrollments
+      setAllStudents(enrollments)
+      
+      // Filter students by learning mode (UAL=1, PBL=2) - strict matching only
+      const learningModeId = learningMode === 'UAL' ? 1 : 2
+      const filteredStudents = enrollments.filter(
+        (student) => student.learning_mode_id === learningModeId
+      )
+      
+      setStudents(filteredStudents)
       
       // Initialize marks for new students
       const newMarks = {}
-      selectedCourse.enrollments.forEach((student) => {
+      enrollments.forEach((student) => {
         newMarks[student.student_id] = studentMarks[student.student_id] || {}
       })
       setStudentMarks(newMarks)
     }
-  }, [selectedCourse, learningMode, selectedDepartment, username, teacherId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCourse, learningMode, username, teacherId])
 
   const fetchUserAssignedStudents = async () => {
     try {
@@ -422,14 +347,8 @@ function MarkEntryPage() {
       if (!response.ok) throw new Error('Failed to fetch assigned students')
       const data = await response.json()
       
-      // Transform to match student format with enrollment info
-      const studentList = await enrichStudentsWithEnrollmentNumbers(
-        data.map(s => ({
-          student_id: s.student_id,
-          student_name: s.student_name,
-          enrollment_no: s.enrollment_no
-        }))
-      )
+      // Data already includes enrollment_no, register_no, learning_mode_id from the backend
+      const studentList = Array.isArray(data) ? data : []
       
       setAllStudents(studentList)
 
@@ -442,25 +361,13 @@ function MarkEntryPage() {
         return
       }
       
-      // Filter by learning mode AND department
+      // Filter by learning mode - strict matching only
       const learningModeId = learningMode === 'UAL' ? 1 : 2
-      const filteredStudents = studentList.filter((student) => {
-        const matchesLearningMode = !student.learning_mode_id || student.learning_mode_id === learningModeId
-        const matchesDept = selectedDepartment === 'all' || 
-          String(student.department_id) === String(selectedDepartment)
-        return matchesLearningMode && matchesDept
-      })
-      
-      // Deduplicate students by student_id to prevent duplicate key errors
-      const uniqueStudents = Array.from(
-        new Map(filteredStudents.map(student => [student.student_id, student])).values()
+      const filteredStudents = studentList.filter(
+        (student) => student.learning_mode_id === learningModeId
       )
       
-      console.log('User assigned: Filtered students for', learningMode, ':', filteredStudents.length)
-      console.log('User assigned: Unique students after deduplication:', uniqueStudents.length)
-      console.log('User assigned: Duplicate students removed:', filteredStudents.length - uniqueStudents.length)
-      
-      setStudents(uniqueStudents)
+      setStudents(filteredStudents)
       
       // Initialize marks
       const newMarks = {}
@@ -472,44 +379,6 @@ function MarkEntryPage() {
       console.error('Error fetching assigned students:', error)
       setHasActiveWindow(false)
       setMessage({ type: 'error', text: 'Failed to load assigned students.' })
-    }
-  }
-
-  // Auto-save a single mark entry
-  const autoSaveSingleMark = async (studentId, categoryId, obtainedMarks) => {
-    const facultyId = facultyIdentifier
-    if (!selectedCourse || !facultyId) return
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/student-marks/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_id: selectedCourse.course_id,
-          faculty_id: facultyId,
-          mark_entries: [
-            {
-              student_id: studentId,
-              course_id: selectedCourse.course_id,
-              assessment_component_id: categoryId,
-              obtained_marks: obtainedMarks,
-            },
-          ],
-        }),
-      })
-
-      const result = await response.json()
-      if (response.ok && result.success) {
-        setAutoSaveStatus('saved')
-        setTimeout(() => setAutoSaveStatus(''), 2000)
-      } else {
-        setAutoSaveStatus('error')
-        setTimeout(() => setAutoSaveStatus(''), 3000)
-      }
-    } catch (error) {
-      console.error('Auto-save error:', error)
-      setAutoSaveStatus('error')
-      setTimeout(() => setAutoSaveStatus(''), 3000)
     }
   }
 
@@ -583,20 +452,28 @@ function MarkEntryPage() {
     }, 500) // 500ms debounce for fast auto-save
   }
 
-  const handleMarkChange = (studentId, categoryId, value) => {
-    const category = markCategories.find((cat) => cat.id === categoryId)
+  const handleMarkChange = (studentId, category, value) => {
+    const componentIds = category.component_ids || [category.id]
     const maxMarks = category?.max_marks || 0
-    const errorKey = `${studentId}_${categoryId}`
+    const errorKey = `${studentId}_${category.id}`
 
     // Allow empty value
     if (value === '' || value === null || value === undefined) {
-      setStudentMarks((prev) => ({
-        ...prev,
-        [studentId]: { ...prev[studentId], [categoryId]: '' },
-      }))
+      setStudentMarks((prev) => {
+        const updatedStudent = { ...(prev[studentId] || {}) }
+        componentIds.forEach((componentId) => {
+          updatedStudent[componentId] = ''
+        })
+        return {
+          ...prev,
+          [studentId]: updatedStudent,
+        }
+      })
       setMarkErrors((prev) => { const n = { ...prev }; delete n[errorKey]; return n })
       // Add to pending marks and trigger auto-save
-      pendingMarksRef.current[`${studentId}_${categoryId}`] = ''
+      componentIds.forEach((componentId) => {
+        pendingMarksRef.current[`${studentId}_${componentId}`] = ''
+      })
       triggerAutoSave()
       return
     }
@@ -604,17 +481,25 @@ function MarkEntryPage() {
     const numValue = parseFloat(value)
     if (isNaN(numValue) || numValue < 0) return
 
-    setStudentMarks((prev) => ({
-      ...prev,
-      [studentId]: { ...prev[studentId], [categoryId]: numValue },
-    }))
+    setStudentMarks((prev) => {
+      const updatedStudent = { ...(prev[studentId] || {}) }
+      componentIds.forEach((componentId) => {
+        updatedStudent[componentId] = numValue
+      })
+      return {
+        ...prev,
+        [studentId]: updatedStudent,
+      }
+    })
 
     if (numValue > maxMarks) {
       setMarkErrors((prev) => ({ ...prev, [errorKey]: `Max is ${maxMarks}` }))
     } else {
       setMarkErrors((prev) => { const n = { ...prev }; delete n[errorKey]; return n })
       // Add to pending marks and trigger auto-save
-      pendingMarksRef.current[`${studentId}_${categoryId}`] = numValue
+      componentIds.forEach((componentId) => {
+        pendingMarksRef.current[`${studentId}_${componentId}`] = numValue
+      })
       triggerAutoSave()
     }
   }
@@ -625,21 +510,19 @@ function MarkEntryPage() {
     return category.learning_mode_id === learningModeId
   })
 
-  console.log('All mark categories:', markCategories.length)
-  console.log('Filtered mark categories for', learningMode, ':', filteredMarkCategories.length)
-  console.log('Categories:', filteredMarkCategories.map(c => ({ id: c.id, name: c.name, learning_mode_id: c.learning_mode_id })))
+  const displayMarkCategories = buildDisplayCategories(filteredMarkCategories)
 
   // All marks are considered complete when every student×category cell is either
   // absent (blocked) or has a value entered.
   const allMarksFilled =
     students.length > 0 &&
-    filteredMarkCategories.length > 0 &&
+    displayMarkCategories.length > 0 &&
     students.every(student =>
-      filteredMarkCategories.every(cat =>
-        isCellAbsent(student.student_id, cat.id) ||
-        (studentMarks[student.student_id]?.[cat.id] !== '' &&
-         studentMarks[student.student_id]?.[cat.id] !== null &&
-         studentMarks[student.student_id]?.[cat.id] !== undefined)
+      displayMarkCategories.every(cat => {
+        if (isDisplayCellAbsent(student.student_id, cat)) return true
+        const val = getDisplayMarkValue(student.student_id, cat)
+        return val !== '' && val !== null && val !== undefined
+      }
       )
     )
 
@@ -649,7 +532,7 @@ function MarkEntryPage() {
     return match ? match[1].trim() : name.trim()
   }
 
-  const categoryGroups = filteredMarkCategories.reduce((groups, cat) => {
+  const categoryGroups = displayMarkCategories.reduce((groups, cat) => {
     const groupName = getCategoryGroup(cat.name)
     const existing = groups.find(g => g.groupName === groupName)
     if (existing) {
@@ -663,27 +546,12 @@ function MarkEntryPage() {
   const calculateGroupTotal = (studentId, categories) => {
     let total = 0
     categories.forEach(cat => {
-      const val = studentMarks[studentId]?.[cat.id]
+      const val = getDisplayMarkValue(studentId, cat)
       if (val !== '' && val !== null && val !== undefined) {
         total += parseFloat(val) || 0
       }
     })
     return total
-  }
-
-  const calculateStudentTotal = (studentId) => {
-    let total = 0
-    filteredMarkCategories.forEach((category) => {
-      const earned = studentMarks[studentId]?.[category.id]
-      if (earned !== '' && earned !== null && earned !== undefined) {
-        total += parseFloat(earned) || 0
-      }
-    })
-    return total.toFixed(2)
-  }
-
-  const calculateTotalWeightage = () => {
-    return filteredMarkCategories.reduce((sum, cat) => sum + (cat.max_marks || 0), 0).toFixed(2)
   }
 
   // Check submission status from DB when course or faculty changes
@@ -713,17 +581,18 @@ function MarkEntryPage() {
         if (!modId) return true
         return cat.learning_mode_id === modId
       })
+      const studentDisplayCategories = buildDisplayCategories(studentCategories)
       let absentCount = 0
-      const missing = studentCategories.filter((cat) => {
+      const missing = studentDisplayCategories.filter((cat) => {
         // Absent cells are not "missing" — they're excused
-        if (isCellAbsent(student.student_id, cat.id)) {
+        if (isDisplayCellAbsent(student.student_id, cat)) {
           absentCount++
           return false
         }
-        const val = studentMarks[student.student_id]?.[cat.id]
+        const val = getDisplayMarkValue(student.student_id, cat)
         return val === '' || val === null || val === undefined
       })
-      return { student, total: studentCategories.length, missing: missing.length, absent: absentCount }
+      return { student, total: studentDisplayCategories.length, missing: missing.length, absent: absentCount }
     })
   }
 
@@ -783,14 +652,16 @@ function MarkEntryPage() {
     // Collect all mark entries
     const markEntries = []
     students.forEach((student) => {
-      filteredMarkCategories.forEach((category) => {
-        const obtainedMarks = studentMarks[student.student_id]?.[category.id]
+      displayMarkCategories.forEach((category) => {
+        const obtainedMarks = getDisplayMarkValue(student.student_id, category)
         if (obtainedMarks !== undefined && obtainedMarks !== null && obtainedMarks !== '') {
-          markEntries.push({
-            student_id: student.student_id,
-            course_id: selectedCourse.course_id,
-            assessment_component_id: category.id,
-            obtained_marks: parseFloat(obtainedMarks),
+          ;(category.component_ids || [category.id]).forEach((componentId) => {
+            markEntries.push({
+              student_id: student.student_id,
+              course_id: selectedCourse.course_id,
+              assessment_component_id: componentId,
+              obtained_marks: parseFloat(obtainedMarks),
+            })
           })
         }
       })
@@ -809,7 +680,6 @@ function MarkEntryPage() {
         body: JSON.stringify({
           course_id: selectedCourse.course_id,
           faculty_id: facultyId,
-          window_id: selectedWindowId || undefined,
           mark_entries: markEntries,
         }),
       })
@@ -831,29 +701,65 @@ function MarkEntryPage() {
       setSavingMarks(false)
     }
   }
-  const handleFillRandomMarks = () => {
-    const updated = { ...studentMarks }
-    students.forEach((student) => {
-      if (!updated[student.student_id]) {
-        updated[student.student_id] = {}
+
+
+
+  // Fetch any existing appeal for the selected course's missed window
+  useEffect(() => {
+    if (!selectedCourse || !selectedCourse.has_missed_submission || !selectedCourse.missed_window) return
+    if (!teacherId) return
+    fetchMissedWindowAppeal(selectedCourse)
+    setAppealReason('') // reset form when course changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCourse?.course_id])
+
+  const fetchMissedWindowAppeal = async (course) => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/mark-appeals?teacher_id=${encodeURIComponent(teacherId)}&course_id=${course.course_id}&window_id=${course.missed_window.id}`
+      )
+      if (res.ok) {
+        const data = await res.json()
+        setMissedWindowAppeals(prev => ({
+          ...prev,
+          [course.course_id]: Array.isArray(data) && data.length > 0 ? data[0] : null,
+        }))
       }
-      filteredMarkCategories.forEach((category) => {
-        if (isCellAbsent(student.student_id, category.id)) return
-        const maxMarks = Number(category.max_marks) || 0
-        const randomScore = Math.floor(Math.random() * (Math.floor(maxMarks) + 1))
-        updated[student.student_id][category.id] = randomScore
-      })
-    })
-    setStudentMarks(updated)
-    setMessage({ type: 'success', text: 'Filled mark cells with random integer scores based on each component max.' })
+    } catch (err) {
+      console.error('Error fetching missed window appeal:', err)
+    }
   }
 
-  const handleSaveMarks = async () => {
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current)
-      autoSaveTimerRef.current = null
+  const submitMissedWindowAppeal = async (course) => {
+    if (!appealReason.trim()) {
+      setMessage({ type: 'error', text: 'Please enter a reason for the appeal.' })
+      return
     }
-    await doSaveMarks()
+    setAppealSubmitting(true)
+    try {
+      const res = await fetch(`${API_BASE_URL}/mark-appeals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teacher_id: teacherId,
+          course_id: course.course_id,
+          window_id: course.missed_window.id,
+          reason: appealReason.trim(),
+        }),
+      })
+      if (res.ok) {
+        setAppealReason('')
+        setMessage({ type: 'success', text: 'Appeal submitted. The COE will review your request.' })
+        await fetchMissedWindowAppeal(course)
+      } else {
+        const errText = await res.text()
+        setMessage({ type: 'error', text: errText || 'Failed to submit appeal.' })
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Error submitting appeal. Please try again.' })
+    } finally {
+      setAppealSubmitting(false)
+    }
   }
 
   if (loading) {
@@ -912,17 +818,17 @@ function MarkEntryPage() {
                 ))}
               </select>
               {selectedCourse && (
-                  <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
-                    <div>
-                      <span className="font-medium text-gray-700">Category:</span> {selectedCourse.category}
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-700">Credit:</span> {selectedCourse.credit}
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-700">Students:</span> {selectedCourse.enrollments?.length || 0}
-                    </div>
+                <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
+                  <div>
+                    <span className="font-medium text-gray-700">Category:</span> {selectedCourse.category}
                   </div>
+                  <div>
+                    <span className="font-medium text-gray-700">Credit:</span> {selectedCourse.credit}
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-700">Students:</span> {selectedCourse.enrollments?.length || 0}
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -931,6 +837,144 @@ function MarkEntryPage() {
             No courses found for you. Please contact administrator.
           </div>
         )}
+
+        {/* Missed Window Appeal Card — shown when a teacher never submitted before the window closed
+            Hidden if teacher now has an active window (COE already extended it). */}
+        {selectedCourse && selectedCourse.has_missed_submission && selectedCourse.missed_window && isTeacher && !selectedCourse.has_window && (() => {
+          const appeal = missedWindowAppeals[selectedCourse.course_id]
+          const win = selectedCourse.missed_window
+          return (
+            <div className="bg-white border border-red-200 rounded-xl shadow-sm overflow-hidden">
+              {/* Header */}
+              <div className="px-6 py-4 bg-gradient-to-r from-red-500 to-rose-500 flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.04 0 1.911-.757 1.993-1.79L21 4.79A1.99 1.99 0 0019 3H5a1.99 1.99 0 00-2 2.21l.947 13.21c.082 1.033.954 1.79 1.993 1.79z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-white font-bold text-sm">Missed Mark Entry Window</h3>
+                  <p className="text-red-100 text-xs">You did not submit marks during the window period for this course.</p>
+                </div>
+              </div>
+
+              {/* Window Details */}
+              <div className="px-6 py-4 border-b border-red-100 bg-red-50/40">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Window Details</p>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-xs text-gray-500">Window</span>
+                    <p className="font-medium text-gray-800">{win.name || `Window #${win.id}`}</p>
+                  </div>
+                  <div>
+                    <span className="text-xs text-gray-500">Period</span>
+                    <p className="font-medium text-gray-800">
+                      {new Date(win.start_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      {' → '}
+                      {new Date(win.end_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Appeal Section */}
+              <div className="px-6 py-5">
+                {appeal === undefined ? (
+                  // Still loading appeal status
+                  <div className="flex items-center gap-2 text-gray-400 text-sm">
+                    <div className="animate-spin w-4 h-4 border-2 border-gray-300 border-t-transparent rounded-full" />
+                    Checking appeal status...
+                  </div>
+                ) : !appeal ? (
+                  // No appeal yet — show submission form
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Submit an Appeal</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      If you missed the deadline due to a valid reason, submit an appeal. The COE will review and can extend the window for you.
+                    </p>
+                    <textarea
+                      value={appealReason}
+                      onChange={e => setAppealReason(e.target.value)}
+                      placeholder="Explain why you missed the mark entry deadline..."
+                      rows={3}
+                      className="w-full px-4 py-2.5 text-sm border border-red-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400 resize-none placeholder-gray-400"
+                    />
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        onClick={() => submitMissedWindowAppeal(selectedCourse)}
+                        disabled={appealSubmitting || !appealReason.trim()}
+                        className="px-5 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+                      >
+                        {appealSubmitting ? (
+                          <>
+                            <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                            Submitting...
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                            </svg>
+                            Submit Appeal
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ) : appeal.status === 'pending' ? (
+                  // Appeal submitted, waiting for COE
+                  <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-amber-800">Appeal Submitted — Awaiting COE Review</p>
+                      <p className="text-xs text-gray-700 mt-1 leading-relaxed">{appeal.reason}</p>
+                      <p className="text-xs text-gray-400 mt-1.5">Submitted on {new Date(appeal.created_at).toLocaleString()}</p>
+                    </div>
+                  </div>
+                ) : appeal.status === 'resolved' ? (
+                  // COE approved — window extended, teacher should reload
+                  <div className="flex items-start gap-3 bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-green-800">Appeal Approved — Window Has Been Extended</p>
+                      <p className="text-xs text-gray-600 mt-1">The COE has extended the mark entry window for you. Reload the page to start entering marks.</p>
+                      <button
+                        onClick={() => window.location.reload()}
+                        className="mt-2.5 px-3 py-1.5 text-xs font-semibold text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                      >
+                        Reload Page
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // Rejected (edge case)
+                  <div className="flex items-start gap-3 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-700">Appeal Rejected</p>
+                      <p className="text-xs text-gray-600 mt-1">The COE has reviewed your appeal and declined the extension. Please contact the COE directly for further assistance.</p>
+                      {appeal.resolved_at && (
+                        <p className="text-xs text-gray-400 mt-1">Reviewed on {new Date(appeal.resolved_at).toLocaleString()}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Learning Mode Toggle */}
         {selectedCourse && learningMode && (
@@ -974,94 +1018,8 @@ function MarkEntryPage() {
           </div>
         )}
 
-        {/* Department Filter - shown when students are from multiple departments */}
-        {selectedCourse && (() => {
-          const deptMap = new Map()
-          ;(allStudents || []).forEach(s => {
-            if (s.department_id && s.department_name) {
-              deptMap.set(String(s.department_id), s.department_name)
-            }
-          })
-          const departments = Array.from(deptMap, ([id, name]) => ({ id, name }))
-
-          const selectedWindow = applicableWindows.find((w) => w.id === selectedWindowId) || applicableWindows[0]
-          const lockedDeptId = selectedWindow?.department_id ? String(selectedWindow.department_id) : null
-          const isWindowLocked = Boolean(lockedDeptId)
-          
-          // Show filter if multi-dept students OR if window is dept-locked
-          if (departments.length <= 1 && !isWindowLocked) return null
-          return (
-            <div className={`rounded-lg p-4 border shadow-sm ${isWindowLocked ? 'bg-amber-50 border-amber-200' : 'bg-teal-50 border-teal-100'}`}>
-              <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div className="flex-1">
-                  <h4 className="text-sm font-semibold text-gray-700 mb-1">
-                    {isWindowLocked ? 'Department (Window Restricted)' : 'Department Filter'}
-                  </h4>
-                  <p className="text-xs text-gray-600">
-                    {isWindowLocked 
-                      ? `Mark entry window is open only for ${deptMap.get(lockedDeptId) || 'this department'}. Only students from this department are shown.`
-                      : 'This course has students from multiple departments. Filter by department to enter marks separately.'}
-                  </p>
-                </div>
-                <div className="min-w-[240px]">
-                  <select
-                    value={selectedDepartment}
-                    onChange={(e) => setSelectedDepartment(e.target.value)}
-                    disabled={isWindowLocked}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none text-sm ${
-                      isWindowLocked 
-                        ? 'border-amber-300 bg-amber-100 text-amber-800 cursor-not-allowed'
-                        : 'border-teal-300 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white'
-                    }`}
-                  >
-                    {!isWindowLocked && <option value="all">All Departments ({allStudents.length} students)</option>}
-                    {departments.map(dept => {
-                      const count = allStudents.filter(s => String(s.department_id) === dept.id).length
-                      return (
-                        <option key={dept.id} value={dept.id}>
-                          {dept.name} ({count} students)
-                        </option>
-                      )
-                    })}
-                  </select>
-                </div>
-              </div>
-              {selectedDepartment !== 'all' && (
-                <div className={`mt-2 text-xs ${isWindowLocked ? 'text-amber-700' : 'text-teal-700'}`}>
-                  Showing students from: <span className="font-semibold">{deptMap.get(selectedDepartment)}</span>
-                </div>
-              )}
-            </div>
-          )
-        })()}
-
-        {/* Debug: Applicable Window Selector (faculty only, shown only if multiple windows apply) */}
-        {isTeacher && selectedCourse && applicableWindows.length > 1 && (
-          <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 shadow-sm">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div>
-                <h4 className="text-sm font-semibold text-gray-800">Debug Window Selector</h4>
-                <p className="text-xs text-gray-600 mt-1">Multiple active windows apply for this course/faculty. Select one for mark load/save.</p>
-              </div>
-              <div className="min-w-[320px]">
-                <select
-                  value={selectedWindowId || ''}
-                  onChange={(e) => setSelectedWindowId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                  className="w-full px-3 py-2 border border-amber-300 rounded-lg focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 bg-white"
-                >
-                  {applicableWindows.map((window) => (
-                    <option key={window.id} value={window.id}>
-                      {window.window_name || `Window #${window.id}`} | {window.start_at} to {window.end_at}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Mark Entry Table */}
-        {selectedCourse && filteredMarkCategories.length > 0 && (
+        {selectedCourse && displayMarkCategories.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col" style={{ height: 'calc(100vh - 400px)', minHeight: '500px' }}>
             <div className="border-b border-gray-200 px-6 py-4 flex-shrink-0">
               <div className="flex justify-between items-center">
@@ -1072,6 +1030,17 @@ function MarkEntryPage() {
                   <p className="text-xs text-gray-500 mt-1">Enter marks for each assessment component</p>
                 </div>
                 <div className="flex items-center gap-3">
+                  {autoSaveStatus && !isSubmitted && (
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      autoSaveStatus === 'saving'
+                        ? 'bg-blue-100 text-blue-700'
+                        : autoSaveStatus === 'saved'
+                        ? 'bg-green-100 text-green-700'
+                        : 'bg-red-100 text-red-700'
+                    }`}>
+                      {autoSaveStatus === 'saving' ? 'Auto-saving…' : autoSaveStatus === 'saved' ? 'Auto-saved' : 'Auto-save failed'}
+                    </span>
+                  )}
                   {isSubmitted ? (
                     <span className="flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 text-sm font-semibold rounded-lg border border-green-200">
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
@@ -1079,47 +1048,6 @@ function MarkEntryPage() {
                     </span>
                   ) : (
                     <>
-                      {/* <button
-                        onClick={handleFillRandomMarks}
-                        disabled={savingMarks}
-                        className="px-5 py-2 bg-gray-600 text-white text-sm font-medium rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                      >
-                        Fill Random
-                      </button>
-                      <button
-                        onClick={handleSaveMarks}
-                        disabled={savingMarks}
-                        className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {savingMarks ? 'Saving...' : 'Save'}
-                      </button> */}
-                      {/* Auto-save status indicator */}
-                      {autoSaveStatus && (
-                        <div className="flex items-center gap-2 text-sm">
-                          {autoSaveStatus === 'saving' && (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
-                              <span className="text-blue-600 font-medium">Saving...</span>
-                            </>
-                          )}
-                          {autoSaveStatus === 'saved' && (
-                            <>
-                              <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
-                              </svg>
-                              <span className="text-green-600 font-medium">Saved</span>
-                            </>
-                          )}
-                          {autoSaveStatus === 'error' && (
-                            <>
-                              <svg className="w-4 h-4 text-red-600" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"/>
-                              </svg>
-                              <span className="text-red-600 font-medium">Error saving</span>
-                            </>
-                          )}
-                        </div>
-                      )}
                       <button
                         onClick={() => setShowSubmitDialog(true)}
                         disabled={!allMarksFilled || Object.keys(markErrors).length > 0}
@@ -1213,16 +1141,26 @@ function MarkEntryPage() {
                         {categoryGroups.map((group) => (
                           <React.Fragment key={group.groupName}>
                             {group.categories.map((category) => {
-                              const earned = studentMarks[student.student_id]?.[category.id]
+                              const earned = getDisplayMarkValue(student.student_id, category)
                               const errorKey = `${student.student_id}_${category.id}`
                               const hasError = !!markErrors[errorKey]
                               return (
                                 <td key={category.id} className="px-3 py-3 text-center border-r border-gray-200" style={{ minWidth: '140px', maxWidth: '180px' }}>
                                   {isSubmitted ? (
+                                    isDisplayCellAbsent(student.student_id, category) ? (
+                                      <span className="inline-flex items-center gap-1 text-red-400 text-xs font-medium tracking-wide">
+                                        <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                          <circle cx="12" cy="12" r="10" />
+                                          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                                        </svg>
+                                        Absent
+                                      </span>
+                                    ) : (
                                       <span className="inline-block w-20 px-2 py-1 text-center text-sm font-medium text-gray-700 bg-gray-100 rounded border border-gray-200">
                                         {earned ?? '—'}
                                       </span>
-                                  ) : isCellAbsent(student.student_id, category.id) ? (
+                                    )
+                                  ) : isDisplayCellAbsent(student.student_id, category) ? (
                                     <span className="inline-flex items-center gap-1 text-red-300 text-xs font-medium tracking-wide">
                                       <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                         <circle cx="12" cy="12" r="10" />
@@ -1238,7 +1176,7 @@ function MarkEntryPage() {
                                         max={category.max_marks}
                                         step="0.01"
                                         value={earned ?? ''}
-                                        onChange={(e) => handleMarkChange(student.student_id, category.id, e.target.value)}
+                                        onChange={(e) => handleMarkChange(student.student_id, category, e.target.value)}
                                         placeholder="0"
                                         className={`w-20 px-2 py-1 border rounded text-center text-sm font-medium focus:outline-none focus:ring-2 ${
                                           hasError
@@ -1365,7 +1303,7 @@ function MarkEntryPage() {
           )
         })()}
 
-        {selectedCourse && filteredMarkCategories.length === 0 && (
+        {selectedCourse && displayMarkCategories.length === 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-blue-800">
             No mark categories found for {learningMode} mode. Try switching to {learningMode === 'PBL' ? 'UAL' : 'PBL'} mode.
           </div>

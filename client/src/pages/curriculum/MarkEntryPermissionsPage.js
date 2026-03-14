@@ -16,6 +16,67 @@ const formatDateTimeLocal = (dateString) => {
   return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
+const getInnovativePracticeBaseName = (name = '') => {
+  const normalized = String(name).replace(/\s+/g, ' ').trim()
+  const match = normalized.match(/^(Innovative Practice\s+[12])\s*-\s*\(\s*[12]\s*\)$/i)
+  return match ? match[1] : null
+}
+
+const normalizeInnovativePracticeSelections = (selectedIds = [], components = []) => {
+  const selected = new Set(selectedIds)
+  const groups = new Map()
+
+  components.forEach((component) => {
+    const baseName = getInnovativePracticeBaseName(component.name)
+    if (!baseName) return
+
+    const key = `${component.learning_mode_id || 0}|${baseName.toLowerCase()}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(component.id)
+  })
+
+  groups.forEach((ids) => {
+    if (ids.some((id) => selected.has(id))) {
+      ids.forEach((id) => selected.add(id))
+    }
+  })
+
+  return Array.from(selected)
+}
+
+const buildDisplayComponents = (components = []) => {
+  const display = []
+  const groupedIndex = new Map()
+
+  components.forEach((component) => {
+    const baseName = getInnovativePracticeBaseName(component.name)
+    if (!baseName) {
+      display.push({
+        ...component,
+        display_name: component.name,
+        component_ids: [component.id],
+      })
+      return
+    }
+
+    const key = `${component.course_type_name || 'Other'}|${component.learning_mode_id || 0}|${baseName.toLowerCase()}`
+    if (!groupedIndex.has(key)) {
+      const item = {
+        ...component,
+        display_name: baseName,
+        component_ids: [component.id],
+      }
+      groupedIndex.set(key, item)
+      display.push(item)
+      return
+    }
+
+    groupedIndex.get(key).component_ids.push(component.id)
+  })
+
+  return display
+}
+
 function MarkEntryPermissionsPage() {
   const navigate = useNavigate()
   const userRole = localStorage.getItem('userRole')
@@ -73,6 +134,8 @@ function MarkEntryPermissionsPage() {
   const [expandedClosedWindowId, setExpandedClosedWindowId] = useState(null)
   const [closedWindowView, setClosedWindowView] = useState({}) // { [windowId]: 'pending' | 'completed' }
   const [activeWindowView, setActiveWindowView] = useState({}) // { [windowId]: 'pending' | 'completed' }
+  const [activeWindowLearningMode, setActiveWindowLearningMode] = useState({}) // { [windowId]: 'PBL' | 'UAL' | 'ALL' }
+  const [closedWindowLearningMode, setClosedWindowLearningMode] = useState({}) // { [windowId]: 'PBL' | 'UAL' | 'ALL' }
 
   // Search/filter state for window lists
   const [existingWindowSearch, setExistingWindowSearch] = useState('')
@@ -442,8 +505,10 @@ function MarkEntryPermissionsPage() {
           }
         })
 
-        setSelectedPBLComponents(pblIds)
-        setSelectedUALComponents(ualIds)
+        const pblComponents = allComponents.filter(c => c.learning_mode_id === 2)
+        const ualComponents = allComponents.filter(c => c.learning_mode_id === 1)
+        setSelectedPBLComponents(normalizeInnovativePracticeSelections(pblIds, pblComponents))
+        setSelectedUALComponents(normalizeInnovativePracticeSelections(ualIds, ualComponents))
       } else {
         setSelectedPBLComponents([])
         setSelectedUALComponents([])
@@ -472,13 +537,15 @@ function MarkEntryPermissionsPage() {
     const startDate = new Date(windowStartAt)
     const endDate = new Date(windowEndAt)
 
+    const selectedComponentIds = Array.from(new Set([...selectedPBLComponents, ...selectedUALComponents]))
+
     const payload = {
       start_at: startDate.toISOString(),
       end_at: endDate.toISOString(),
       enabled: windowEnabled,
       window_name: windowName.trim(),
-      component_ids: [...selectedPBLComponents, ...selectedUALComponents].length > 0
-        ? [...selectedPBLComponents, ...selectedUALComponents]
+      component_ids: selectedComponentIds.length > 0
+        ? selectedComponentIds
         : null,
     }
 
@@ -766,8 +833,10 @@ function MarkEntryPermissionsPage() {
           }
         }
 
-        setSelectedPBLComponents(allPBL)
-        setSelectedUALComponents(allUAL)
+        const pblComponents = allComponents.filter(c => c.learning_mode_id === 2)
+        const ualComponents = allComponents.filter(c => c.learning_mode_id === 1)
+        setSelectedPBLComponents(normalizeInnovativePracticeSelections(allPBL, pblComponents))
+        setSelectedUALComponents(normalizeInnovativePracticeSelections(allUAL, ualComponents))
       } catch (error) {
         console.error('Error loading components:', error)
       }
@@ -823,8 +892,10 @@ function MarkEntryPermissionsPage() {
             else if (comp.learning_mode_id === 1) ualIds.push(id)
           }
         })
-        setSelectedPBLComponents(pblIds)
-        setSelectedUALComponents(ualIds)
+        const pblComponents = allComponents.filter(c => c.learning_mode_id === 2)
+        const ualComponents = allComponents.filter(c => c.learning_mode_id === 1)
+        setSelectedPBLComponents(normalizeInnovativePracticeSelections(pblIds, pblComponents))
+        setSelectedUALComponents(normalizeInnovativePracticeSelections(ualIds, ualComponents))
       } catch (err) {
         console.error('Error loading component details for edit:', err)
         setSelectedPBLComponents([])
@@ -861,13 +932,15 @@ function MarkEntryPermissionsPage() {
     const startDate = new Date(windowStartAt)
     const endDate = new Date(windowEndAt)
 
+    const selectedComponentIds = Array.from(new Set([...selectedPBLComponents, ...selectedUALComponents]))
+
     const payload = {
       start_at: startDate.toISOString(),
       end_at: endDate.toISOString(),
       enabled: windowEnabled,
       window_name: windowName.trim(),
-      component_ids: [...selectedPBLComponents, ...selectedUALComponents].length > 0
-        ? [...selectedPBLComponents, ...selectedUALComponents]
+      component_ids: selectedComponentIds.length > 0
+        ? selectedComponentIds
         : null,
       teacher_id: null,
       user_id: null,
@@ -938,19 +1011,17 @@ function MarkEntryPermissionsPage() {
         body: JSON.stringify(payload),
       })
 
-      let responseBody = null
       try {
-        responseBody = await res.json()
+        await res.json()
       } catch {
-        responseBody = null
+        // no-op
       }
 
       if (!res.ok) {
         throw new Error('Failed to update window')
       }
 
-      const refreshed = await fetchExistingWindows()
-      const updatedWindow = (refreshed || []).find((windowItem) => String(windowItem.id) === String(editingWindow.id))
+      await fetchExistingWindows()
 
       setMessage({ type: 'success', text: 'Window updated successfully.' })
       setEditingWindow(null)
@@ -1062,7 +1133,7 @@ function MarkEntryPermissionsPage() {
     setAssignmentLoading(true)
     try {
       // Combine PBL and UAL components
-      const allComponents = [...selectedPBLComponents, ...selectedUALComponents]
+      const allComponents = Array.from(new Set([...selectedPBLComponents, ...selectedUALComponents]))
 
       if (editingWindow) {
         // Update existing window
@@ -1548,7 +1619,7 @@ function MarkEntryPermissionsPage() {
                     </label>
                     <div className="space-y-3">
                       {Object.entries(
-                        windowComponents.reduce((groups, component) => {
+                        buildDisplayComponents(windowComponents).reduce((groups, component) => {
                           const courseTypeName = component.course_type_name || 'Other'
                           if (!groups[courseTypeName]) groups[courseTypeName] = []
                           groups[courseTypeName].push(component)
@@ -1564,26 +1635,28 @@ function MarkEntryPermissionsPage() {
                               const selectedComponents = learningMode === 'PBL' ? selectedPBLComponents : selectedUALComponents
                               const setSelectedComponents = learningMode === 'PBL' ? setSelectedPBLComponents : setSelectedUALComponents
 
+                              const isChecked = component.component_ids.some((id) => selectedComponents.includes(id))
+
                               return (
                                 <label
-                                  key={component.id}
+                                  key={`${component.id}-${component.display_name}`}
                                   className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-blue-600"
                                 >
                                   <input
                                     type="checkbox"
-                                    checked={selectedComponents.includes(component.id)}
+                                    checked={isChecked}
                                     onChange={(e) => {
                                       if (e.target.checked) {
-                                        setSelectedComponents([...selectedComponents, component.id])
+                                        setSelectedComponents(Array.from(new Set([...selectedComponents, ...component.component_ids])))
                                       } else {
                                         setSelectedComponents(
-                                          selectedComponents.filter((id) => id !== component.id)
+                                          selectedComponents.filter((id) => !component.component_ids.includes(id))
                                         )
                                       }
                                     }}
                                     className="h-4 w-4 accent-blue-600 cursor-pointer"
                                   />
-                                  <span className="font-medium">{component.name}</span>
+                                  <span className="font-medium">{component.display_name || component.name}</span>
                                 </label>
                               )
                             })}
@@ -1759,7 +1832,7 @@ function MarkEntryPermissionsPage() {
                   {windowComponents.length > 0 && (
                     <div className="space-y-3">
                       {Object.entries(
-                        windowComponents.reduce((groups, component) => {
+                        buildDisplayComponents(windowComponents).reduce((groups, component) => {
                           const courseTypeName = component.course_type_name || 'Other'
                           if (!groups[courseTypeName]) groups[courseTypeName] = []
                           groups[courseTypeName].push(component)
@@ -1772,21 +1845,22 @@ function MarkEntryPermissionsPage() {
                             {components.map((component) => {
                               const selectedComponents = learningMode === 'PBL' ? selectedPBLComponents : selectedUALComponents
                               const setSelectedComponents = learningMode === 'PBL' ? setSelectedPBLComponents : setSelectedUALComponents
+                              const isChecked = component.component_ids.some((id) => selectedComponents.includes(id))
                               return (
-                                <label key={component.id} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-blue-600">
+                                <label key={`${component.id}-${component.display_name}`} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-blue-600">
                                   <input
                                     type="checkbox"
-                                    checked={selectedComponents.includes(component.id)}
+                                    checked={isChecked}
                                     onChange={(e) => {
                                       if (e.target.checked) {
-                                        setSelectedComponents([...selectedComponents, component.id])
+                                        setSelectedComponents(Array.from(new Set([...selectedComponents, ...component.component_ids])))
                                       } else {
-                                        setSelectedComponents(selectedComponents.filter((id) => id !== component.id))
+                                        setSelectedComponents(selectedComponents.filter((id) => !component.component_ids.includes(id)))
                                       }
                                     }}
                                     className="h-4 w-4 accent-blue-600 cursor-pointer"
                                   />
-                                  <span className="font-medium">{component.name}</span>
+                                  <span className="font-medium">{component.display_name || component.name}</span>
                                 </label>
                               )
                             })}
@@ -1984,7 +2058,11 @@ function MarkEntryPermissionsPage() {
                     {filtered.map((win) => {
                       const { status, color } = getWindowStatus(win)
                       return (
-                        <div key={win.id} className="bg-gray-50 rounded-lg p-4 border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all">
+                        <div
+                          key={win.id}
+                          className="bg-gray-50 rounded-lg p-4 border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer"
+                          onClick={() => navigate(`/mark-entry-windows/${win.id}`)}
+                        >
                           <div className="flex items-start justify-between mb-3">
                             <div className="flex items-start gap-3 flex-1">
                               <div className="flex-shrink-0 w-12 h-12 rounded-lg bg-blue-50 border border-blue-200 flex flex-col items-center justify-center">
@@ -1998,9 +2076,15 @@ function MarkEntryPermissionsPage() {
                               </div>
                             </div>
                             <div className="flex gap-2 ml-4">
-                              <button onClick={() => { editWindow(win); setMainTab('create'); setActiveTab('windows') }}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(`/mark-entry-windows/${win.id}`) }}
+                                className="px-3 py-1.5 text-xs text-primary hover:bg-blue-50 rounded-lg font-medium transition-colors"
+                              >
+                                View Details
+                              </button>
+                              <button onClick={(e) => { e.stopPropagation(); editWindow(win); setMainTab('create'); setActiveTab('windows') }}
                                 className="px-3 py-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-lg font-medium transition-colors">Edit</button>
-                              <button onClick={() => deleteWindow(win.id)}
+                              <button onClick={(e) => { e.stopPropagation(); deleteWindow(win.id) }}
                                 className="px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors">Delete</button>
                             </div>
                           </div>
@@ -2163,8 +2247,25 @@ function MarkEntryPermissionsPage() {
                     const startDate = new Date(window.start_at)
                     const endDate = new Date(window.end_at)
                     const currentView = activeWindowView[window.window_id] || 'pending'
-                    const pendingList = window.pending_teachers || []
-                    const completedList = window.completed_teachers || []
+                    const learningModeFilter = activeWindowLearningMode[window.window_id] || 'ALL'
+                    
+                    // Total unfiltered counts for badges
+                    const totalPending = (window.pending_teachers || []).length
+                    const totalCompleted = (window.completed_teachers || []).length
+                    
+                    // Filter teachers based on learning mode selection
+                    const filterByLearningMode = (teachers) => {
+                      if (!window.has_pbl || !window.has_ual || learningModeFilter === 'ALL') {
+                        return teachers
+                      }
+                      return teachers.filter(t => {
+                        const modes = t.learning_modes || []
+                        return modes.includes(learningModeFilter)
+                      })
+                    }
+                    
+                    const pendingList = filterByLearningMode(window.pending_teachers || [])
+                    const completedList = filterByLearningMode(window.completed_teachers || [])
                     const showingList = currentView === 'completed' ? completedList : pendingList
 
                     return (
@@ -2212,10 +2313,10 @@ function MarkEntryPermissionsPage() {
                                 </span>
                               )}
                               <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">
-                                {pendingList.length} Pending
+                                {totalPending} Pending
                               </span>
                               <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-bold rounded-full">
-                                {completedList.length} Submitted
+                                {totalCompleted} Submitted
                               </span>
                               <span className="px-2 py-0.5 bg-green-100 text-green-800 text-xs font-semibold rounded-full">
                                 Active
@@ -2239,6 +2340,57 @@ function MarkEntryPermissionsPage() {
 
                         {isExpanded && (
                           <div className="border-t border-gray-200">
+                            {/* PBL/UAL Filter Toggle (only show if window has both) */}
+                            {(() => {
+                              console.log(`Active Window ${window.window_id}:`, { has_pbl: window.has_pbl, has_ual: window.has_ual })
+                              return window.has_pbl && window.has_ual
+                            })() && (
+                              <div className="px-5 py-3 bg-purple-50 border-b border-purple-100 flex items-center justify-between">
+                                <div className="text-xs text-gray-600 font-medium">Filter by Learning Mode:</div>
+                                <div className="inline-flex rounded-lg bg-purple-200 p-0.5">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setActiveWindowLearningMode(prev => ({ ...prev, [window.window_id]: 'ALL' }))
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                      (activeWindowLearningMode[window.window_id] || 'ALL') === 'ALL'
+                                        ? 'bg-purple-600 text-white shadow-sm'
+                                        : 'text-gray-700 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    All
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setActiveWindowLearningMode(prev => ({ ...prev, [window.window_id]: 'PBL' }))
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                      activeWindowLearningMode[window.window_id] === 'PBL'
+                                        ? 'bg-blue-600 text-white shadow-sm'
+                                        : 'text-gray-700 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    PBL
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setActiveWindowLearningMode(prev => ({ ...prev, [window.window_id]: 'UAL' }))
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                      activeWindowLearningMode[window.window_id] === 'UAL'
+                                        ? 'bg-orange-600 text-white shadow-sm'
+                                        : 'text-gray-700 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    UAL
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
                             {/* Toggle between Pending and Submitted */}
                             <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center">
                               <div className="inline-flex rounded-lg bg-gray-200 p-0.5">
@@ -2392,8 +2544,25 @@ function MarkEntryPermissionsPage() {
                     const startDate = new Date(window.start_at)
                     const endDate = new Date(window.end_at)
                     const currentView = closedWindowView[window.window_id] || 'pending'
-                    const pendingList = window.pending_teachers || []
-                    const completedList = window.completed_teachers || []
+                    const learningModeFilter = closedWindowLearningMode[window.window_id] || 'ALL'
+                    
+                    // Total unfiltered counts for badges
+                    const totalPending = (window.pending_teachers || []).length
+                    const totalCompleted = (window.completed_teachers || []).length
+                    
+                    // Filter teachers based on learning mode selection
+                    const filterByLearningMode = (teachers) => {
+                      if (!window.has_pbl || !window.has_ual || learningModeFilter === 'ALL') {
+                        return teachers
+                      }
+                      return teachers.filter(t => {
+                        const modes = t.learning_modes || []
+                        return modes.includes(learningModeFilter)
+                      })
+                    }
+                    
+                    const pendingList = filterByLearningMode(window.pending_teachers || [])
+                    const completedList = filterByLearningMode(window.completed_teachers || [])
                     const showingList = currentView === 'completed' ? completedList : pendingList
                     const windowSelected = selectedTeachers[window.window_id] || new Set()
                     const allPendingKeys = pendingList.map(t => `${t.teacher_id}|${t.course_id}`)
@@ -2449,10 +2618,10 @@ function MarkEntryPermissionsPage() {
                                 </span>
                               )}
                               <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">
-                                {pendingList.length} Not Submitted
+                                {totalPending} Not Submitted
                               </span>
                               <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-bold rounded-full">
-                                {completedList.length} Completed
+                                {totalCompleted} Completed
                               </span>
                               <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-semibold rounded-full">
                                 Closed {closedAgoText}
@@ -2476,6 +2645,57 @@ function MarkEntryPermissionsPage() {
 
                         {isExpanded && (
                           <div className="border-t border-amber-200">
+                            {/* PBL/UAL Filter Toggle (only show if window has both) */}
+                            {(() => {
+                              console.log(`Closed Window ${window.window_id}:`, { has_pbl: window.has_pbl, has_ual: window.has_ual })
+                              return window.has_pbl && window.has_ual
+                            })() && (
+                              <div className="px-5 py-3 bg-purple-50 border-b border-purple-100 flex items-center justify-between">
+                                <div className="text-xs text-gray-600 font-medium">Filter by Learning Mode:</div>
+                                <div className="inline-flex rounded-lg bg-purple-200 p-0.5">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setClosedWindowLearningMode(prev => ({ ...prev, [window.window_id]: 'ALL' }))
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                      (closedWindowLearningMode[window.window_id] || 'ALL') === 'ALL'
+                                        ? 'bg-purple-600 text-white shadow-sm'
+                                        : 'text-gray-700 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    All
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setClosedWindowLearningMode(prev => ({ ...prev, [window.window_id]: 'PBL' }))
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                      closedWindowLearningMode[window.window_id] === 'PBL'
+                                        ? 'bg-blue-600 text-white shadow-sm'
+                                        : 'text-gray-700 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    PBL
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setClosedWindowLearningMode(prev => ({ ...prev, [window.window_id]: 'UAL' }))
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                      closedWindowLearningMode[window.window_id] === 'UAL'
+                                        ? 'bg-orange-600 text-white shadow-sm'
+                                        : 'text-gray-700 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    UAL
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
                             {/* Toggle switch between Pending and Completed + Extend button */}
                             <div className="px-5 py-3 bg-gray-50 border-b border-amber-100 flex items-center justify-between">
                               <div className="inline-flex rounded-lg bg-gray-200 p-0.5">

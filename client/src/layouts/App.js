@@ -33,6 +33,8 @@ import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
 import MarkEntryPermissionsPage from "../pages/curriculum/MarkEntryPermissionsPage";
+import MarkEntryWindowDetailsPage from "../pages/curriculum/MarkEntryWindowDetailsPage";
+import MarkEntryWindowTeacherDetailsPage from "../pages/curriculum/MarkEntryWindowTeacherDetailsPage";
 import HODMarkEntryDashboardPage from "../pages/curriculum/HODMarkEntryDashboardPage";
 import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
@@ -89,7 +91,18 @@ function App() {
             path="mark-entry-permissions"
             element={<MarkEntryPermissionsPage />}
           />
-          <Route path="mark-monitor" element={<HODMarkEntryDashboardPage />} />
+          <Route
+            path="mark-entry-windows/:windowId"
+            element={<MarkEntryWindowDetailsPage />}
+          />
+          <Route
+            path="mark-entry-windows/:windowId/teacher-details"
+            element={<MarkEntryWindowTeacherDetailsPage />}
+          />
+          <Route
+            path="mark-monitor"
+            element={<HODMarkEntryDashboardPage />}
+          />
           <Route path="result-analysis" element={<ResultAnalysisPage />} />
           <Route
             path="my-assigned-students"

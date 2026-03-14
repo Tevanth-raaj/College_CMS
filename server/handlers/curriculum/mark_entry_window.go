@@ -95,7 +95,7 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-		SELECT id, teacher_id, department_id, semester, course_id, start_at, end_at, enabled
+		SELECT id, teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name
 		FROM mark_entry_windows
 		WHERE 1 = 1`
 	args := []interface{}{}
@@ -139,6 +139,8 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	var semesterNull sql.NullInt64
 	var courseIDNull sql.NullInt64
 
+	var windowName sql.NullString
+
 	err := database.QueryRow(query, args...).Scan(
 		&window.ID,
 		&teacherIDNull,
@@ -148,6 +150,7 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		&startAt,
 		&endAt,
 		&enabledInt,
+		&windowName,
 	)
 	if err == sql.ErrNoRows {
 		json.NewEncoder(w).Encode(nil)
@@ -178,6 +181,9 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	window.StartAt = startAt.Format(markEntryTimeLayout)
 	window.EndAt = endAt.Format(markEntryTimeLayout)
 	window.Enabled = enabledInt == 1
+	if windowName.Valid {
+		window.WindowName = windowName.String
+	}
 
 	// Load component IDs if any
 	componentRows, err := database.Query(`
@@ -1464,10 +1470,136 @@ func GetMarkEntryStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-// GetWindowsPendingSubmissions returns windows with teachers who haven't submitted marks.
-// Query params:
-//   - status=active  (default) — currently live windows (start_at <= now <= end_at)
-//   - status=closed  — expired windows (end_at < now) so admins can see who missed the deadline
+// getTeacherLearningModes determines which learning mode(s) a teacher teaches for a given course
+// by checking the allocated students' learning modes
+func getTeacherLearningModes(database *sql.DB, teacherID string, courseID int) []string {
+	query := `
+		SELECT DISTINCT s.learning_mode_id
+		FROM course_student_teacher_allocation csta
+		INNER JOIN students s ON s.id = csta.student_id
+		WHERE csta.teacher_id = ? AND csta.course_id = ?
+	`
+
+	rows, err := database.Query(query, teacherID, courseID)
+	if err != nil {
+		log.Printf("Error fetching learning modes for teacher %s course %d: %v", teacherID, courseID, err)
+		return []string{}
+	}
+	defer rows.Close()
+
+	modes := []string{}
+	hasPBL := false
+	hasUAL := false
+
+	for rows.Next() {
+		var lmID sql.NullInt64
+		if err := rows.Scan(&lmID); err == nil && lmID.Valid {
+			if lmID.Int64 == 1 {
+				hasUAL = true
+			} else if lmID.Int64 == 2 {
+				hasPBL = true
+			}
+		}
+	}
+
+	if hasUAL {
+		modes = append(modes, "UAL")
+	}
+	if hasPBL {
+		modes = append(modes, "PBL")
+	}
+
+	return modes
+}
+
+// getLearningModesForComponents determines if a window's components correspond to UAL, PBL, or both.
+func getLearningModesForComponents(database *sql.DB, componentIDs []int) (isUAL bool, isPBL bool) {
+	if len(componentIDs) == 0 {
+		return true, true // No specific components means both are implicitly included
+	}
+
+	// Correctly format the query with placeholders
+	placeholders := strings.Repeat("?,", len(componentIDs)-1) + "?"
+	query := fmt.Sprintf(`
+		SELECT DISTINCT ct.component_type
+		FROM assessment_components ac
+		JOIN component_types ct ON ac.type_id = ct.id
+		WHERE ac.id IN (%s)
+	`, placeholders)
+
+	args := make([]interface{}, len(componentIDs))
+	for i, id := range componentIDs {
+		args[i] = id
+	}
+
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		log.Printf("Error checking component types: %v", err)
+		return false, false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var componentType string
+		if err := rows.Scan(&componentType); err == nil {
+			// Check for substrings "PBL" or "UAL" in the component type name
+			if strings.Contains(strings.ToUpper(componentType), "PBL") {
+				isPBL = true
+			}
+			if strings.Contains(strings.ToUpper(componentType), "UAL") {
+				isUAL = true
+			}
+		}
+	}
+
+	// If no specific UAL/PBL type is found in any component name, assume it could be for both
+	if !isUAL && !isPBL {
+		return true, true
+	}
+	return isUAL, isPBL
+}
+
+// buildTeacherQuery constructs the query to fetch teachers based on the window's learning modes.
+func buildTeacherQuery(isUAL bool, isPBL bool) string {
+	baseQuery := `
+		SELECT
+			t.faculty_id,
+			t.name,
+			t.department_id,
+			d.department_name,
+			COUNT(DISTINCT csta.student_id) as student_count,
+			SUM(CASE WHEN sm.id IS NOT NULL THEN 1 ELSE 0 END) as submitted_count,
+			SUM(CASE WHEN s.learning_mode_id = 1 THEN 1 ELSE 0 END) as ual_student_count,
+			SUM(CASE WHEN s.learning_mode_id = 2 THEN 1 ELSE 0 END) as pbl_student_count
+		FROM mark_entry_windows w
+		JOIN teacher_course_allocation tca ON (w.course_id IS NULL OR w.course_id = tca.course_id)
+		JOIN teachers t ON tca.teacher_id = t.faculty_id
+		JOIN departments d ON t.department_id = d.id
+		JOIN course_student_teacher_allocation csta ON t.faculty_id = csta.teacher_id AND tca.course_id = csta.course_id
+		JOIN students s ON csta.student_id = s.id
+		LEFT JOIN student_marks sm ON sm.student_id = csta.student_id AND sm.course_id = csta.course_id AND sm.teacher_id = t.faculty_id AND sm.assessment_component_id IN (
+			SELECT assessment_component_id FROM mark_entry_window_components WHERE window_id = w.id
+		)
+		WHERE w.id = ?
+		GROUP BY t.faculty_id, t.name, t.department_id, d.department_name
+	`
+
+	var havingClauses []string
+	if isUAL && !isPBL {
+		havingClauses = append(havingClauses, "ual_student_count > 0")
+	}
+	if isPBL && !isUAL {
+		havingClauses = append(havingClauses, "pbl_student_count > 0")
+	}
+
+	if len(havingClauses) > 0 {
+		return baseQuery + " HAVING " + strings.Join(havingClauses, " AND ") + " ORDER BY t.name"
+	}
+
+	return baseQuery + " ORDER BY t.name"
+}
+
+// GetWindowsPendingSubmissions returns active or closed windows with pending submissions.
 func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -1491,6 +1623,19 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		status = "active"
 	}
 
+	windowIDParam := strings.TrimSpace(r.URL.Query().Get("window_id"))
+	hasWindowFilter := false
+	filteredWindowID := 0
+	if windowIDParam != "" {
+		parsedWindowID, parseErr := strconv.Atoi(windowIDParam)
+		if parseErr != nil || parsedWindowID <= 0 {
+			http.Error(w, "Invalid window_id", http.StatusBadRequest)
+			return
+		}
+		hasWindowFilter = true
+		filteredWindowID = parsedWindowID
+	}
+
 	// Fetch all enabled windows — we'll filter by time in Go to avoid timezone mismatches
 	windowQuery := `
 		SELECT 
@@ -1507,7 +1652,14 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		ORDER BY w.end_at DESC
 	`
 
-	rows, err := database.Query(windowQuery)
+	var rows *sql.Rows
+	var err error
+	if hasWindowFilter {
+		windowQuery += " AND w.id = ?"
+		rows, err = database.Query(windowQuery, filteredWindowID)
+	} else {
+		rows, err = database.Query(windowQuery)
+	}
 	if err != nil {
 		log.Printf("Error fetching windows: %v", err)
 		http.Error(w, "Failed to fetch windows", http.StatusInternalServerError)
@@ -1519,13 +1671,14 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[PendingSubmissions] status=%s, now(local)=%v, now(utc)=%v", status, now, now.UTC())
 
 	type PendingTeacher struct {
-		TeacherID   string `json:"teacher_id"`
-		TeacherName string `json:"teacher_name"`
-		CourseID    int    `json:"course_id"`
-		CourseCode  string `json:"course_code"`
-		CourseName  string `json:"course_name"`
-		Submitted   bool   `json:"submitted"`
-		SubmittedAt string `json:"submitted_at,omitempty"`
+		TeacherID     string   `json:"teacher_id"`
+		TeacherName   string   `json:"teacher_name"`
+		CourseID      int      `json:"course_id"`
+		CourseCode    string   `json:"course_code"`
+		CourseName    string   `json:"course_name"`
+		Submitted     bool     `json:"submitted"`
+		SubmittedAt   string   `json:"submitted_at,omitempty"`
+		LearningModes []string `json:"learning_modes"` // e.g., ["PBL"], ["UAL"], or ["PBL", "UAL"]
 	}
 
 	type WindowWithPending struct {
@@ -1539,6 +1692,8 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		CourseName     string           `json:"course_name"`
 		StartAt        string           `json:"start_at"`
 		EndAt          string           `json:"end_at"`
+		HasPBL         bool             `json:"has_pbl"` // Window has at least one PBL component
+		HasUAL         bool             `json:"has_ual"` // Window has at least one UAL component
 		Pending        []PendingTeacher `json:"pending_teachers"`
 		Completed      []PendingTeacher `json:"completed_teachers"`
 	}
@@ -1572,18 +1727,21 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Filter by time in Go — avoids MySQL timezone mismatches
-		log.Printf("[PendingSubmissions] Window %d: startAt=%v endAt=%v now=%v", windowID, startAt, endAt, now)
-		switch status {
-		case "closed":
-			if !endAt.Before(now) {
-				// Window hasn't expired yet, skip for closed status
-				continue
-			}
-		default: // "active"
-			if !(!now.Before(startAt) && !now.After(endAt)) {
-				// Window is not currently active, skip
-				continue
+		// Filter by time in Go — avoids MySQL timezone mismatches.
+		// If a specific window is requested, skip time filtering and return exact window details.
+		if !hasWindowFilter {
+			log.Printf("[PendingSubmissions] Window %d: startAt=%v endAt=%v now=%v", windowID, startAt, endAt, now)
+			switch status {
+			case "closed":
+				if !endAt.Before(now) {
+					// Window hasn't expired yet, skip for closed status
+					continue
+				}
+			default: // "active"
+				if !(!now.Before(startAt) && !now.After(endAt)) {
+					// Window is not currently active, skip
+					continue
+				}
 			}
 		}
 
@@ -1595,6 +1753,8 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 			CourseName:     courseName.String,
 			StartAt:        startAt.Format(time.RFC3339),
 			EndAt:          endAt.Format(time.RFC3339),
+			HasPBL:         false,
+			HasUAL:         false,
 			Pending:        []PendingTeacher{},
 			Completed:      []PendingTeacher{},
 		}
@@ -1613,6 +1773,32 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 			windowData.CourseID = &v
 		}
 
+		// Check if window has PBL/UAL components
+		componentLearningModes, err := database.Query(`
+			SELECT DISTINCT mct.learning_mode_id
+			FROM mark_entry_window_components wc
+			INNER JOIN mark_category_types mct ON mct.id = wc.assessment_component_id
+			WHERE wc.window_id = ? AND mct.learning_mode_id IS NOT NULL
+		`, windowID)
+		if err == nil {
+			for componentLearningModes.Next() {
+				var lmID int
+				if err := componentLearningModes.Scan(&lmID); err == nil {
+					log.Printf("[PendingSubmissions] Window %d found learning_mode_id=%d", windowID, lmID)
+					if lmID == 1 {
+						windowData.HasUAL = true
+					} else if lmID == 2 {
+						windowData.HasPBL = true
+					}
+				}
+			}
+			componentLearningModes.Close()
+		} else {
+			log.Printf("[PendingSubmissions] Error querying learning modes for window %d: %v", windowID, err)
+		}
+
+		log.Printf("[PendingSubmissions] Window %d: HasPBL=%v, HasUAL=%v", windowID, windowData.HasPBL, windowData.HasUAL)
+
 		log.Printf("[PendingSubmissions] Processing window %d: teacher=%v dept=%v sem=%v course=%v",
 			windowID, teacherID, deptID, semester, courseID)
 
@@ -1625,58 +1811,61 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		hasDepartment := deptID.Valid && deptID.Int64 != 0
 		hasSemester := semester.Valid && semester.Int64 != 0
 
-		// Must have at least one meaningful scope field
 		if !hasTeacher && !hasCourse && !hasDepartment && !hasSemester {
 			log.Printf("Skipping window %d: no meaningful scope fields", windowID)
 			continue
 		}
 
-		// Build query parts dynamically — get ALL teachers in scope (no submission filter)
-		extraJoins := ""
-		extraWhere := ""
+		whereClauses := []string{
+			"csta.status = 1",
+			"s.status = 1",
+		}
 
 		if hasTeacher {
-			extraWhere += " AND tca.teacher_id = ?"
+			whereClauses = append(whereClauses, "csta.teacher_id = ?")
 			teacherArgs = append(teacherArgs, teacherID.String)
 		}
 
 		if hasCourse {
-			extraWhere += " AND tca.course_id = ?"
+			whereClauses = append(whereClauses, "csta.course_id = ?")
 			teacherArgs = append(teacherArgs, courseID.Int64)
 		}
 
 		if hasDepartment {
-			extraJoins += " INNER JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id AND dt.status = 1"
-			extraWhere += " AND dt.department_id = ?"
+			whereClauses = append(whereClauses, "s.department_id = ?")
 			teacherArgs = append(teacherArgs, deptID.Int64)
 		}
 
 		if hasSemester {
-			// Use a subquery approach to find courses in the specified semester
-			// This is more robust than INNER JOIN which can miss courses if curriculum_courses is incomplete
-			extraWhere += ` AND tca.course_id IN (
-				SELECT DISTINCT cc.course_id 
-				FROM curriculum_courses cc
-				INNER JOIN normal_cards nc ON cc.semester_id = nc.id
-				WHERE nc.semester_number = ?
-			)`
+			whereClauses = append(whereClauses, "nc.semester_number = ?")
 			teacherArgs = append(teacherArgs, semester.Int64)
+			whereClauses = append(whereClauses, "COALESCE(nc.card_type, 'semester') = 'semester'")
+		}
+
+		// Filter teachers strictly by selected window component learning modes.
+		// PBL-only window => only teachers having at least one PBL student in scope.
+		// UAL-only window => only teachers having at least one UAL student in scope.
+		if windowData.HasPBL && !windowData.HasUAL {
+			whereClauses = append(whereClauses, "s.learning_mode_id = 2")
+		} else if windowData.HasUAL && !windowData.HasPBL {
+			whereClauses = append(whereClauses, "s.learning_mode_id = 1")
 		}
 
 		teacherQuery := fmt.Sprintf(`
 			SELECT DISTINCT
-				tca.teacher_id,
-				COALESCE(t.name, tca.teacher_id) as teacher_name,
-				tca.course_id,
-				c.course_code,
-				c.course_name
-			FROM teacher_course_allocation tca
-			LEFT JOIN teachers t ON t.faculty_id = tca.teacher_id
-			LEFT JOIN courses c ON c.id = tca.course_id
-			%s
-			WHERE tca.is_active = 1
-			%s
-		`, extraJoins, extraWhere)
+				csta.teacher_id,
+				COALESCE(t.name, csta.teacher_id) as teacher_name,
+				csta.course_id,
+				COALESCE(c.course_code, '') as course_code,
+				COALESCE(c.course_name, '') as course_name
+			FROM course_student_teacher_allocation csta
+			INNER JOIN students s ON s.id = csta.student_id
+			LEFT JOIN teachers t ON t.faculty_id = csta.teacher_id
+			LEFT JOIN courses c ON c.id = csta.course_id
+			LEFT JOIN curriculum_courses cc ON cc.course_id = csta.course_id
+			LEFT JOIN normal_cards nc ON nc.id = cc.semester_id
+			WHERE %s
+		`, strings.Join(whereClauses, " AND "))
 
 		teacherRows, err := database.Query(teacherQuery, teacherArgs...)
 		if err != nil {
@@ -1705,7 +1894,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		}
 		teacherRows.Close()
 
-		if len(allTeachers) == 0 {
+		if len(allTeachers) == 0 && !hasWindowFilter {
 			log.Printf("Window %d: no teachers found in scope", windowID)
 			continue
 		}
@@ -1736,14 +1925,19 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 			}
 			key := fmt.Sprintf("%s|%d", tid, cid)
 			submittedSet[key] = true
+
+			// Determine learning modes for this teacher+course
+			learningModes := getTeacherLearningModes(database, tid, cid)
+
 			windowData.Completed = append(windowData.Completed, PendingTeacher{
-				TeacherID:   tid,
-				TeacherName: tname,
-				CourseID:    cid,
-				CourseCode:  ccode,
-				CourseName:  cname,
-				Submitted:   true,
-				SubmittedAt: submittedAt.Format(time.RFC3339),
+				TeacherID:     tid,
+				TeacherName:   tname,
+				CourseID:      cid,
+				CourseCode:    ccode,
+				CourseName:    cname,
+				Submitted:     true,
+				SubmittedAt:   submittedAt.Format(time.RFC3339),
+				LearningModes: learningModes,
 			})
 		}
 		submissionRows.Close()
@@ -1754,19 +1948,23 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		for _, tc := range allTeachers {
 			key := fmt.Sprintf("%s|%d", tc.TeacherID, tc.CourseID)
 			if !submittedSet[key] {
+				// Determine learning modes for this teacher+course
+				learningModes := getTeacherLearningModes(database, tc.TeacherID, tc.CourseID)
+
 				windowData.Pending = append(windowData.Pending, PendingTeacher{
-					TeacherID:   tc.TeacherID,
-					TeacherName: tc.TeacherName,
-					CourseID:    tc.CourseID,
-					CourseCode:  tc.CourseCode,
-					CourseName:  tc.CourseName,
-					Submitted:   false,
+					TeacherID:     tc.TeacherID,
+					TeacherName:   tc.TeacherName,
+					CourseID:      tc.CourseID,
+					CourseCode:    tc.CourseCode,
+					CourseName:    tc.CourseName,
+					Submitted:     false,
+					LearningModes: learningModes,
 				})
 			}
 		}
 
 		// Include windows that have any teachers at all (pending or completed)
-		if len(windowData.Pending) > 0 || len(windowData.Completed) > 0 {
+		if hasWindowFilter || len(windowData.Pending) > 0 || len(windowData.Completed) > 0 {
 			result = append(result, windowData)
 		}
 	}

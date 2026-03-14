@@ -652,11 +652,20 @@ function Sidebar({ onExpandedChange }) {
   };
 
   const handleLogout = () => {
+    // Clear all user and teacher related data
     localStorage.removeItem("userId");
+    localStorage.removeItem("user_id");
     localStorage.removeItem("userRole");
     localStorage.removeItem("userName");
     localStorage.removeItem("userEmail");
+    localStorage.removeItem("username");
     localStorage.removeItem("teacherId");
+    localStorage.removeItem("teacher_id");
+    localStorage.removeItem("teacher_name");
+    localStorage.removeItem("teacher_email");
+    localStorage.removeItem("teacher_dept");
+    localStorage.removeItem("teacher_designation");
+    localStorage.removeItem("faculty_id");
     localStorage.removeItem("token");
     navigate("/");
   };

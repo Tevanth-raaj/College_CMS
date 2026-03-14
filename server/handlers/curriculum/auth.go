@@ -196,21 +196,33 @@ func writeLoginSuccessResponse(w http.ResponseWriter, user *models.User) {
 	// If user is a teacher or hod, fetch teacher details from teachers table
 	var teacherData map[string]interface{}
 	if user.Role == "teacher" || user.Role == "hod" {
-		log.Printf("Fetching teacher details for role %s, email: %s", user.Role, user.Email)
+		log.Printf("Fetching teacher details for role %s, username: %s, email: %s", user.Role, user.Username, user.Email)
 
 		var teacherID int64
 		var facultyID, name, email, phone, dept, desg sql.NullString
 		var profileImg sql.NullString
 		var status sql.NullInt32
 
-		// Query without theory_subject_count columns (they may not exist in all schemas)
+		// Try to find teacher by faculty_id (username) first, then fall back to email
 		teacherQuery := `SELECT id, faculty_id, name, email, phone, profile_img, dept, desg, status
-		                 FROM teachers WHERE email = ? AND status = 1`
+		                 FROM teachers WHERE faculty_id = ? AND status = 1 LIMIT 1`
 
-		err := db.DB.QueryRow(teacherQuery, user.Email).Scan(
+		err := db.DB.QueryRow(teacherQuery, user.Username).Scan(
 			&teacherID, &facultyID, &name, &email, &phone, &profileImg,
 			&dept, &desg, &status,
 		)
+
+		// If not found by faculty_id, try by email
+		if err == sql.ErrNoRows {
+			log.Printf("Teacher not found by faculty_id (%s), trying email (%s)", user.Username, user.Email)
+			teacherQuery = `SELECT id, faculty_id, name, email, phone, profile_img, dept, desg, status
+			                 FROM teachers WHERE email = ? AND status = 1 LIMIT 1`
+
+			err = db.DB.QueryRow(teacherQuery, user.Email).Scan(
+				&teacherID, &facultyID, &name, &email, &phone, &profileImg,
+				&dept, &desg, &status,
+			)
+		}
 
 		if err == nil {
 			// Teacher found, add teacher data to response
@@ -227,7 +239,7 @@ func writeLoginSuccessResponse(w http.ResponseWriter, user *models.User) {
 			}
 			log.Printf("Teacher data found: ID=%d, Name=%s, FacultyID=%s", teacherID, nullStringToString(name), nullStringToString(facultyID))
 		} else if err == sql.ErrNoRows {
-			log.Printf("Warning: User is teacher role but not found in teachers table: %s", user.Email)
+			log.Printf("Warning: User is teacher role but not found in teachers table by faculty_id or email: %s / %s", user.Username, user.Email)
 		} else {
 			log.Printf("Error fetching teacher data: %v", err)
 		}
@@ -290,10 +302,10 @@ func verifyGoogleIDToken(idToken string, expectedAudience string) (string, error
 
 	if response.StatusCode != http.StatusOK {
 		if strings.TrimSpace(tokenInfo.ErrorDescription) != "" {
-			return "", fmt.Errorf(tokenInfo.ErrorDescription)
+			return "", fmt.Errorf("google token error: %s", tokenInfo.ErrorDescription)
 		}
 		if strings.TrimSpace(tokenInfo.Error) != "" {
-			return "", fmt.Errorf(tokenInfo.Error)
+			return "", fmt.Errorf("google token error: %s", tokenInfo.Error)
 		}
 		return "", fmt.Errorf("token validation failed with status %d", response.StatusCode)
 	}
