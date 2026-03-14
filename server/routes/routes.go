@@ -260,6 +260,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/oe-offerings", curriculum.GetHODOEOfferings).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/oe-offerings", curriculum.SaveHODOEOfferings).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/hod/oe-offerings/incoming", curriculum.GetOEOfferedToMyDept).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/oe-validate-courses", curriculum.ValidateOECourseEligibility).Methods("GET", "OPTIONS")
 
 	// Vertical Lock routes (honour/minor vertical tracking across semesters)
 	router.HandleFunc("/api/hod/vertical-locks", curriculum.GetVerticalLocks).Methods("GET", "OPTIONS")
@@ -301,6 +302,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/students/electives/available", studentteacher.GetAvailableElectives).Methods("GET", "OPTIONS")         // ?email=
 	router.HandleFunc("/api/students/electives/selections", studentteacher.SaveElectiveSelections).Methods("POST", "OPTIONS")      // ?email=
 	router.HandleFunc("/api/students/electives/selections", studentteacher.GetStudentElectiveSelections).Methods("GET", "OPTIONS") // ?email=
+	router.HandleFunc("/api/students/elective-exemption-requests", studentteacher.CreateElectiveExemptionRequest).Methods("POST", "OPTIONS")
 
 	// HR routes
 	router.HandleFunc("/api/hr/faculty", studentteacher.GetAllFaculty).Methods("GET", "OPTIONS")
@@ -326,6 +328,11 @@ func SetupRoutes() *mux.Router {
 
 	// Automatic Allocation routes
 	router.HandleFunc("/api/allocations/run", allocation.RunAutoAllocation).Methods("POST", "OPTIONS")
+
+	// Student-Teacher-Course Allocation routes
+	router.HandleFunc("/api/allocations/students/run", allocation.AllocateStudentsToTeachers).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/allocations/students/course/{course_id}", allocation.AllocateSingleCourse).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/allocations/students/course/{course_id}/view", allocation.GetAllocationByCourse).Methods("GET", "OPTIONS")
 
 	return router
 }
