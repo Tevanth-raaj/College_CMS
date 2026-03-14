@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +60,125 @@ type CourseTypeSummary struct {
 type TeacherCoursePreferencesResponse struct {
 	Locked      bool                      `json:"locked"` // true if preferences already submitted for next semester
 	Preferences []TeacherCoursePreference `json:"preferences"`
+}
+
+func shiftAcademicYearForward(academicYear string) string {
+	trimmed := strings.TrimSpace(academicYear)
+
+	parts := strings.Split(trimmed, "-")
+	if len(parts) != 2 {
+		return trimmed
+	}
+
+	startYear, errStart := strconv.Atoi(strings.TrimSpace(parts[0]))
+	endYear, errEnd := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errStart != nil || errEnd != nil {
+		return trimmed
+	}
+
+	return fmt.Sprintf("%d-%d", startYear+1, endYear+1)
+}
+
+func shiftAcademicYearForWindowType(academicYear, currentSemesterType string) string {
+	if strings.EqualFold(strings.TrimSpace(currentSemesterType), "even") {
+		return shiftAcademicYearForward(academicYear)
+	}
+	return strings.TrimSpace(academicYear)
+}
+
+func deriveBatchFromSemesterAndAcademicYear(semester int, academicYear string) string {
+	trimmed := strings.TrimSpace(academicYear)
+	if semester <= 0 || trimmed == "" {
+		return ""
+	}
+	if semester > 8 {
+		semester = 8
+	}
+
+	parts := strings.Split(trimmed, "-")
+	if len(parts) != 2 {
+		return ""
+	}
+
+	startAcademicYear, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return ""
+	}
+
+	yearLevel := (semester + 1) / 2
+	batchStartYear := startAcademicYear - (yearLevel - 1)
+	batchEndYear := batchStartYear + 4
+	return fmt.Sprintf("%d-%d", batchStartYear, batchEndYear)
+}
+
+func resolveBatchForSemesterAndAcademicYear(semester int, academicYear string) (string, error) {
+	if semester <= 0 || strings.TrimSpace(academicYear) == "" {
+		return "", nil
+	}
+	if semester > 8 {
+		semester = 8
+	}
+	yearLevel := (semester + 1) / 2
+
+	var batch sql.NullString
+	err := db.DB.QueryRow(`
+		SELECT batch
+		FROM academic_calendar
+		WHERE academic_year = ?
+		  AND is_current = 1
+		  AND year_level = ?
+		ORDER BY updated_at DESC,
+		         id DESC
+		LIMIT 1
+	`, academicYear, yearLevel).Scan(&batch)
+	if err == sql.ErrNoRows {
+		err = db.DB.QueryRow(`
+			SELECT batch
+			FROM academic_calendar
+			WHERE academic_year = ?
+			  AND year_level = ?
+			ORDER BY updated_at DESC,
+			         id DESC
+			LIMIT 1
+		`, academicYear, yearLevel).Scan(&batch)
+	}
+	if err == sql.ErrNoRows {
+		err = db.DB.QueryRow(`
+			SELECT batch
+			FROM academic_calendar
+			WHERE academic_year = ?
+			  AND is_current = 1
+			  AND (current_semester = ? OR current_semester + 1 = ?)
+			ORDER BY CASE WHEN current_semester + 1 = ? THEN 0 ELSE 1 END,
+			         updated_at DESC,
+			         id DESC
+			LIMIT 1
+		`, academicYear, semester, semester, semester).Scan(&batch)
+	}
+	if err == sql.ErrNoRows {
+		err = db.DB.QueryRow(`
+			SELECT batch
+			FROM academic_calendar
+			WHERE academic_year = ?
+			  AND (current_semester = ? OR current_semester + 1 = ?)
+			ORDER BY CASE WHEN current_semester + 1 = ? THEN 0 ELSE 1 END,
+		         updated_at DESC,
+		         id DESC
+		LIMIT 1
+		`, academicYear, semester, semester, semester).Scan(&batch)
+	}
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+
+	if batch.Valid {
+		return strings.TrimSpace(batch.String), nil
+	}
+
+	return deriveBatchFromSemesterAndAcademicYear(semester, academicYear), nil
 }
 
 // GetTeacherAllocationSummary returns the allocation summary for a teacher
@@ -239,6 +359,7 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 			Semester   int    `json:"semester"`
 			Batch      string `json:"batch"`
 			CourseType string `json:"course_type"` // Changed to string (theory, theory_with_lab, lab)
+			CourseSource string `json:"course_source"` // core or extra
 			Priority   int    `json:"priority"`
 		} `json:"preferences"`
 	}
@@ -255,8 +376,8 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 	log.Printf("CurrentSemesterType: %s", requestData.CurrentSemesterType)
 	log.Printf("Number of preferences: %d", len(requestData.Preferences))
 	for i, pref := range requestData.Preferences {
-		log.Printf("  Pref %d: CourseID=%s, Semester=%d, Batch=%s, CourseType=%s, Priority=%d", 
-			i+1, pref.CourseID, pref.Semester, pref.Batch, pref.CourseType, pref.Priority)
+		log.Printf("  Pref %d: CourseID=%s, Semester=%d, Batch=%s, CourseType=%s, CourseSource=%s, Priority=%d", 
+			i+1, pref.CourseID, pref.Semester, pref.Batch, pref.CourseType, pref.CourseSource, pref.Priority)
 	}
 	log.Printf("==========================================")
 
@@ -313,20 +434,8 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 		currentSemesterType = "even"
 	}
 
-	// Determine academic year to store preferences under:
-	// If current semester is 'odd', choices are for next year's ODD semester -> shift year forward
-	saveAcademicYear := requestData.AcademicYear
-	if currentSemesterType == "odd" {
-		parts := strings.Split(requestData.AcademicYear, "-")
-		if len(parts) == 2 {
-			var year1, year2 int
-			fmt.Sscanf(parts[0], "%d", &year1)
-			fmt.Sscanf(parts[1], "%d", &year2)
-			saveAcademicYear = fmt.Sprintf("%d-%d", year1+1, year2+1)
-		}
-	}
-
-	log.Printf("Current tracking semester: %s, Saving preferences under academic year: %s", currentSemesterType, saveAcademicYear)
+	baseSaveAcademicYear := shiftAcademicYearForWindowType(requestData.AcademicYear, currentSemesterType)
+	log.Printf("Current tracking semester: %s, base academic year from request: %s, resolved save academic year: %s", currentSemesterType, requestData.AcademicYear, baseSaveAcademicYear)
 
 	// Check if teacher has ALREADY submitted active preferences
 	var existingCount int
@@ -471,16 +580,37 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 
 	// Count selections by type ID
 	selectionCounts := make(map[int]int)
+	coreTheoryCount := 0
+	electiveTheoryCount := 0
 	for _, pref := range requestData.Preferences {
 		if courseTypeID, exists := courseTypeMap[pref.CourseType]; exists {
+			if pref.CourseType == "theory" {
+				if pref.CourseSource == "extra" {
+					electiveTheoryCount++
+					continue
+				}
+				coreTheoryCount++
+			}
 			selectionCounts[courseTypeID]++
 		}
+	}
+
+	if electiveTheoryCount > 2 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("student elective theory subject count (%d) exceeds allocation (2)", electiveTheoryCount),
+		})
+		return
 	}
 
 	// Validate counts
 	for typeID, count := range selectionCounts {
 		maxAllowed, exists := limitMap[typeID]
 		typeName := typeNameMap[typeID]
+		if typeName == "theory" {
+			count = coreTheoryCount
+		}
 		if !exists {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
@@ -538,19 +668,35 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+
+		prefAcademicYear := baseSaveAcademicYear
+		batchLookupAcademicYear := strings.TrimSpace(requestData.AcademicYear)
+		resolvedBatch, batchErr := resolveBatchForSemesterAndAcademicYear(pref.Semester, batchLookupAcademicYear)
+		if batchErr != nil {
+			log.Printf("Error resolving batch for semester=%d lookup_academic_year=%s: %v", pref.Semester, batchLookupAcademicYear, batchErr)
+			http.Error(w, "Error resolving batch", http.StatusInternalServerError)
+			return
+		}
+		if resolvedBatch == "" {
+			resolvedBatch = deriveBatchFromSemesterAndAcademicYear(pref.Semester, batchLookupAcademicYear)
+		}
+		if resolvedBatch == "" {
+			resolvedBatch = strings.TrimSpace(pref.Batch)
+		}
 		
 		prefsToInsert = append(prefsToInsert, map[string]interface{}{
 			"course_id":   pref.CourseID,
 			"semester":    pref.Semester,
-			"batch":       pref.Batch,
+			"batch":       resolvedBatch,
+			"academic_year": prefAcademicYear,
 			"course_type": courseTypeID, // Converted to numeric ID
 			"priority":    pref.Priority,
 		})
 	}
 	
 	for i, prefData := range prefsToInsert {
-		log.Printf("Inserting preference %d: CourseID=%s, Semester=%d, Batch=%s, CourseTypeID=%d, Priority=%d", 
-			i+1, prefData["course_id"], prefData["semester"], prefData["batch"], prefData["course_type"], prefData["priority"])
+		log.Printf("Inserting preference %d: CourseID=%s, Semester=%d, Batch=%s, AcademicYear=%s, CourseTypeID=%d, Priority=%d", 
+			i+1, prefData["course_id"], prefData["semester"], prefData["batch"], prefData["academic_year"], prefData["course_type"], prefData["priority"])
 			
 		result, err := stmt.Exec(
 			requestData.TeacherID,
@@ -558,7 +704,7 @@ func SaveTeacherCoursePreferences(w http.ResponseWriter, r *http.Request) {
 			prefData["semester"],
 			prefData["batch"],
 			prefData["course_type"],
-			saveAcademicYear,
+			prefData["academic_year"],
 			currentSemesterType,
 			prefData["priority"],
 		)

@@ -42,10 +42,16 @@ type TeacherAllocationCount struct {
 	AllocatedCount int
 }
 
-// calculateTeachersNeeded calculates required teacher count based on 60-student rule
+// calculateTeachersNeeded calculates required teacher count based on 60-student rule:
+//   0 students    → 0 teachers (course skipped)
+//   1–60 students → 1 teacher
+//   >60 students  → studentCount/60, +1 only if remainder > 30
 func calculateTeachersNeeded(studentCount int) int {
 	if studentCount == 0 {
 		return 0
+	}
+	if studentCount <= 60 {
+		return 1
 	}
 	quotient := studentCount / 60
 	remainder := studentCount % 60
@@ -128,20 +134,61 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 	var currentYearStart, currentYearEnd int
 	fmt.Sscanf(windowAcademicYear, "%d-%d", &currentYearStart, &currentYearEnd)
 
-	// extraCourseYear: for extra courses (honour/minor/elective/open-elective/addon)
-	// the relevant hod_elective_selections are always in the NEXT academic year
-	// because students advancing a semester enter a new cycle for these tracks.
-	extraCourseYear := fmt.Sprintf("%d-%d", currentYearStart+1, currentYearEnd+1)
+	// extraCourseAcademicYear: use the same academic year context as the target
+	// semesters being allocated. Student elective selections are saved against
+	// semester + academic_year and must be matched on those fields.
+	extraCourseAcademicYear := windowAcademicYear
 
 	var semestersToAllocate []int
 	var allocationYear string
 
 	if currentSemesterType == "even" {
 		semestersToAllocate = []int{1, 3, 5, 7}
-		allocationYear = windowAcademicYear
+		allocationYear = fmt.Sprintf("%d-%d", currentYearStart+1, currentYearEnd+1)
+		extraCourseAcademicYear = allocationYear
 	} else {
 		semestersToAllocate = []int{2, 4, 6, 8}
-		allocationYear = fmt.Sprintf("%d-%d", currentYearStart+1, currentYearEnd+1)
+		allocationYear = windowAcademicYear
+		extraCourseAcademicYear = allocationYear
+	}
+
+	// prefLookupYear: the academic year under which teacher_course_preferences were saved.
+	// The save handler uses shiftAcademicYearForWindowType:
+	//   even window → saves preferences under NEXT year
+	//   odd  window → saves preferences under CURRENT year
+	// This must mirror that logic so the TCP queries actually find rows.
+	var prefLookupYear string
+	if currentSemesterType == "even" {
+		prefLookupYear = fmt.Sprintf("%d-%d", currentYearStart+1, currentYearEnd+1) // next year
+	} else {
+		prefLookupYear = windowAcademicYear // current year
+	}
+	log.Printf("   prefLookupYear=%s  allocationYear=%s  semType=%s", prefLookupYear, allocationYear, currentSemesterType)
+
+	// Log teachers who have active preferences for this window (uses t.id join)
+	diagRows, diagErr := db.DB.Query(`
+		SELECT t.faculty_id, t.name, t.dept, t.status
+		FROM teachers t
+		INNER JOIN teacher_course_preferences tcp ON tcp.teacher_id = t.id
+		WHERE tcp.is_active = 1
+		  AND tcp.academic_year = ?
+		  AND tcp.current_semester_type = ?
+		GROUP BY t.faculty_id, t.name, t.dept, t.status
+	`, prefLookupYear, currentSemesterType)
+	if diagErr == nil {
+		for diagRows.Next() {
+			var fid, tname string
+			var dept *string
+			var status int
+			if err := diagRows.Scan(&fid, &tname, &dept, &status); err == nil {
+				deptVal := "<NULL>"
+				if dept != nil {
+					deptVal = *dept
+				}
+				log.Printf("   Teacher with prefs: faculty_id=%s name=%s dept=%s status=%d", fid, tname, deptVal, status)
+			}
+		}
+		diagRows.Close()
 	}
 
 	var targetSemesterType string
@@ -174,35 +221,41 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("\n🚀 STARTING AUTO ALLOCATION")
-	log.Printf("   Allocating for semesters: %v in %s (extra courses year: %s)", semestersToAllocate, allocationYear, extraCourseYear)
+	log.Printf("   Allocating for semesters: %v in %s (extra courses year: %s)", semestersToAllocate, allocationYear, extraCourseAcademicYear)
 
 	// Step 0: Fetch Active Teacher Preferences globally, keyed by faculty_id.
-	// teacher_course_preferences.teacher_id stores faculty_id (varchar) directly.
-	// Scoped to the closed window's academic_year + current_semester_type so preferences from
-	// previous or future windows don't bleed in.
+	// teacher_course_preferences.teacher_id stores the INTEGER teachers.id.
+	// JOIN teachers to get the varchar faculty_id used as the map key.
+	// The map value stores both the integer course_id ("123") and the raw stored
+	// course_id string so matches work regardless of how the frontend submitted it.
 	prefRows, err := db.DB.Query(`
-		SELECT tcp.teacher_id, tcp.course_id
+		SELECT t.faculty_id, tcp.course_id, COALESCE(c.course_code, '') AS course_code
 		FROM teacher_course_preferences tcp
+		JOIN teachers t ON t.id = tcp.teacher_id
+		LEFT JOIN courses c ON c.id = tcp.course_id
 		WHERE tcp.is_active = 1
 		  AND tcp.academic_year = ?
 		  AND tcp.current_semester_type = ?
-	`, allocationYear, currentSemesterType)
-	teacherPrefs := make(map[string]map[string]bool)
+	`, prefLookupYear, currentSemesterType)
+	teacherPrefs := make(map[string]map[string]bool) // faculty_id → set of course_id strings & course_codes
 	if err == nil {
 		defer prefRows.Close()
 		for prefRows.Next() {
-			var facultyID, cID string
-			if err := prefRows.Scan(&facultyID, &cID); err == nil {
+			var facultyID, cID, cCode string
+			if err := prefRows.Scan(&facultyID, &cID, &cCode); err == nil {
 				if teacherPrefs[facultyID] == nil {
 					teacherPrefs[facultyID] = make(map[string]bool)
 				}
-				teacherPrefs[facultyID][cID] = true
+				teacherPrefs[facultyID][cID] = true // raw stored value
+				if cCode != "" {
+					teacherPrefs[facultyID][cCode] = true
+				}
 			}
 		}
 	} else {
 		log.Printf("⚠️  Could not fetch preferences: %v", err)
 	}
-	log.Printf("   Loaded preferences for %d teachers (allocationYear: %s, semType: %s)", len(teacherPrefs), allocationYear, currentSemesterType)
+	log.Printf("   Loaded preferences for %d teachers (prefLookupYear: %s, semType: %s)", len(teacherPrefs), prefLookupYear, currentSemesterType)
 
 	allocationResults := []map[string]interface{}{}
 	allAllocatedCourses := []CourseAllocationDetail{}
@@ -272,6 +325,11 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 
 	// Build semester IN clause once – reused for both core and extra queries
 	semInClause, semArgs := buildInClause(semestersToAllocate)
+	// numYearLevels = number of distinct year cohorts in this window (1 per semester for 4-year program)
+	numYearLevels := len(semestersToAllocate)
+	if numYearLevels == 0 {
+		numYearLevels = 4
+	}
 
 	// Step 2: Process each department
 	for _, dep := range departments {
@@ -282,27 +340,27 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		var courses []CourseAllocationDetail
 
 		// ── CORE courses ───────────────────────────────────────────────────────
-		// Fetch via curriculum → normal_cards → curriculum_courses → courses
-		// for the target semesters, excluding special/extra categories.
-		// Use departments.current_curriculum_id — the same link the admin page uses
+		// Student count: count active students in this dept, divide by number of
+		// year-levels being allocated to get an approximate cohort size per semester.
+		// Use CEIL so any positive dept strength contributes at least 1 student to
+		// the semester cohort (prevents requiredTeachers from becoming 0 incorrectly).
 		coreQuery := fmt.Sprintf(`
 			SELECT DISTINCT
 				c.id, c.course_code, c.course_name,
-				COALESCE(ctype.id, 1) AS course_type_id,
-				COALESCE(sc_counts.student_count, 0) AS student_count
+				COALESCE((
+					SELECT ct.id
+					FROM course_type ct
+					WHERE CAST(ct.id AS CHAR) = CAST(c.course_type AS CHAR)
+					   OR LOWER(TRIM(CONVERT(ct.course_type USING utf8mb4))) COLLATE utf8mb4_general_ci =
+					      LOWER(TRIM(CONVERT(CAST(c.course_type AS CHAR) USING utf8mb4))) COLLATE utf8mb4_general_ci
+					LIMIT 1
+				), 1) AS course_type_id,
+				CAST(CEIL((SELECT COUNT(*) FROM students s WHERE s.department_id = ? AND s.status = 1) / ?) AS UNSIGNED) AS student_count
 			FROM curriculum_courses cc
 			JOIN normal_cards nc ON nc.id = cc.semester_id
 			JOIN courses c ON c.id = cc.course_id
 			INNER JOIN curriculum cur ON cur.id = nc.curriculum_id
 			INNER JOIN departments d ON d.current_curriculum_id = cur.id
-			LEFT JOIN course_type ctype ON ctype.course_type = c.course_type
-			LEFT JOIN (
-				SELECT sc.course_id, COUNT(DISTINCT s.id) AS student_count
-				FROM student_courses sc
-				JOIN students s ON s.id = sc.student_id
-				WHERE s.department_id = ?
-				GROUP BY sc.course_id
-			) sc_counts ON sc_counts.course_id = c.id
 			WHERE d.id = ?
 			  AND nc.semester_number IN %s
 			  AND nc.card_type = 'semester'
@@ -311,11 +369,11 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 			        'PE - Professional Elective', 'OE - Open Elective',
 			        'Elective', 'Open Elective', 'Honour', 'Minor', 'Addon'
 			      )
-			GROUP BY c.id, c.course_code, c.course_name, c.course_type, ctype.id
+			GROUP BY c.id, c.course_code, c.course_name, c.course_type
 			ORDER BY c.course_code
 		`, semInClause)
-		coreArgs := make([]interface{}, 0, 2+len(semArgs))
-		coreArgs = append(coreArgs, deptID, deptID)
+		coreArgs := make([]interface{}, 0, 3+len(semArgs))
+		coreArgs = append(coreArgs, deptID, numYearLevels, deptID)
 		coreArgs = append(coreArgs, semArgs...)
 		coreRows, err := db.DB.Query(coreQuery, coreArgs...)
 		if err != nil {
@@ -332,29 +390,35 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// ── EXTRA courses (elective / open-elective / honour / minor / addon) ──
-		// Fetch from hod_elective_selections for this dept + target semesters.
-		// Academic year = extraCourseYear (always next year relative to window).
-		// Each hod_elective_selections row is a separate allocation slot.
+		// Fetch from student_elective_choices (actual student selections) joined to
+		// hod_elective_selections for course metadata.
+		// Match on sec.semester + sec.academic_year so selected electives are counted.
 		extraQuery := fmt.Sprintf(`
 			SELECT
 				c.id, c.course_code, c.course_name,
-				COALESCE(ctype.id, 1) AS course_type_id,
+				COALESCE((
+					SELECT ct.id
+					FROM course_type ct
+					WHERE CAST(ct.id AS CHAR) = CAST(c.course_type AS CHAR)
+					   OR LOWER(TRIM(CONVERT(ct.course_type USING utf8mb4))) COLLATE utf8mb4_general_ci =
+					      LOWER(TRIM(CONVERT(CAST(c.course_type AS CHAR) USING utf8mb4))) COLLATE utf8mb4_general_ci
+					LIMIT 1
+				), 1) AS course_type_id,
 				COUNT(DISTINCT sec.student_id) AS student_count
 			FROM hod_elective_selections hes
 			JOIN courses c ON c.id = hes.course_id
-			LEFT JOIN course_type ctype ON ctype.course_type = c.course_type
-			LEFT JOIN student_elective_choices sec ON sec.hod_selection_id = hes.id
+			JOIN student_elective_choices sec ON sec.hod_selection_id = hes.id
 			WHERE hes.department_id = ?
-			  AND hes.semester IN %s
-			  AND hes.academic_year = ?
-			GROUP BY hes.id, c.id, c.course_code, c.course_name, c.course_type, ctype.id
-			HAVING COUNT(DISTINCT sec.student_id) > 0
+			  AND hes.status = 'ACTIVE'
+			  AND sec.semester IN %s
+			  AND sec.academic_year = ?
+			GROUP BY hes.id, c.id, c.course_code, c.course_name, c.course_type
 			ORDER BY c.course_code
 		`, semInClause)
 		extraArgs := make([]interface{}, 0, 2+len(semArgs))
 		extraArgs = append(extraArgs, deptID)
 		extraArgs = append(extraArgs, semArgs...)
-		extraArgs = append(extraArgs, extraCourseYear)
+		extraArgs = append(extraArgs, extraCourseAcademicYear)
 		extraRows, err := db.DB.Query(extraQuery, extraArgs...)
 		if err != nil {
 			log.Printf("   ⚠️  Extra course query error for dept %s: %v", deptName, err)
@@ -378,16 +442,17 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		// (matching academic_year + current_semester_type). Teachers from other cycles
 		// or who never submitted preferences are excluded.
 		// teacher_course_preferences.teacher_id stores faculty_id (varchar).
+		// teacher_course_preferences.teacher_id = integer teachers.id
 		teacherRows, err := db.DB.Query(`
 			SELECT DISTINCT t.id, t.faculty_id, t.name
 			FROM teachers t
-			INNER JOIN teacher_course_preferences tcp ON tcp.teacher_id = t.faculty_id
+			INNER JOIN teacher_course_preferences tcp ON tcp.teacher_id = t.id
 				AND tcp.is_active = 1
 				AND tcp.academic_year = ?
 				AND tcp.current_semester_type = ?
-			WHERE t.dept = ? AND t.status = 1
+			WHERE CAST(t.dept AS UNSIGNED) = ? AND t.status = 1
 			ORDER BY t.faculty_id
-		`, allocationYear, currentSemesterType, deptID)
+		`, prefLookupYear, currentSemesterType, deptID)
 		
 		if err != nil {
 			continue
@@ -410,8 +475,10 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		teacherRows.Close()
 
 		if len(teachers) == 0 {
+			log.Printf("   ⚠️  No teachers with prefs found for dept %s (id=%d, prefYear=%s)", deptName, deptID, prefLookupYear)
 			continue
 		}
+		log.Printf("   ✅ Dept %s: %d teacher(s) with prefs", deptName, len(teachers))
 
 		// Fetch teacher limits from teacher_course_limits — the LIVE table where
 		// teachers submit their per-type max counts during the selection window.
@@ -485,6 +552,23 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		// ==========================================
 		// ALLOCATION ALGORITHM
 		// ==========================================
+
+		// Log dept summary before allocation
+		log.Printf("   Dept %s: %d course(s) to allocate", deptName, len(courses))
+		for ci := range courses {
+			log.Printf("     Course: id=%d code=%s name=%s type=%d requiredTeachers=%d",
+				courses[ci].CourseID, courses[ci].CourseCode, courses[ci].CourseName,
+				courses[ci].CourseTypeID, courses[ci].RequiredTeachers)
+		}
+		for _, fid := range teacherList {
+			if prefs, ok := teacherPrefs[fid]; ok {
+				prefKeys := make([]string, 0, len(prefs))
+				for k := range prefs {
+					prefKeys = append(prefKeys, k)
+				}
+				log.Printf("   Teacher %s prefers: %v", fid, prefKeys)
+			}
+		}
 
 		// PASS 1A: Guarantee at least one preferred course per teacher (if possible)
 		for _, facultyID := range teacherList {
@@ -648,9 +732,15 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// 1. Deactivate ONLY the preferences of teachers who were allocated
+		// 1. Deactivate ONLY the preferences of teachers who were allocated.
+		//    tcp.teacher_id is the integer teachers.id; resolve from faculty_id.
 		for fid := range allocatedFacultyIDs {
-			db.DB.Exec(`UPDATE teacher_course_preferences SET is_active = 0 WHERE teacher_id = ? AND is_active = 1`, fid)
+			db.DB.Exec(`
+				UPDATE teacher_course_preferences tcp
+				JOIN teachers t ON t.id = tcp.teacher_id
+				SET tcp.is_active = 0
+				WHERE t.faculty_id = ? AND tcp.is_active = 1
+			`, fid)
 		}
 		log.Printf("   Deactivated preferences for %d allocated teachers", len(allocatedFacultyIDs))
 
@@ -675,8 +765,11 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 	log.Printf("✅ AUTO ALLOCATION COMPLETE (Time: %.2f seconds)\n", executionTime)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true, "academic_year": allocationYear, "execution_time": executionTime,
+		"success":               true,
+		"academic_year":         allocationYear,
+		"execution_time":        executionTime,
 		"departments_processed": len(allocationResults),
+		"allocations_saved":     saveSuccess,
 	})
 }
 

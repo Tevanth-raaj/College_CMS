@@ -99,29 +99,35 @@ func checkAndRunAllocations() {
 				log.Printf("🔥 CRITICAL DB CRASH during allocation save: %v", rec)
 			}
 		}()
-		
-		// Run the allocation
 		allocation.RunAutoAllocation(w, r)
 	}()
 
-	// 4. Check result and mark window as inactive so it doesn't run again
-	if w.Code == http.StatusOK {
-		log.Printf("✅ Automatic allocation completed AND saved for Academic Year %s\n", academicYear)
-		
-		// IMPORTANT: Set is_active to 0 so the scheduler doesn't process this same window again!
-		_, dbErr := db.DB.Exec(`
-			UPDATE teacher_course_tracking 
-			SET is_active = 0
-			WHERE academic_year = ? AND current_semester_type = ?
-		`, academicYear, semesterType)
-		
-		if dbErr != nil {
-			log.Printf("⚠️ Failed to mark window as inactive: %v", dbErr)
-		} else {
-			log.Printf("🧹 Window marked as inactive for Academic Year %s", academicYear)
+	// 4. Decode response — mark inactive only when allocations were actually saved
+	//    or the run was skipped because history already exists.
+	//    If saves=0 (e.g. teacher data bug), leave is_active=1 so the scheduler retries.
+	var respBody map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &respBody); err == nil {
+		saved, _ := respBody["allocations_saved"].(float64)
+		skipped, _ := respBody["skipped"].(bool)
+		success, _ := respBody["success"].(bool)
+
+		if success && (saved > 0 || skipped) {
+			_, dbErr := db.DB.Exec(`
+				UPDATE teacher_course_tracking
+				SET is_active = 0
+				WHERE academic_year = ? AND current_semester_type = ?
+			`, academicYear, semesterType)
+			if dbErr != nil {
+				log.Printf("⚠️ Failed to mark window inactive: %v", dbErr)
+			} else if skipped {
+				log.Printf("✅ Window already processed — marked inactive for %s", academicYear)
+			} else {
+				log.Printf("✅ %d allocations saved — window marked inactive for %s", int(saved), academicYear)
+			}
+		} else if w.Code == http.StatusOK {
+			log.Printf("⚠️ Allocation ran but saved 0 records for %s — keeping is_active=1 for retry", academicYear)
 		}
 	} else {
-		log.Printf("❌ Automatic allocation failed with status: %d for Academic Year %s", w.Code, academicYear)
-		log.Printf("   Response: %s\n", w.Body.String())
+		log.Printf("❌ Allocation returned status %d for %s: %s", w.Code, academicYear, w.Body.String())
 	}
 }

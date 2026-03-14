@@ -233,6 +233,8 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/minor-eligibility/template", curriculum.DownloadMinorTemplate).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/minor-eligibility/import", curriculum.ImportMinorEligibility).Methods("POST", "OPTIONS")
 
+	router.HandleFunc("/api/hod/teacher-limits/windows", curriculum.GetTeacherLimitWindows).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/teacher-limits/courses", curriculum.GetTeacherLimitCourses).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/teacher-limits/export", curriculum.ExportTeacherLimits).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/academic-calendar/current", curriculum.GetCurrentAcademicCalendar).Methods("GET", "OPTIONS")
 

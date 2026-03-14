@@ -62,6 +62,26 @@ func isOpenElectiveCategory(category, slotName string) bool {
 	return strings.Contains(cat, "open elective") || strings.Contains(cat, "oe - open elective") || strings.Contains(slot, "open elective")
 }
 
+func shiftAcademicYearForOddSemester(academicYear string, semester int) string {
+	trimmedAcademicYear := strings.TrimSpace(academicYear)
+	if semester%2 == 0 {
+		return trimmedAcademicYear
+	}
+
+	parts := strings.Split(trimmedAcademicYear, "-")
+	if len(parts) != 2 {
+		return trimmedAcademicYear
+	}
+
+	startYear, errStart := strconv.Atoi(strings.TrimSpace(parts[0]))
+	endYear, errEnd := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errStart != nil || errEnd != nil {
+		return trimmedAcademicYear
+	}
+
+	return fmt.Sprintf("%d-%d", startYear+1, endYear+1)
+}
+
 func getEligibleOpenElectiveCourseSet(curriculumID int) (map[int]struct{}, error) {
 	eligible := make(map[int]struct{})
 	if curriculumID <= 0 {
@@ -561,6 +581,12 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	if requestBody.Semester == 0 {
+		requestBody.Semester = currentSemester + 1
+	}
+
+	selectionAcademicYear := shiftAcademicYearForOddSemester(academicYear, requestBody.Semester)
+	log.Printf("Saving student elective choices for student_id=%d semester=%d academic_year(base=%s, stored=%s)", studentID, requestBody.Semester, academicYear, selectionAcademicYear)
 
 	selectionIDs := requestBody.SelectionIDs
 	if len(selectionIDs) == 0 && len(requestBody.Selections) > 0 {
@@ -690,7 +716,7 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Insert into student_elective_choices
-		if _, err = insertStmt.Exec(studentID, hodSelID, requestBody.Semester, academicYear); err != nil {
+		if _, err = insertStmt.Exec(studentID, hodSelID, requestBody.Semester, selectionAcademicYear); err != nil {
 			log.Printf("Error inserting selection hod_sel_id=%d: %v", hodSelID, err)
 			http.Error(w, fmt.Sprintf("Failed to save selection: %v", err), http.StatusInternalServerError)
 			return
