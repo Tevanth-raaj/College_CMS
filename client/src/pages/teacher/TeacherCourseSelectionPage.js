@@ -151,7 +151,7 @@ const TeacherCourseSelectionPage = () => {
       let allCourses = [];
       
       const coursePromises = semesters.map(semester => 
-        fetch(`${API_BASE_URL}/teachers/${tid}/semester/${semester}/courses`)
+        fetch(`${API_BASE_URL}/teachers/${tid}/semester/${semester}/courses?academic_year=${encodeURIComponent(effectiveAcademicYear || acadYear)}`)
           .then(res => {
             console.log(`Semester ${semester} response status:`, res.status);
             return res.ok ? res.json() : { coreCourses: [], extraCourses: [] };

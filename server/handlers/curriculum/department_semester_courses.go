@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"server/db"
@@ -62,22 +63,51 @@ func GetCoursesForTeacherSemester(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Getting core + extra courses for teacher in department %d, semester %d", deptID, semesterNum)
 
-	// Get current academic year to fetch electives for NEXT academic year
-	// Note: Using hardcoded default since academic_calendars table may not exist
-	currentAcademicYear := "2025-2026"
-	
-	// Calculate next academic year (e.g., 2025-2026 -> 2026-2027)
-	var nextAcademicYear string
+	requestedAcademicYear := strings.TrimSpace(r.URL.Query().Get("academic_year"))
+	currentAcademicYear := requestedAcademicYear
+	if currentAcademicYear == "" {
+		err = db.DB.QueryRow(`
+			SELECT academic_year
+			FROM academic_calendar
+			WHERE is_current = 1
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1
+		`).Scan(&currentAcademicYear)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				log.Printf("Warning: could not resolve academic year from academic_calendar: %v", err)
+			}
+			currentAcademicYear = ""
+		}
+	}
+
+	candidateAcademicYears := make([]string, 0, 3)
+	seenAcademicYears := make(map[string]struct{})
+	appendAcademicYear := func(year string) {
+		year = strings.TrimSpace(year)
+		if year == "" {
+			return
+		}
+		if _, exists := seenAcademicYears[year]; exists {
+			return
+		}
+		seenAcademicYears[year] = struct{}{}
+		candidateAcademicYears = append(candidateAcademicYears, year)
+	}
+	appendAcademicYear(requestedAcademicYear)
+	appendAcademicYear(currentAcademicYear)
 	if len(currentAcademicYear) >= 9 && currentAcademicYear[4] == '-' {
 		endYearStr := currentAcademicYear[5:9]
-		endYear, _ := strconv.Atoi(endYearStr)
-		nextStartYear := endYear
-		nextEndYear := endYear + 1
-		nextAcademicYear = strconv.Itoa(nextStartYear) + "-" + strconv.Itoa(nextEndYear)
-	} else {
-		nextAcademicYear = currentAcademicYear
+		if endYear, convErr := strconv.Atoi(endYearStr); convErr == nil {
+			nextStartYear := endYear
+			nextEndYear := endYear + 1
+			appendAcademicYear(strconv.Itoa(nextStartYear) + "-" + strconv.Itoa(nextEndYear))
+		}
 	}
-	log.Printf("📅 Current: %s, Next academic year for electives: %s", currentAcademicYear, nextAcademicYear)
+	if len(candidateAcademicYears) == 0 {
+		appendAcademicYear("2025-2026")
+	}
+	log.Printf("📅 Academic year candidates for extra courses: %v", candidateAcademicYears)
 
 	// ===== CATEGORY 1: CORE COURSES from curriculum =====
 	// Get curriculum for this department and semester
@@ -157,42 +187,40 @@ func GetCoursesForTeacherSemester(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN course_type ct ON c.course_type = ct.id
 		INNER JOIN hod_elective_selections hes ON c.id = hes.course_id
 		INNER JOIN student_elective_choices sec ON hes.id = sec.hod_selection_id
-		INNER JOIN students st ON sec.student_id = st.id
-		WHERE st.department_id = ? 
+		WHERE hes.department_id = ? 
 		  AND sec.semester = ?
 		  AND sec.academic_year = ?
+		  AND hes.status = 'ACTIVE'
 		  AND (c.status = 1 OR c.status IS NULL)
 		ORDER BY c.course_code
 	`
 
-	log.Printf("Executing extra course query for department %d, semester %d, academic year %s", deptID, semesterNum, nextAcademicYear)
-	log.Printf("🔍 Query will join: courses -> hod_elective_selections -> student_elective_choices -> students")
-	log.Printf("🔍 Looking for: students.department_id = %d, sec.semester = %d, sec.academic_year = %s", deptID, semesterNum, nextAcademicYear)
-	
-	// Debug: Check if student_elective_choices exist for this semester/year
-	var debugCount int
-	db.DB.QueryRow(`
-		SELECT COUNT(DISTINCT sec.hod_selection_id) 
-		FROM student_elective_choices sec
-		INNER JOIN students st ON sec.student_id = st.id
-		WHERE st.department_id = ? 
-		  AND sec.semester = ?
-		  AND sec.academic_year = ?
-	`, deptID, semesterNum, nextAcademicYear).Scan(&debugCount)
-	log.Printf("🔍 DEBUG: Found %d student elective choices for dept %d, semester %d, year %s", debugCount, deptID, semesterNum, nextAcademicYear)
-	
-	rows2, err := db.DB.Query(extraCourseQuery, deptID, semesterNum, nextAcademicYear)
-	if err != nil {
-		log.Printf("❌ Error querying extra courses: %v", err)
-		// Continue with empty list
-	} else {
-		log.Printf("✅ Extra course query executed successfully")
-		defer rows2.Close()
-	}
+	fetchExtraCourses := func(academicYear string) ([]models.CourseWithDetails, int, error) {
+		log.Printf("Executing extra course query for department %d, semester %d, academic year %s", deptID, semesterNum, academicYear)
+		log.Printf("🔍 Query will join: courses -> hod_elective_selections -> student_elective_choices")
+		log.Printf("🔍 Looking for: hes.department_id = %d, sec.semester = %d, sec.academic_year = %s", deptID, semesterNum, academicYear)
 
-	// Initialize as empty slice so JSON returns [] not null
-	extraCourses := make([]models.CourseWithDetails, 0)
-	if rows2 != nil {
+		var debugCount int
+		if err := db.DB.QueryRow(`
+			SELECT COUNT(DISTINCT sec.hod_selection_id)
+			FROM student_elective_choices sec
+			INNER JOIN hod_elective_selections hes ON sec.hod_selection_id = hes.id
+			WHERE hes.department_id = ?
+			  AND sec.semester = ?
+			  AND sec.academic_year = ?
+			  AND hes.status = 'ACTIVE'
+		`, deptID, semesterNum, academicYear).Scan(&debugCount); err != nil {
+			log.Printf("Warning: could not count student elective choices for %s: %v", academicYear, err)
+		}
+		log.Printf("🔍 DEBUG: Found %d student elective choices for dept %d, semester %d, year %s", debugCount, deptID, semesterNum, academicYear)
+
+		rows2, queryErr := db.DB.Query(extraCourseQuery, deptID, semesterNum, academicYear)
+		if queryErr != nil {
+			return nil, debugCount, queryErr
+		}
+		defer rows2.Close()
+
+		extraCoursesForYear := make([]models.CourseWithDetails, 0)
 		for rows2.Next() {
 			var course models.CourseWithDetails
 			var countTowardsLimitInt int
@@ -209,7 +237,26 @@ func GetCoursesForTeacherSemester(w http.ResponseWriter, r *http.Request) {
 			}
 			countTowardsLimit := countTowardsLimitInt == 1
 			course.CountTowardsLimit = &countTowardsLimit
-			extraCourses = append(extraCourses, course)
+			extraCoursesForYear = append(extraCoursesForYear, course)
+		}
+
+		return extraCoursesForYear, debugCount, nil
+	}
+
+	// Initialize as empty slice so JSON returns [] not null
+	extraCourses := make([]models.CourseWithDetails, 0)
+	extraCoursesAcademicYear := ""
+	for _, academicYear := range candidateAcademicYears {
+		coursesForYear, debugCount, queryErr := fetchExtraCourses(academicYear)
+		if queryErr != nil {
+			log.Printf("❌ Error querying extra courses for academic year %s: %v", academicYear, queryErr)
+			continue
+		}
+		log.Printf("✅ Extra course query executed successfully for %s", academicYear)
+		if len(coursesForYear) > 0 || debugCount > 0 {
+			extraCourses = coursesForYear
+			extraCoursesAcademicYear = academicYear
+			break
 		}
 	}
 	log.Printf("✨ Found %d extra courses for department %d, semester %d", len(extraCourses), deptID, semesterNum)
@@ -217,8 +264,9 @@ func GetCoursesForTeacherSemester(w http.ResponseWriter, r *http.Request) {
 	log.Printf("📊 Total courses: %d core + %d extra = %d", len(coreCourses), len(extraCourses), len(coreCourses)+len(extraCourses))
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"coreCourses": coreCourses,
-		"extraCourses": extraCourses,
-		"message": "Core courses required for all; Extra courses are only those students in your department have enrolled in",
+		"coreCourses":              coreCourses,
+		"extraCourses":             extraCourses,
+		"extraCoursesAcademicYear": extraCoursesAcademicYear,
+		"message":                  "Core courses required for all; Extra courses are only those students in your department have enrolled in",
 	})
 }
