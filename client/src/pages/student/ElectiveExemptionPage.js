@@ -27,10 +27,11 @@ const requestTypeOptions = [
   },
 ];
 
-const semesterOptions = [4, 5, 6, 7, 8];
+const professionalElectiveOptions = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const internshipSectorOptions = ["Government", "Private"];
 
 const initialFormState = {
-  elective_semester_no: "4",
+  professional_elective_no: "1",
   online_course_name: "",
   course_type: "",
   start_date: "",
@@ -38,6 +39,7 @@ const initialFormState = {
   course_duration_weeks: "",
   certificate_url: "",
   industry_name: "",
+  industry_contact: "",
   sector: "",
   industry_address: "",
   city: "",
@@ -86,10 +88,6 @@ function ElectiveExemptionPage() {
       return "Student email is not available in the current session.";
     }
 
-    if (!formData.elective_semester_no) {
-      return "Select the elective semester number.";
-    }
-
     if (!formData.certificate_url.trim() && !certificateFile) {
       return "Attach a certificate file or provide the certificate URL.";
     }
@@ -113,6 +111,7 @@ function ElectiveExemptionPage() {
 
     if (selectedType === "NPTEL") {
       if (
+        !formData.professional_elective_no ||
         !formData.online_course_name.trim() ||
         !formData.course_type.trim() ||
         !formData.start_date ||
@@ -125,11 +124,23 @@ function ElectiveExemptionPage() {
       if (Number(formData.course_duration_weeks) <= 0) {
         return "Course duration in weeks must be greater than zero.";
       }
+
+      if (
+        Number(formData.professional_elective_no) < 1 ||
+        Number(formData.professional_elective_no) > 9
+      ) {
+        return "Professional elective number must be between 1 and 9.";
+      }
     }
 
     if (selectedType === "INTERNSHIP") {
+      if (!formData.professional_elective_no) {
+        return "Select the professional elective number.";
+      }
+
       const requiredFields = [
         formData.industry_name,
+        formData.industry_contact,
         formData.sector,
         formData.industry_address,
         formData.city,
@@ -153,6 +164,13 @@ function ElectiveExemptionPage() {
 
       if (Number(formData.stipend_amount) < 0) {
         return "Stipend amount cannot be negative.";
+      }
+
+      if (
+        Number(formData.professional_elective_no) < 1 ||
+        Number(formData.professional_elective_no) > 9
+      ) {
+        return "Professional elective number must be between 1 and 9.";
       }
     }
 
@@ -183,7 +201,6 @@ function ElectiveExemptionPage() {
       const payload = new FormData();
       payload.append("student_email", userEmail);
       payload.append("request_type", selectedType);
-      payload.append("elective_semester_no", formData.elective_semester_no);
       payload.append("certificate_url", formData.certificate_url.trim());
 
       if (certificateFile) {
@@ -191,6 +208,10 @@ function ElectiveExemptionPage() {
       }
 
       if (selectedType === "NPTEL") {
+        payload.append(
+          "professional_elective_no",
+          formData.professional_elective_no,
+        );
         payload.append(
           "online_course_name",
           formData.online_course_name.trim(),
@@ -202,7 +223,12 @@ function ElectiveExemptionPage() {
       }
 
       if (selectedType === "INTERNSHIP") {
+        payload.append(
+          "professional_elective_no",
+          formData.professional_elective_no,
+        );
         payload.append("industry_name", formData.industry_name.trim());
+        payload.append("industry_contact", formData.industry_contact.trim());
         payload.append("sector", formData.sector.trim());
         payload.append("industry_address", formData.industry_address.trim());
         payload.append("city", formData.city.trim());
@@ -254,22 +280,6 @@ function ElectiveExemptionPage() {
     <>
       <div className="grid gap-4 md:grid-cols-2">
         <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-          Elective semester number
-          <select
-            name="elective_semester_no"
-            value={formData.elective_semester_no}
-            onChange={handleChange}
-            className={inputClassName}
-          >
-            {semesterOptions.map((semester) => (
-              <option key={semester} value={semester}>
-                Semester {semester}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
           Certificate URL
           <input
             type="url"
@@ -315,9 +325,25 @@ function ElectiveExemptionPage() {
           name="course_type"
           value={formData.course_type}
           onChange={handleChange}
-          placeholder="Elite / Domain / Certification"
+          placeholder="Swayam-NPTEL"
           className={inputClassName}
         />
+      </label>
+
+      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
+        Professional elective number
+        <select
+          name="professional_elective_no"
+          value={formData.professional_elective_no}
+          onChange={handleChange}
+          className={inputClassName}
+        >
+          {professionalElectiveOptions.map((option) => (
+            <option key={option} value={option}>
+              Professional Elective {option}
+            </option>
+          ))}
+        </select>
       </label>
 
       <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
@@ -370,14 +396,48 @@ function ElectiveExemptionPage() {
       </label>
 
       <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Sector
+        Professional elective number
+        <select
+          name="professional_elective_no"
+          value={formData.professional_elective_no}
+          onChange={handleChange}
+          className={inputClassName}
+        >
+          {professionalElectiveOptions.map((option) => (
+            <option key={option} value={option}>
+              Professional Elective {option}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
+        Industry contact
         <input
           type="text"
+          name="industry_contact"
+          value={formData.industry_contact}
+          onChange={handleChange}
+          placeholder="Contact person / number"
+          className={inputClassName}
+        />
+      </label>
+
+      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
+        Sector
+        <select
           name="sector"
           value={formData.sector}
           onChange={handleChange}
           className={inputClassName}
-        />
+        >
+          <option value="">Select sector</option>
+          {internshipSectorOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
       </label>
 
       <label className="flex flex-col gap-2 text-sm font-medium text-gray-700 md:col-span-2">
@@ -501,7 +561,7 @@ function ElectiveExemptionPage() {
       title="Elective Excemption"
       subtitle="Submit exemption requests for elective slots in semesters 4 to 8."
     >
-      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
+      <div className="flex w-full flex-col gap-6 py-8 px-6">
         <section className="card-custom rounded-3xl border border-primary-100 bg-gradient-to-r from-background via-white to-background p-6">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
@@ -593,7 +653,7 @@ function ElectiveExemptionPage() {
 
           <div className="mt-8 flex flex-col gap-3 border-t border-primary-100 pt-6 md:flex-row md:items-center md:justify-between">
             <p className="text-sm text-gray-500">
-              Semester number is guided to 4, 5, 6, 7, or 8 on the form.
+              Both forms use professional elective number 1 to 9.
             </p>
             <div className="flex gap-3">
               <button

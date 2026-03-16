@@ -23,11 +23,13 @@ import TeacherStudentMappingPage from "../pages/student-teacher_entry/TeacherStu
 import CourseAllocationPage from "../pages/curriculum/CourseAllocationPage";
 import ElectiveSelectionPage from "../pages/student/ElectiveSelectionPage";
 import ElectiveExemptionPage from "../pages/student/ElectiveExemptionPage";
+import ElectiveExemptionStatusPage from "../pages/student/ElectiveExemptionStatusPage";
 import TeacherCourseSelectionPage from "../pages/teacher/TeacherCourseSelectionPage";
 import HRFacultyPage from "../pages/hr/HRFacultyPage";
 import HRAppealsReviewPage from "../pages/hr/HRAppealsReviewPage";
 import ElectiveManagementPage from "../pages/curriculum/ElectiveManagementPage";
 import HODElectivePage from "../pages/curriculum/HODElectivePage";
+import HODElectiveExemptionPage from "../pages/curriculum/HODElectiveExemptionPage";
 import HODHonourMinorEligibilityPage from "../pages/curriculum/HODHonourMinorEligibilityPage";
 import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
@@ -110,6 +112,10 @@ function App() {
             element={<ElectiveExemptionPage />}
           />
           <Route
+            path="student/elective-exemption-status"
+            element={<ElectiveExemptionStatusPage />}
+          />
+          <Route
             path="teacher/course-selection"
             element={<TeacherCourseSelectionPage />}
           />
@@ -121,6 +127,10 @@ function App() {
             element={<ElectiveManagementPage />}
           />
           <Route path="hod/elective-management" element={<HODElectivePage />} />
+          <Route
+            path="hod/elective-exemption"
+            element={<HODElectiveExemptionPage />}
+          />
           <Route
             path="hod/honour-minor-eligibility"
             element={<HODHonourMinorEligibilityPage />}
