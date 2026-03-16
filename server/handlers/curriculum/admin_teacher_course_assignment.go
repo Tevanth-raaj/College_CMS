@@ -21,13 +21,13 @@ type adminTeacherInfo struct {
 }
 
 type adminTeacherCourseOption struct {
-	CourseID    int    `json:"course_id"`
-	CourseCode  string `json:"course_code"`
-	CourseName  string `json:"course_name"`
-	Category    string `json:"category"`
-	CourseType  string `json:"course_type"`
-	Source      string `json:"source"`
-	IsAssigned  bool   `json:"is_assigned"`
+	CourseID   int    `json:"course_id"`
+	CourseCode string `json:"course_code"`
+	CourseName string `json:"course_name"`
+	Category   string `json:"category"`
+	CourseType string `json:"course_type"`
+	Source     string `json:"source"`
+	IsAssigned bool   `json:"is_assigned"`
 }
 
 type adminTeacherCourseUpdateRequest struct {
@@ -172,8 +172,10 @@ func getTeacherAssignedCourseIDs(facultyID string) (map[int]bool, error) {
 	assigned := make(map[int]bool)
 	rows, err := db.DB.Query(`
 		SELECT DISTINCT course_id
-		FROM teacher_course_allocation
+		FROM teacher_course_history
 		WHERE teacher_id = ?
+		  AND record_type = 'course'
+		  AND archived_at IS NULL
 	`, facultyID)
 	if err != nil {
 		return nil, err
@@ -361,15 +363,15 @@ func UpdateAdminTeacherCourseAssignments(w http.ResponseWriter, r *http.Request)
 	sort.Ints(assignedIDs)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":            true,
-		"teacher_id":         teacher.TeacherID,
-		"faculty_id":         teacher.FacultyID,
-		"department_id":      teacher.DepartmentID,
-		"department_name":    teacher.DepartmentName,
-		"added_count":        added,
-		"removed_count":      removed,
+		"success":             true,
+		"teacher_id":          teacher.TeacherID,
+		"faculty_id":          teacher.FacultyID,
+		"department_id":       teacher.DepartmentID,
+		"department_name":     teacher.DepartmentName,
+		"added_count":         added,
+		"removed_count":       removed,
 		"assigned_course_ids": assignedIDs,
-		"message":            "Teacher course assignments updated",
+		"message":             "Teacher course assignments updated",
 	})
 }
 
@@ -422,15 +424,14 @@ func GetAdminTeacherAssignmentTeachers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		results = append(results, map[string]interface{}{
-			"teacher_id":       teacherID,
-			"faculty_id":       facultyID,
-			"teacher_name":     name,
-			"department_id":    deptID,
-			"department_name":  deptName,
-			"label":            strings.TrimSpace(facultyID + " - " + name + " (" + deptName + ")"),
+			"teacher_id":      teacherID,
+			"faculty_id":      facultyID,
+			"teacher_name":    name,
+			"department_id":   deptID,
+			"department_name": deptName,
+			"label":           strings.TrimSpace(facultyID + " - " + name + " (" + deptName + ")"),
 		})
 	}
 
 	json.NewEncoder(w).Encode(results)
 }
-

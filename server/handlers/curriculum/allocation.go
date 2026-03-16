@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"server/db"
 	"server/models"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,11 +66,12 @@ func GetCourseAllocations(w http.ResponseWriter, r *http.Request) {
 		courses = append(courses, c)
 	}
 
-	// 2. Fetch all allocations for these courses
+	// 2. Fetch all allocations for these courses from history table
 	allocationQuery := `
-		SELECT ca.id, ca.course_id, ca.teacher_id, t.name
-		FROM teacher_course_allocation ca
-		JOIN teachers t ON ca.teacher_id = t.id
+		SELECT tch.id, tch.course_id, tch.teacher_id, t.name
+		FROM teacher_course_history tch
+		JOIN teachers t ON tch.teacher_id = t.faculty_id
+		WHERE tch.record_type = 'course' AND tch.archived_at IS NULL
 	`
 	aRows, err := db.DB.Query(allocationQuery)
 	if err != nil {
@@ -839,11 +840,13 @@ func GetCourseTeachers(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		SELECT 
-			ca.id, ca.teacher_id, t.name, t.email, t.dept, d.department_name
-		FROM teacher_course_allocation ca
-		JOIN teachers t ON ca.teacher_id = t.id
+			tch.id, tch.teacher_id, t.name, t.email, t.dept, d.department_name
+		FROM teacher_course_history tch
+		JOIN teachers t ON tch.teacher_id = t.faculty_id
 		LEFT JOIN departments d ON t.dept = d.id
-		WHERE ca.course_id = ?
+		WHERE tch.course_id = ?
+		  AND tch.record_type = 'course'
+		  AND tch.archived_at IS NULL
 		ORDER BY t.name
 	`
 
@@ -894,14 +897,16 @@ func GetDepartmentSemesterCourses(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		SELECT DISTINCT c.id, c.course_code, c.course_name
-		FROM teacher_course_allocation tca
-		JOIN curriculum_courses cc ON tca.course_id = cc.course_id
+		FROM teacher_course_history tch
+		JOIN curriculum_courses cc ON tch.course_id = cc.course_id
 		JOIN normal_cards nc ON cc.semester_id = nc.id
-		JOIN courses c ON tca.course_id = c.id
-		JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id
+		JOIN courses c ON tch.course_id = c.id
+		JOIN department_teachers dt ON dt.teacher_id = tch.teacher_id
 		WHERE dt.department_id = ?
 			AND dt.status = 1
 			AND nc.semester_number = ?
+			AND tch.record_type = 'course'
+			AND tch.archived_at IS NULL
 		ORDER BY c.course_code
 	`
 
@@ -956,8 +961,10 @@ func GetUnassignedCourses(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN course_type ct ON c.course_type = ct.id
 		WHERE cc.semester_id = ? AND c.status = 1
 		AND NOT EXISTS (
-			SELECT 1 FROM teacher_course_allocation ca
-			WHERE ca.course_id = c.id
+			SELECT 1 FROM teacher_course_history tch
+			WHERE tch.course_id = c.id
+			  AND tch.record_type = 'course'
+			  AND tch.archived_at IS NULL
 		)
 		ORDER BY c.course_code
 	`
@@ -1025,10 +1032,12 @@ func GetAllocationSummary(w http.ResponseWriter, r *http.Request) {
 
 	// Assigned courses
 	err = db.DB.QueryRow(`
-		SELECT COUNT(DISTINCT ca.course_id)
-		FROM teacher_course_allocation ca
-		JOIN curriculum_courses cc ON ca.course_id = cc.course_id
+		SELECT COUNT(DISTINCT tch.course_id)
+		FROM teacher_course_history tch
+		JOIN curriculum_courses cc ON tch.course_id = cc.course_id
 		WHERE cc.semester_id = ?
+		  AND tch.record_type = 'course'
+		  AND tch.archived_at IS NULL
 	`, semesterID).Scan(&summary.AssignedCourses)
 	if err != nil {
 		log.Printf("Error counting assigned courses: %v", err)
@@ -1044,10 +1053,12 @@ func GetAllocationSummary(w http.ResponseWriter, r *http.Request) {
 
 	// Active teachers (assigned to at least one course in this semester)
 	err = db.DB.QueryRow(`
-		SELECT COUNT(DISTINCT ca.teacher_id)
-		FROM teacher_course_allocation ca
-		JOIN curriculum_courses cc ON ca.course_id = cc.course_id
+		SELECT COUNT(DISTINCT tch.teacher_id)
+		FROM teacher_course_history tch
+		JOIN curriculum_courses cc ON tch.course_id = cc.course_id
 		WHERE cc.semester_id = ?
+		  AND tch.record_type = 'course'
+		  AND tch.archived_at IS NULL
 	`, semesterID).Scan(&summary.ActiveTeachers)
 	if err != nil {
 		log.Printf("Error counting active teachers: %v", err)

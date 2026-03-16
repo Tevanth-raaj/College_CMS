@@ -513,21 +513,23 @@ func getDepartmentAssignments(departmentID int, semester int) ([]markEntryAssign
 			c.id,
 			c.course_code,
 			c.course_name,
-			tca.teacher_id,
-			COALESCE(t.name, tca.teacher_id) AS teacher_name,
+			tch.teacher_id,
+			COALESCE(t.name, tch.teacher_id) AS teacher_name,
 			COALESCE(d_curr.id, d_teacher.id, 0) AS department_id,
 			COALESCE(d_curr.department_name, d_teacher.department_name, 'Unmapped') AS department_name,
 			nc.semester_number
-		FROM teacher_course_allocation tca
-		JOIN courses c ON c.id = tca.course_id
+		FROM teacher_course_history tch
+		JOIN courses c ON c.id = tch.course_id
 		JOIN curriculum_courses cc ON cc.course_id = c.id
 		JOIN normal_cards nc ON nc.id = cc.semester_id
-		LEFT JOIN teachers t ON t.faculty_id = tca.teacher_id
-		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id AND dt.status = 1
+		LEFT JOIN teachers t ON t.faculty_id = tch.teacher_id
+		LEFT JOIN department_teachers dt ON dt.teacher_id = tch.teacher_id AND dt.status = 1
 		LEFT JOIN departments d_curr ON d_curr.current_curriculum_id = cc.curriculum_id
 		LEFT JOIN departments d_teacher ON d_teacher.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
 		WHERE (d_curr.id = ? OR d_teacher.id = ?)
 			AND nc.semester_number = ?
+			AND tch.record_type = 'course'
+			AND tch.archived_at IS NULL
 		ORDER BY c.course_code, teacher_name
 	`, departmentID, departmentID, semester)
 	if err != nil {
@@ -808,19 +810,21 @@ func getAssignmentsForWindowMonitor(semester int, departmentID *int) ([]markEntr
 			c.id,
 			c.course_code,
 			c.course_name,
-			tca.teacher_id,
-			COALESCE(t.name, tca.teacher_id) AS teacher_name,
+			tch.teacher_id,
+			COALESCE(t.name, tch.teacher_id) AS teacher_name,
 			COALESCE(d.id, 0) AS department_id,
 			COALESCE(d.department_name, 'Unmapped') AS department_name,
 			nc.semester_number
-		FROM teacher_course_allocation tca
-		JOIN courses c ON c.id = tca.course_id
+		FROM teacher_course_history tch
+		JOIN courses c ON c.id = tch.course_id
 		JOIN curriculum_courses cc ON cc.course_id = c.id
 		JOIN normal_cards nc ON nc.id = cc.semester_id
-		LEFT JOIN teachers t ON t.faculty_id = tca.teacher_id
-		LEFT JOIN department_teachers dt ON dt.teacher_id = tca.teacher_id
+		LEFT JOIN teachers t ON t.faculty_id = tch.teacher_id
+		LEFT JOIN department_teachers dt ON dt.teacher_id = tch.teacher_id
 		LEFT JOIN departments d ON d.id = COALESCE(dt.department_id, CAST(t.dept AS UNSIGNED))
 		WHERE nc.semester_number = ?
+		AND tch.record_type = 'course'
+		AND tch.archived_at IS NULL
 	`
 	args := []interface{}{semester}
 	if departmentID != nil {
@@ -1610,8 +1614,10 @@ func CreateMarkEntryExtensionRequest(w http.ResponseWriter, r *http.Request) {
 		var exists int
 		err = db.DB.QueryRow(`
 			SELECT COUNT(*)
-			FROM teacher_course_allocation
+			FROM teacher_course_history
 			WHERE teacher_id = ? AND course_id = ?
+			  AND record_type = 'course'
+			  AND archived_at IS NULL
 		`, req.TeacherID, req.CourseID).Scan(&exists)
 		if err != nil || exists == 0 {
 			http.Error(w, "teacher not allocated to this course", http.StatusForbidden)

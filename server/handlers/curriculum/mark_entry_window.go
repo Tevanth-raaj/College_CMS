@@ -938,7 +938,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			AND (
 				w.teacher_id = ?
 				OR w.course_id IN (
-					SELECT course_id FROM teacher_course_allocation WHERE teacher_id = ?
+					SELECT course_id FROM teacher_course_history WHERE teacher_id = ? AND record_type = 'course' AND archived_at IS NULL
 				)
 				OR w.teacher_id IS NULL
 			)
@@ -1572,7 +1572,8 @@ func buildTeacherQuery(isUAL bool, isPBL bool) string {
 			SUM(CASE WHEN s.learning_mode_id = 1 THEN 1 ELSE 0 END) as ual_student_count,
 			SUM(CASE WHEN s.learning_mode_id = 2 THEN 1 ELSE 0 END) as pbl_student_count
 		FROM mark_entry_windows w
-		JOIN teacher_course_allocation tca ON (w.course_id IS NULL OR w.course_id = tca.course_id)
+		JOIN teacher_course_history tca ON (w.course_id IS NULL OR w.course_id = tca.course_id)
+			AND tca.record_type = 'course' AND tca.archived_at IS NULL
 		JOIN teachers t ON tca.teacher_id = t.faculty_id
 		JOIN departments d ON t.department_id = d.id
 		JOIN course_student_teacher_allocation csta ON t.faculty_id = csta.teacher_id AND tca.course_id = csta.course_id

@@ -436,8 +436,9 @@ func getCoursesWithTeachers() ([]CourseInfo, error) {
 	query := `
 		SELECT DISTINCT c.id, c.course_name
 		FROM courses c
-		INNER JOIN teacher_course_allocation tca ON c.id = tca.course_id
-		WHERE tca.is_active = 1
+		INNER JOIN teacher_course_history tca ON c.id = tca.course_id
+		WHERE tca.record_type = 'course'
+			AND tca.archived_at IS NULL
 		ORDER BY c.course_name
 	`
 
@@ -497,10 +498,11 @@ func checkNullLearningMode(courseID int) ([]StudentNullModeWarning, error) {
 func getActiveTeachersForCourse(courseID int) ([]string, error) {
 	query := `
 		SELECT DISTINCT tca.teacher_id
-		FROM teacher_course_allocation tca
+		FROM teacher_course_history tca
 		INNER JOIN teachers t ON tca.teacher_id = t.faculty_id
 		WHERE tca.course_id = ?
-			AND tca.is_active = 1
+			AND tca.record_type = 'course'
+			AND tca.archived_at IS NULL
 			AND t.status = 1
 		ORDER BY tca.teacher_id
 	`
