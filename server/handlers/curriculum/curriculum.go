@@ -193,12 +193,20 @@ func CreateSemester(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	query := "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, vertical_name) VALUES (?, ?, ?, ?)"
-	verticalName := ""
+	// Build INSERT query based on card type
+	var query string
+	var result sql.Result
+	
 	if card.CardType == "vertical" || card.CardType == "open_elective" {
-		verticalName = card.VerticalName
+		// For vertical/OE cards, include vertical_name
+		query = "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, vertical_name, status) VALUES (?, ?, ?, ?, 1)"
+		result, err = db.DB.Exec(query, card.CurriculumID, card.SemesterNumber, card.CardType, card.VerticalName)
+	} else {
+		// For regular semester cards, omit vertical_name (will be NULL)
+		query = "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, status) VALUES (?, ?, ?, 1)"
+		result, err = db.DB.Exec(query, card.CurriculumID, card.SemesterNumber, card.CardType)
 	}
-	result, err := db.DB.Exec(query, card.CurriculumID, card.SemesterNumber, card.CardType, verticalName)
+	
 	if err != nil {
 		log.Println("Error inserting semester:", err)
 		w.WriteHeader(http.StatusInternalServerError)

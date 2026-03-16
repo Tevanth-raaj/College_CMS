@@ -176,6 +176,8 @@ function Sidebar({ onExpandedChange }) {
       {
         name: "Course Dashboard",
         path: "/student/course-dashboard",
+        name: "Elective Excemption",
+        path: "/student/elective-exemption",
         icon: (
           <svg
             className="w-5 h-5"
@@ -187,7 +189,7 @@ function Sidebar({ onExpandedChange }) {
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth={2}
-              d="M3 3h18v4H3V3zm0 7h18v11H3V10zm4 3h4m2 0h4m-10 4h4m2 0h4"
+              d="M12 8c-1.657 0-3 1.343-3 3v1H8a2 2 0 00-2 2v3a2 2 0 002 2h8a2 2 0 002-2v-3a2 2 0 00-2-2h-1v-1c0-1.657-1.343-3-3-3zm-1 4v-1a1 1 0 112 0v1h-2zm-6 8h14"
             />
           </svg>
         ),
@@ -338,7 +340,7 @@ function Sidebar({ onExpandedChange }) {
         path: "/admin/teacher-course-assignment",
         icon: (
           <svg
-            className="w-7 h-7"
+            className="w-5 h-5"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -425,7 +427,12 @@ function Sidebar({ onExpandedChange }) {
         name: "My Assigned",
         path: "/my-assigned-students",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -434,7 +441,14 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["user", "faculty", "staff", "curriculum_entry_user", "coe", "admin"],
+        roles: [
+          "user",
+          "faculty",
+          "staff",
+          "curriculum_entry_user",
+          "coe",
+          "admin",
+        ],
       },
       {
         name: "Mark Permissions",
@@ -460,7 +474,12 @@ function Sidebar({ onExpandedChange }) {
         name: "Honour/Minor Import",
         path: "/hod/honour-minor-eligibility",
         icon: (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -515,7 +534,12 @@ function Sidebar({ onExpandedChange }) {
         name: "HR Faculty",
         path: "/hr/faculty",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -530,7 +554,12 @@ function Sidebar({ onExpandedChange }) {
         name: "HR Appeals",
         path: "/hr/appeals-review",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -545,7 +574,12 @@ function Sidebar({ onExpandedChange }) {
         name: "Clusters",
         path: "/clusters",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -560,7 +594,12 @@ function Sidebar({ onExpandedChange }) {
         name: "Sharing",
         path: "/sharing",
         icon: (
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -615,11 +654,20 @@ function Sidebar({ onExpandedChange }) {
   };
 
   const handleLogout = () => {
+    // Clear all user and teacher related data
     localStorage.removeItem("userId");
+    localStorage.removeItem("user_id");
     localStorage.removeItem("userRole");
     localStorage.removeItem("userName");
     localStorage.removeItem("userEmail");
+    localStorage.removeItem("username");
     localStorage.removeItem("teacherId");
+    localStorage.removeItem("teacher_id");
+    localStorage.removeItem("teacher_name");
+    localStorage.removeItem("teacher_email");
+    localStorage.removeItem("teacher_dept");
+    localStorage.removeItem("teacher_designation");
+    localStorage.removeItem("faculty_id");
     localStorage.removeItem("token");
     navigate("/");
   };

@@ -254,6 +254,7 @@ const HODElectivePage = () => {
   const [minorVerticals, setMinorVerticals] = useState([]);
   const [selectedMinorVertical, setSelectedMinorVertical] = useState(null);
   const [minorCourses, setMinorCourses] = useState([]);
+  const [allMinorProgramCourses, setAllMinorProgramCourses] = useState([]);
   const [minorAssignments, setMinorAssignments] = useState({
     5: [null, null],
     6: [null, null],
@@ -270,6 +271,7 @@ const HODElectivePage = () => {
   const [oeAssignments, setOeAssignments] = useState({ 5: [], 6: [], 7: [] });
   const [oeAllowedDepartments, setOeAllowedDepartments] = useState([]);
   const [oeSaveMessage, setOeSaveMessage] = useState("");
+  const [oeValidation, setOeValidation] = useState({}); // { dept_id: { eligible, missing_courses, dept_name } }
 
   // Incoming OE offerings from other departments
   const [incomingOEOfferings, setIncomingOEOfferings] = useState([]);
@@ -512,9 +514,35 @@ const HODElectivePage = () => {
       const data = await response.json();
       if (data.success && data.verticals) {
         setMinorVerticals(data.verticals);
+
+        // Preload all minor-program courses so Minor Slot dropdown can always show them.
+        const allCourses = [];
+        for (const vertical of data.verticals) {
+          try {
+            const courseRes = await fetch(
+              `${API_BASE_URL}/hod/vertical-courses?vertical_id=${vertical.id}&source=honour_vertical`,
+            );
+            const courseData = await courseRes.json();
+            if (courseData.success && courseData.courses) {
+              courseData.courses.forEach((c) => {
+                allCourses.push({
+                  ...c,
+                  vertical_name: vertical.name,
+                  vertical_id: vertical.id,
+                });
+              });
+            }
+          } catch (e) {
+            console.error("Error fetching minor vertical courses:", e);
+          }
+        }
+        setAllMinorProgramCourses(allCourses);
+      } else {
+        setAllMinorProgramCourses([]);
       }
     } catch (error) {
       console.error("Error fetching minor verticals:", error);
+      setAllMinorProgramCourses([]);
     }
   };
 
@@ -627,6 +655,40 @@ const HODElectivePage = () => {
     }));
   };
 
+  // Validate OE courses against target departments' Different Dept cards
+  useEffect(() => {
+    const courseIds = [];
+    for (let sem = 5; sem <= 7; sem++) {
+      (oeAssignments[sem] || []).forEach((id) => {
+        if (!courseIds.includes(id)) courseIds.push(id);
+      });
+    }
+    if (courseIds.length === 0 || oeAllowedDepartments.length === 0) {
+      setOeValidation({});
+      return;
+    }
+    const controller = new AbortController();
+    fetch(
+      `${API_BASE_URL}/hod/oe-validate-courses?course_ids=${courseIds.join(",")}&dept_ids=${oeAllowedDepartments.join(",")}`,
+      { signal: controller.signal },
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.departments) {
+          const map = {};
+          data.departments.forEach((d) => {
+            map[d.dept_id] = d;
+          });
+          setOeValidation(map);
+        }
+      })
+      .catch((err) => {
+        if (err.name !== "AbortError")
+          console.error("OE validation error:", err);
+      });
+    return () => controller.abort();
+  }, [oeAssignments, oeAllowedDepartments]);
+
   const handleSaveOEOfferings = async () => {
     setOeSaveMessage("");
 
@@ -671,11 +733,23 @@ const HODElectivePage = () => {
 
       const result = await response.json();
       if (result.success) {
-        setOeSaveMessage(`✓ ${result.message}`);
+        let msg = `✓ ${result.message}`;
+        if (
+          result.skipped_departments &&
+          result.skipped_departments.length > 0
+        ) {
+          const skippedNames = result.skipped_departments
+            .map((sd) => sd.dept_name)
+            .join(", ");
+          msg += ` | Skipped: ${skippedNames}`;
+        }
+        setOeSaveMessage(msg);
       } else {
-        setOeSaveMessage(
-          `⚠️ ${result.message || "Failed to save OE offerings"}`,
-        );
+        let errMsg = result.message || "Failed to save OE offerings";
+        if (result.details) {
+          errMsg += " — " + result.details;
+        }
+        setOeSaveMessage(`⚠️ ${errMsg}`);
       }
     } catch (error) {
       console.error("Error saving OE offerings:", error);
@@ -1244,6 +1318,14 @@ const HODElectivePage = () => {
   const groupedElectives = useMemo(() => {
     const grouped = new Map();
     availableElectives.forEach((course) => {
+      // Exclude minor/honour card courses – they have their own dedicated dropdowns
+      const ct = (course.card_type || "").toLowerCase();
+      if (
+        ct === "minor_card" ||
+        ct === "minor_assigned" ||
+        ct === "honour_card"
+      )
+        return;
       const name = getVerticalName(course);
       if (!grouped.has(name)) {
         grouped.set(name, []);
@@ -1295,39 +1377,142 @@ const HODElectivePage = () => {
     return [["Department Courses", addOnCourses]];
   }, [addOnCourses]);
 
-  // Group Minor eligible courses: own department courses + courses offered by other departments
+  // Group Minor eligible courses: own department courses + courses offered by other departments.
   const groupedMinorElectives = useMemo(() => {
-    // Start with own department's vertical/PE courses
-    const groups = [...groupedElectives];
+    const grouped = new Map();
 
-    // Add courses offered TO this department by other departments via Minor Program Management
-    if (minorEligibleCourses.length > 0) {
-      const deptGrouped = new Map();
-      minorEligibleCourses.forEach((mc) => {
-        const deptLabel = `${mc.department_name} (${mc.department_code || "Other Dept"}) - Minor Offering`;
-        if (!deptGrouped.has(deptLabel)) {
-          deptGrouped.set(deptLabel, []);
-        }
-        // Avoid duplicate course IDs within the same department group
-        if (!deptGrouped.get(deptLabel).some((c) => c.id === mc.id)) {
-          deptGrouped.get(deptLabel).push({
-            id: mc.id,
-            course_code: mc.course_code,
-            course_name: mc.course_name,
-            course_type: mc.course_type,
-            category: mc.category,
-            credit: mc.credit,
-            vertical_name: deptLabel,
+    // Own department minor-card courses only
+    const minorCardCourses = availableElectives.filter(
+      (course) => course.card_type === "minor_card",
+    );
+    const ownMinorSource = minorCardCourses;
+
+    ownMinorSource.forEach((course) => {
+      const groupName = getVerticalName(course);
+      if (!grouped.has(groupName)) {
+        grouped.set(groupName, []);
+      }
+      grouped.get(groupName).push(course);
+    });
+
+    // Also include exactly what Minor Program Management currently shows.
+    // This keeps Minor Slot dropdown in sync with selected minor vertical courses.
+    if (minorCourses.length > 0) {
+      const selectedMinorName =
+        minorVerticals.find((v) => v.id === selectedMinorVertical)?.name ||
+        "Minor Program Courses";
+      if (!grouped.has(selectedMinorName)) {
+        grouped.set(selectedMinorName, []);
+      }
+      minorCourses.forEach((course) => {
+        if (!grouped.get(selectedMinorName).some((c) => c.id === course.id)) {
+          grouped.get(selectedMinorName).push({
+            id: course.id,
+            course_code: course.course_code,
+            course_name: course.course_name,
+            course_type: course.course_type,
+            category: course.category || "",
+            credit: course.credit,
+            vertical_name: selectedMinorName,
           });
         }
       });
-      deptGrouped.forEach((courses, label) => {
-        groups.push([label, courses]);
-      });
     }
 
-    return groups;
-  }, [groupedElectives, minorEligibleCourses]);
+    // Courses offered to this department by other departments via Minor program
+    minorEligibleCourses.forEach((mc) => {
+      const deptLabel = `${mc.department_name} (${mc.department_code || "Other Dept"}) - Minor Offering`;
+      if (!grouped.has(deptLabel)) {
+        grouped.set(deptLabel, []);
+      }
+      if (!grouped.get(deptLabel).some((c) => c.id === mc.id)) {
+        grouped.get(deptLabel).push({
+          id: mc.id,
+          course_code: mc.course_code,
+          course_name: mc.course_name,
+          course_type: mc.course_type,
+          category: mc.category,
+          credit: mc.credit,
+          vertical_name: deptLabel,
+        });
+      }
+    });
+
+    return Array.from(grouped.entries()).sort(([a], [b]) =>
+      String(a).localeCompare(String(b)),
+    );
+  }, [
+    availableElectives,
+    minorEligibleCourses,
+    minorCourses,
+    selectedMinorVertical,
+    minorVerticals,
+  ]);
+
+  // Minor slot options should mirror Minor Program Management courses,
+  // plus incoming minor offerings from other departments.
+  const groupedMinorSlotOptions = useMemo(() => {
+    const grouped = new Map();
+
+    // Strictly include only own minor-program courses (not regular vertical electives)
+    const ownMinorCourses = (
+      allMinorProgramCourses.length > 0 ? allMinorProgramCourses : minorCourses
+    ).filter((course) => {
+      const cardType = String(course.card_type || "").toLowerCase();
+      const verticalName = String(course.vertical_name || "").toUpperCase();
+      return cardType === "minor_card" || verticalName.includes("MINOR");
+    });
+
+    ownMinorCourses.forEach((course) => {
+      const groupName =
+        course.vertical_name ||
+        minorVerticals.find((v) => v.id === selectedMinorVertical)?.name ||
+        "Minor Program Courses";
+      if (!grouped.has(groupName)) {
+        grouped.set(groupName, []);
+      }
+      if (!grouped.get(groupName).some((c) => c.id === course.id)) {
+        grouped.get(groupName).push({
+          id: course.id,
+          course_code: course.course_code,
+          course_name: course.course_name,
+          course_type: course.course_type,
+          category: course.category || "",
+          credit: course.credit,
+          vertical_name: groupName,
+          vertical_id: course.vertical_id,
+        });
+      }
+    });
+
+    minorEligibleCourses.forEach((mc) => {
+      const deptLabel = `${mc.department_name} (${mc.department_code || "Other Dept"}) - Minor Offering`;
+      if (!grouped.has(deptLabel)) {
+        grouped.set(deptLabel, []);
+      }
+      if (!grouped.get(deptLabel).some((c) => c.id === mc.id)) {
+        grouped.get(deptLabel).push({
+          id: mc.id,
+          course_code: mc.course_code,
+          course_name: mc.course_name,
+          course_type: mc.course_type,
+          category: mc.category,
+          credit: mc.credit,
+          vertical_name: deptLabel,
+        });
+      }
+    });
+
+    return Array.from(grouped.entries()).sort(([a], [b]) =>
+      String(a).localeCompare(String(b)),
+    );
+  }, [
+    allMinorProgramCourses,
+    minorCourses,
+    minorEligibleCourses,
+    selectedMinorVertical,
+    minorVerticals,
+  ]);
 
   // Group Honour eligible courses from honour cards
   const groupedHonourElectives = useMemo(() => {
@@ -1705,7 +1890,9 @@ const HODElectivePage = () => {
 
                                           // Determine base options based on slot type
                                           let opts = isMSlot
-                                            ? groupedMinorElectives
+                                            ? groupedMinorSlotOptions.length > 0
+                                              ? groupedMinorSlotOptions
+                                              : groupedMinorElectives
                                             : isHSlot
                                               ? groupedHonourElectives
                                               : groupedElectives;
@@ -1761,6 +1948,8 @@ const HODElectivePage = () => {
                                                   groupName,
                                                   courses.filter(
                                                     (c) =>
+                                                      // Keep external/legacy minor options that don't carry a vertical id
+                                                      c.vertical_id == null ||
                                                       c.vertical_id ===
                                                         lock.vertical_id ||
                                                       String(
@@ -2304,36 +2493,76 @@ const HODElectivePage = () => {
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-60 overflow-y-auto border border-gray-300 rounded-lg p-4">
                   {departments
                     .filter((dept) => dept.id !== hodProfile?.department?.id)
-                    .map((dept) => (
-                      <label
-                        key={dept.id}
-                        className="flex items-center space-x-2 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={oeAllowedDepartments.includes(dept.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setOeAllowedDepartments([
-                                ...oeAllowedDepartments,
-                                dept.id,
-                              ]);
-                            } else {
-                              setOeAllowedDepartments(
-                                oeAllowedDepartments.filter(
-                                  (id) => id !== dept.id,
-                                ),
-                              );
-                            }
-                          }}
-                          className="w-4 h-4 text-green-600 focus:ring-green-500"
-                        />
-                        <span className="text-sm text-gray-700">
-                          {dept.name}
-                        </span>
-                      </label>
-                    ))}
+                    .map((dept) => {
+                      const v = oeValidation[dept.id];
+                      const isChecked = oeAllowedDepartments.includes(dept.id);
+                      const hasIssue = isChecked && v && !v.eligible;
+                      return (
+                        <label
+                          key={dept.id}
+                          className={`flex items-center space-x-2 cursor-pointer ${hasIssue ? "opacity-80" : ""}`}
+                          title={
+                            hasIssue
+                              ? v.has_curriculum === false
+                                ? "No active curriculum"
+                                : `Missing courses: ${(v.missing_courses || []).join(", ")}`
+                              : ""
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setOeAllowedDepartments([
+                                  ...oeAllowedDepartments,
+                                  dept.id,
+                                ]);
+                              } else {
+                                setOeAllowedDepartments(
+                                  oeAllowedDepartments.filter(
+                                    (id) => id !== dept.id,
+                                  ),
+                                );
+                              }
+                            }}
+                            className="w-4 h-4 text-green-600 focus:ring-green-500"
+                          />
+                          <span
+                            className={`text-sm ${hasIssue ? "text-amber-600" : "text-gray-700"}`}
+                          >
+                            {hasIssue && "⚠️ "}
+                            {dept.name}
+                          </span>
+                        </label>
+                      );
+                    })}
                 </div>
+                {/* Per-department validation warnings */}
+                {oeAllowedDepartments.some(
+                  (id) => oeValidation[id] && !oeValidation[id].eligible,
+                ) && (
+                  <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-xs font-medium text-amber-700 mb-1">
+                      ⚠️ Some departments will be skipped on save:
+                    </p>
+                    {oeAllowedDepartments
+                      .filter(
+                        (id) => oeValidation[id] && !oeValidation[id].eligible,
+                      )
+                      .map((id) => {
+                        const v = oeValidation[id];
+                        return (
+                          <p key={id} className="text-xs text-amber-600 ml-3">
+                            • {v.dept_name}:{" "}
+                            {v.has_curriculum === false
+                              ? "No active curriculum"
+                              : `Missing from Different Dept OE card: ${(v.missing_courses || []).join(", ")}`}
+                          </p>
+                        );
+                      })}
+                  </div>
+                )}
                 <p className="text-xs text-gray-600 mt-2">
                   Selected: {oeAllowedDepartments.length} department(s)
                 </p>

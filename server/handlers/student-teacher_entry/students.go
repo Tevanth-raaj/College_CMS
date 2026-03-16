@@ -42,7 +42,9 @@ func GetStudents(w http.ResponseWriter, r *http.Request) {
 				COALESCE(designation, ''), 
 				COALESCE(place_of_work, ''), 
 				COALESCE(parent_income, 0), 
-				COALESCE(status, 1)
+				COALESCE(status, 1),
+				learning_mode_id,
+				department_id
 			FROM students
 			WHERE status = 1
 			ORDER BY id DESC
@@ -68,6 +70,7 @@ func GetStudents(w http.ResponseWriter, r *http.Request) {
 			&student.MotherTongue, &student.BloodGroup, &student.AadharNo,
 			&student.ParentOccupation, &student.Designation, &student.PlaceOfWork,
 			&student.ParentIncome, &student.Status,
+			&student.LearningModeID, &student.DepartmentID,
 		)
 		if err != nil {
 			log.Printf("Error scanning student row: %v", err)
