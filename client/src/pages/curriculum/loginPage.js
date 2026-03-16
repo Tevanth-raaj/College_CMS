@@ -52,7 +52,7 @@ function LoginPage() {
       hod: '/curriculum',
       hr: '/hr/faculty',
       teacher: '/teacher-dashboard',
-      student: '/student/elective-selection',
+      student: '/student/course-dashboard',
     }
 
     navigate(roleRoutes[role] || '/dashboard')

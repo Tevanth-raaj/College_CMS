@@ -1,14 +1,31 @@
 package allocation
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"server/db"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/mux"
 )
+
+type allocationRunRequest struct {
+	WindowID     int    `json:"window_id"`
+	AcademicYear string `json:"academic_year"`
+	SemesterType string `json:"semester_type"`
+	WindowStart  string `json:"window_start"`
+	WindowEnd    string `json:"window_end"`
+	Force        bool   `json:"force"`
+	FullRerun    bool   `json:"full_rerun"`
+}
 
 // DepartmentAllocation represents allocation data per department
 type DepartmentAllocation struct {
@@ -89,6 +106,15 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now()
 
+	runReq := allocationRunRequest{}
+	if r != nil && r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&runReq); err != nil && err.Error() != "EOF" {
+			log.Printf("⚠️  Invalid allocation run payload, continuing with defaults: %v", err)
+		}
+	}
+	forceRun := runReq.Force
+	fullRerun := runReq.FullRerun
+
 	// Do not run when a new window is active
 	var activeCount int
 	err := db.DB.QueryRow(`
@@ -104,25 +130,42 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Failed to check active windows"})
 		return
 	}
-	if activeCount > 0 {
+	if activeCount > 0 && !forceRun {
 		log.Printf("ℹ️  Active window found - skipping allocation run")
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Active window found"})
 		return
 	}
 
-	// Get the most recent closed window
+	// Resolve target window (specific window if provided, else latest closed window)
 	var windowAcademicYear string
 	var currentSemesterType string
 	var windowStart, windowEnd time.Time
 
-	err = db.DB.QueryRow(`
-		SELECT academic_year, COALESCE(current_semester_type, 'even') as semester_type, window_start, window_end
-		FROM teacher_course_tracking
-		WHERE window_end IS NOT NULL
-		AND DATE(window_end) < DATE(NOW())
-		ORDER BY window_end DESC
-		LIMIT 1
-	`).Scan(&windowAcademicYear, &currentSemesterType, &windowStart, &windowEnd)
+	if runReq.WindowID > 0 {
+		err = db.DB.QueryRow(`
+			SELECT academic_year, COALESCE(current_semester_type, 'even') as semester_type, window_start, window_end
+			FROM teacher_course_tracking
+			WHERE id = ?
+			LIMIT 1
+		`, runReq.WindowID).Scan(&windowAcademicYear, &currentSemesterType, &windowStart, &windowEnd)
+	} else if strings.TrimSpace(runReq.WindowStart) != "" && strings.TrimSpace(runReq.WindowEnd) != "" {
+		err = db.DB.QueryRow(`
+			SELECT academic_year, COALESCE(current_semester_type, 'even') as semester_type, window_start, window_end
+			FROM teacher_course_tracking
+			WHERE window_start = ? AND window_end = ?
+			ORDER BY id DESC
+			LIMIT 1
+		`, runReq.WindowStart, runReq.WindowEnd).Scan(&windowAcademicYear, &currentSemesterType, &windowStart, &windowEnd)
+	} else {
+		err = db.DB.QueryRow(`
+			SELECT academic_year, COALESCE(current_semester_type, 'even') as semester_type, window_start, window_end
+			FROM teacher_course_tracking
+			WHERE window_end IS NOT NULL
+			AND DATE(window_end) < DATE(NOW())
+			ORDER BY window_end DESC
+			LIMIT 1
+		`).Scan(&windowAcademicYear, &currentSemesterType, &windowStart, &windowEnd)
+	}
 
 	if err != nil {
 		log.Printf("❌ No closed window found for allocation: %v", err)
@@ -214,10 +257,23 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Failed to check existing window history"})
 		return
 	}
-	if existingWindowHistory > 0 {
+	if existingWindowHistory > 0 && !forceRun {
 		log.Printf("ℹ️  History already exists for window %s (%s). Skipping save.", allocationYear, targetSemesterType)
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "skipped": true, "message": "History already exists for this window"})
 		return
+	}
+
+	if forceRun && fullRerun {
+		if _, delErr := db.DB.Exec(`
+			DELETE FROM teacher_course_history
+			WHERE window_start = ?
+			  AND window_end = ?
+			  AND semester_type = ?
+			  AND academic_year = ?
+			  AND record_type = 'course'
+		`, windowStart, windowEnd, targetSemesterType, allocationYear); delErr != nil {
+			log.Printf("⚠️  Failed to clear old course history for rerun window: %v", delErr)
+		}
 	}
 
 	log.Printf("\n🚀 STARTING AUTO ALLOCATION")
@@ -712,7 +768,7 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	saveSuccess, saveFail := saveAllocationsForWindow(allAllocatedCourses, allocationYear, windowStart, windowEnd, targetSemesterType)
+	saveSuccess, saveFail := saveAllocationsForWindow(allAllocatedCourses, allocationYear, windowStart, windowEnd, targetSemesterType, fullRerun)
 	log.Printf("✓ Saved %d allocations (%d failed)\n", saveSuccess, saveFail)
 	log.Printf("   Departments processed: %d", len(allocationResults))
 
@@ -773,8 +829,9 @@ func RunAutoAllocation(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// saveAllocationsForWindow saves history and then fully refreshes teacher_course_allocation.
-func saveAllocationsForWindow(courses[]CourseAllocationDetail, academicYear string, windowStart time.Time, windowEnd time.Time, semesterType string) (int, int) {
+// saveAllocationsForWindow saves history and updates teacher_course_allocation.
+// If fullRefresh is true, existing allocations are replaced for rerun use-cases.
+func saveAllocationsForWindow(courses[]CourseAllocationDetail, academicYear string, windowStart time.Time, windowEnd time.Time, semesterType string, fullRefresh bool) (int, int) {
 	successCount := 0
 	failCount := 0
 	historyInsertedCount := 0
@@ -831,20 +888,25 @@ func saveAllocationsForWindow(courses[]CourseAllocationDetail, academicYear stri
 	}
 
 	if historyInsertedCount > 0 {
-		_, err = tx.Exec(`DELETE FROM teacher_course_allocation`)
-		if err != nil {
-			log.Printf("   ❌ Failed to clear teacher_course_allocation: %v", err)
-			return 0, len(courses)
+		if fullRefresh {
+			_, err = tx.Exec(`DELETE FROM teacher_course_allocation`)
+			if err != nil {
+				log.Printf("   ❌ Failed to clear teacher_course_allocation: %v", err)
+				return 0, len(courses)
+			}
 		}
 
 		for _, row := range allocationRows {
 			_, err := tx.Exec(`
-				INSERT INTO teacher_course_allocation
-				(course_id, teacher_id, is_active)
-				VALUES (?, ?, 1)
-			`, row.CourseID, row.FacultyID)
+				INSERT INTO teacher_course_allocation (course_id, teacher_id, is_active)
+				SELECT ?, ?, 1
+				WHERE NOT EXISTS (
+					SELECT 1 FROM teacher_course_allocation
+					WHERE course_id = ? AND teacher_id = ?
+				)
+			`, row.CourseID, row.FacultyID, row.CourseID, row.FacultyID)
 			if err != nil {
-				log.Printf("   ❌ Failed to repopulate allocation %d -> %s: %v", row.CourseID, row.FacultyID, err)
+				log.Printf("   ❌ Failed to upsert allocation %d -> %s: %v", row.CourseID, row.FacultyID, err)
 				failCount++
 			}
 		}
@@ -857,4 +919,114 @@ func saveAllocationsForWindow(courses[]CourseAllocationDetail, academicYear stri
 	}
 
 	return successCount, failCount
+}
+
+func shiftAcademicYearForward(year string) string {
+	parts := strings.Split(strings.TrimSpace(year), "-")
+	if len(parts) != 2 {
+		return strings.TrimSpace(year)
+	}
+	startYear, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	endYear, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil {
+		return strings.TrimSpace(year)
+	}
+	return fmt.Sprintf("%d-%d", startYear+1, endYear+1)
+}
+
+func targetSemesterTypeFromCurrent(currentSemesterType string) string {
+	if strings.EqualFold(strings.TrimSpace(currentSemesterType), "even") {
+		return "ODD"
+	}
+	return "EVEN"
+}
+
+func allocationYearForWindow(windowAcademicYear, currentSemesterType string) string {
+	if strings.EqualFold(strings.TrimSpace(currentSemesterType), "even") {
+		return shiftAcademicYearForward(windowAcademicYear)
+	}
+	return strings.TrimSpace(windowAcademicYear)
+}
+
+func prefLookupYearForWindow(windowAcademicYear, currentSemesterType string) string {
+	if strings.EqualFold(strings.TrimSpace(currentSemesterType), "even") {
+		return shiftAcademicYearForward(windowAcademicYear)
+	}
+	return strings.TrimSpace(windowAcademicYear)
+}
+
+// RerunAllocationForWindow reruns allocation for a specific admin-selected window.
+// It restores limits from history and reactivates preferences for a full fresh allocation.
+func RerunAllocationForWindow(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	windowIDText := mux.Vars(r)["id"]
+	windowID, err := strconv.Atoi(windowIDText)
+	if err != nil || windowID <= 0 {
+		http.Error(w, "Invalid window id", http.StatusBadRequest)
+		return
+	}
+
+	var academicYear, currentSemesterType string
+	var windowStart, windowEnd time.Time
+	err = db.DB.QueryRow(`
+		SELECT academic_year, COALESCE(current_semester_type, 'even'), window_start, window_end
+		FROM teacher_course_tracking
+		WHERE id = ?
+		LIMIT 1
+	`, windowID).Scan(&academicYear, &currentSemesterType, &windowStart, &windowEnd)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Window not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to fetch window %d for rerun: %v", windowID, err)
+		http.Error(w, "Failed to fetch window", http.StatusInternalServerError)
+		return
+	}
+
+	prefLookupYear := prefLookupYearForWindow(academicYear, currentSemesterType)
+	if _, err := db.DB.Exec(`
+		UPDATE teacher_course_preferences
+		SET is_active = 1
+		WHERE academic_year = ? AND current_semester_type = ?
+	`, prefLookupYear, strings.ToLower(strings.TrimSpace(currentSemesterType))); err != nil {
+		log.Printf("⚠️ Failed to reactivate preferences for rerun: %v", err)
+	}
+
+	targetSemesterType := targetSemesterTypeFromCurrent(currentSemesterType)
+	allocationYear := allocationYearForWindow(academicYear, currentSemesterType)
+	if _, err := db.DB.Exec(`
+		INSERT INTO teacher_course_limits (teacher_id, course_type_id, max_count, academic_year, updated_at)
+		SELECT teacher_id, course_type_id, max_count, ?, NOW()
+		FROM teacher_course_history
+		WHERE window_start = ?
+		  AND window_end = ?
+		  AND semester_type = ?
+		  AND academic_year = ?
+		  AND record_type = 'limit'
+		ON DUPLICATE KEY UPDATE
+			max_count = VALUES(max_count),
+			academic_year = VALUES(academic_year),
+			updated_at = NOW()
+	`, allocationYear, windowStart, windowEnd, targetSemesterType, allocationYear); err != nil {
+		log.Printf("⚠️ Failed to restore limits for rerun: %v", err)
+	}
+
+	payload := allocationRunRequest{
+		WindowID:  windowID,
+		Force:     true,
+		FullRerun: true,
+	}
+	body, _ := json.Marshal(payload)
+
+	rr := httptest.NewRecorder()
+	childReq := httptest.NewRequest("POST", "/api/allocations/run", bytes.NewBuffer(body))
+	childReq.Header.Set("Content-Type", "application/json")
+	childReq = childReq.WithContext(context.WithValue(childReq.Context(), "user_id", 1))
+
+	RunAutoAllocation(rr, childReq)
+
+	w.WriteHeader(rr.Code)
+	_, _ = w.Write(rr.Body.Bytes())
 }

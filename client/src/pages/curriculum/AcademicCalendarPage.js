@@ -9,6 +9,15 @@ const AcademicCalendarPage = () => {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
+  const [teacherWindows, setTeacherWindows] = useState([]);
+  const [teacherWindowLoading, setTeacherWindowLoading] = useState(false);
+  const [editingTeacherWindowId, setEditingTeacherWindowId] = useState(null);
+  const [teacherWindowForm, setTeacherWindowForm] = useState({
+    academic_year: "",
+    current_semester_type: "even",
+    window_start: "",
+    window_end: "",
+  });
 
   const emptyForm = {
     academic_year: "",
@@ -48,6 +57,10 @@ const AcademicCalendarPage = () => {
     fetchCalendars();
   }, [fetchCalendars]);
 
+  useEffect(() => {
+    fetchTeacherWindows();
+  }, []);
+
   const showMessage = (msg, type = "success") => {
     setSaveMessage({ text: msg, type });
     setTimeout(() => setSaveMessage(null), 4000);
@@ -60,6 +73,117 @@ const AcademicCalendarPage = () => {
       return d.toISOString().split("T")[0];
     } catch {
       return "";
+    }
+  };
+
+  const fetchTeacherWindows = async () => {
+    setTeacherWindowLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/admin/teacher-course-windows`);
+      const data = await res.json();
+      setTeacherWindows(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Error fetching teacher windows:", err);
+      setTeacherWindows([]);
+    } finally {
+      setTeacherWindowLoading(false);
+    }
+  };
+
+  const resetTeacherWindowForm = () => {
+    setEditingTeacherWindowId(null);
+    setTeacherWindowForm({
+      academic_year: "",
+      current_semester_type: "even",
+      window_start: "",
+      window_end: "",
+    });
+  };
+
+  const startTeacherWindowEdit = (windowRow) => {
+    setEditingTeacherWindowId(windowRow.id);
+    setTeacherWindowForm({
+      academic_year: windowRow.academic_year || "",
+      current_semester_type: (windowRow.current_semester_type || "even").toLowerCase(),
+      window_start: windowRow.window_start || "",
+      window_end: windowRow.window_end || "",
+    });
+  };
+
+  const saveTeacherWindow = async (e) => {
+    e.preventDefault();
+    try {
+      const endpoint = editingTeacherWindowId
+        ? `${API_BASE_URL}/admin/teacher-course-windows/${editingTeacherWindowId}`
+        : `${API_BASE_URL}/admin/teacher-course-windows`;
+
+      const method = editingTeacherWindowId ? "PUT" : "POST";
+
+      const res = await fetch(endpoint, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(teacherWindowForm),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to save teacher selection window");
+      }
+
+      showMessage(
+        editingTeacherWindowId
+          ? "Teacher elective selection window updated (reactivated)."
+          : "Teacher elective selection window created."
+      );
+      resetTeacherWindowForm();
+      fetchTeacherWindows();
+    } catch (err) {
+      showMessage(`Error saving teacher selection window: ${err.message}`, "error");
+    }
+  };
+
+  const rerunTeacherAllocation = async (windowRow) => {
+    const confirmText = `Rerun full allocation for ${windowRow.academic_year} (${windowRow.current_semester_type}) window?`;
+    if (!window.confirm(confirmText)) return;
+
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/admin/teacher-course-windows/${windowRow.id}/rerun-allocation`,
+        { method: "POST" }
+      );
+
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || data.message || "Rerun failed");
+      }
+
+      showMessage("Teacher allocation rerun completed for selected window.");
+      fetchTeacherWindows();
+    } catch (err) {
+      showMessage(`Rerun failed: ${err.message}`, "error");
+    }
+  };
+
+  const deleteTeacherWindow = async (windowRow) => {
+    const confirmText = `Delete teacher selection window for ${windowRow.academic_year} (${windowRow.current_semester_type})?`;
+    if (!window.confirm(confirmText)) return;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/admin/teacher-course-windows/${windowRow.id}`, {
+        method: "DELETE",
+      });
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload.success === false) {
+        throw new Error(payload.error || payload.message || "Delete failed");
+      }
+
+      showMessage("Teacher elective selection window deleted.");
+      if (editingTeacherWindowId === windowRow.id) {
+        resetTeacherWindowForm();
+      }
+      fetchTeacherWindows();
+    } catch (err) {
+      showMessage(`Delete failed: ${err.message}`, "error");
     }
   };
 
@@ -203,13 +327,6 @@ const AcademicCalendarPage = () => {
     setFormData(emptyForm);
   };
 
-  // Group calendars by academic year
-  const grouped = calendars.reduce((acc, cal) => {
-    if (!acc[cal.academic_year]) acc[cal.academic_year] = [];
-    acc[cal.academic_year].push(cal);
-    return acc;
-  }, {});
-
   const currentCalendars = calendars.filter((c) => c.is_current);
   const pastCalendars = calendars.filter((c) => !c.is_current);
 
@@ -232,51 +349,177 @@ const AcademicCalendarPage = () => {
           </div>
         )}
 
-        {/* Action Buttons */}
-        <div className="flex gap-3 flex-wrap">
-          <button
-            onClick={() => {
-              setShowCreateForm(true);
-              setEditingId(null);
-              setFormData(emptyForm);
-            }}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium flex items-center gap-2"
-          >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+        {/* Teacher Elective Selection Window */}
+        <div className="bg-white rounded-lg shadow-md p-6 border border-blue-200 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold text-gray-900">Teacher Elective Selection Window</h3>
+            <span className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 font-medium">
+              Auto allocation uses this window
+            </span>
+          </div>
+
+          <form onSubmit={saveTeacherWindow} className="grid grid-cols-1 md:grid-cols-5 gap-3">
+            <input
+              type="text"
+              value={teacherWindowForm.academic_year}
+              onChange={(e) => setTeacherWindowForm({ ...teacherWindowForm, academic_year: e.target.value })}
+              placeholder="Academic Year (e.g., 2026-2027)"
+              className="w-full px-3 py-2 border rounded-lg text-sm"
+              required
+            />
+            <select
+              value={teacherWindowForm.current_semester_type}
+              onChange={(e) => setTeacherWindowForm({ ...teacherWindowForm, current_semester_type: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
-            Add Entry
-          </button>
-          <button
-            onClick={() => setShowAdvanceModal(true)}
-            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-medium flex items-center gap-2"
-          >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M13 7l5 5m0 0l-5 5m5-5H6"
-              />
-            </svg>
-            Advance Academic Year
-          </button>
+              <option value="even">Even</option>
+              <option value="odd">Odd</option>
+            </select>
+            <input
+              type="date"
+              value={teacherWindowForm.window_start}
+              onChange={(e) => setTeacherWindowForm({ ...teacherWindowForm, window_start: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm"
+              required
+            />
+            <input
+              type="date"
+              value={teacherWindowForm.window_end}
+              onChange={(e) => setTeacherWindowForm({ ...teacherWindowForm, window_end: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm"
+              required
+            />
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+              >
+                {editingTeacherWindowId ? "Update Window" : "Create Window"}
+              </button>
+              {editingTeacherWindowId && (
+                <button
+                  type="button"
+                  onClick={resetTeacherWindowForm}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm font-medium"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </form>
+
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs uppercase tracking-wider text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 text-left">Academic Year</th>
+                  <th className="px-3 py-2 text-left">Semester Type</th>
+                  <th className="px-3 py-2 text-left">Window</th>
+                  <th className="px-3 py-2 text-left">is_active</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {teacherWindowLoading ? (
+                  <tr>
+                    <td className="px-3 py-3 text-gray-500" colSpan={5}>Loading teacher windows...</td>
+                  </tr>
+                ) : teacherWindows.length === 0 ? (
+                  <tr>
+                    <td className="px-3 py-3 text-gray-500" colSpan={5}>No teacher selection windows configured.</td>
+                  </tr>
+                ) : (
+                  teacherWindows.map((win) => (
+                    <tr key={win.id}>
+                      <td className="px-3 py-2 font-medium text-gray-900">{win.academic_year}</td>
+                      <td className="px-3 py-2 uppercase">{win.current_semester_type}</td>
+                      <td className="px-3 py-2 text-gray-700">{win.window_start} → {win.window_end}</td>
+                      <td className="px-3 py-2">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${win.is_active === 1 ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-700"}`}>
+                          {win.is_active}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => startTeacherWindowEdit(win)}
+                            className="px-3 py-1 text-xs font-medium text-blue-700 bg-blue-50 rounded hover:bg-blue-100"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => rerunTeacherAllocation(win)}
+                            className="px-3 py-1 text-xs font-medium text-amber-700 bg-amber-50 rounded hover:bg-amber-100"
+                          >
+                            Rerun Allocation
+                          </button>
+                          <button
+                            onClick={() => deleteTeacherWindow(win)}
+                            className="px-3 py-1 text-xs font-medium text-red-700 bg-red-50 rounded hover:bg-red-100"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        <div className="bg-white rounded-lg shadow-md p-6 border border-blue-200 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h3 className="text-lg font-bold text-gray-900">Academic Calendar Entries</h3>
+            <span className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 font-medium">
+              Manage academic year timeline
+            </span>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => {
+                  setShowCreateForm(true);
+                  setEditingId(null);
+                  setFormData(emptyForm);
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium flex items-center gap-2"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 4v16m8-8H4"
+                  />
+                </svg>
+                Add Entry
+              </button>
+              <button
+                onClick={() => setShowAdvanceModal(true)}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-medium flex items-center gap-2"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 7l5 5m0 0l-5 5m5-5H6"
+                  />
+                </svg>
+                Advance Academic Year
+              </button>
+            </div>
+          </div>
 
         {/* Create / Edit Form */}
         {(showCreateForm || editingId !== null) && (
@@ -555,14 +798,12 @@ const AcademicCalendarPage = () => {
 
         {/* Current Calendars Table */}
         {!loading && currentCalendars.length > 0 && (
-          <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="px-6 py-4 border-b bg-green-50">
-              <h3 className="text-base font-bold text-green-800 flex items-center gap-2">
-                <span className="w-2.5 h-2.5 bg-green-500 rounded-full inline-block"></span>
-                Current Academic Year
-              </h3>
-            </div>
-            <div className="overflow-x-auto">
+          <div className="space-y-2">
+            <h3 className="text-base font-bold text-blue-800 flex items-center gap-2">
+              <span className="w-2.5 h-2.5 bg-blue-500 rounded-full inline-block"></span>
+              Current Academic Year
+            </h3>
+            <div className="overflow-x-auto border rounded-lg">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
                   <tr>
@@ -635,13 +876,11 @@ const AcademicCalendarPage = () => {
 
         {/* Past Calendars Table */}
         {!loading && pastCalendars.length > 0 && (
-          <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="px-6 py-4 border-b bg-gray-50">
-              <h3 className="text-base font-bold text-gray-600">
-                Past Academic Years
-              </h3>
-            </div>
-            <div className="overflow-x-auto">
+          <div className="space-y-2">
+            <h3 className="text-base font-bold text-gray-600">
+              Past Academic Years
+            </h3>
+            <div className="overflow-x-auto border rounded-lg">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
                   <tr>
@@ -690,7 +929,7 @@ const AcademicCalendarPage = () => {
 
         {/* Empty State */}
         {!loading && calendars.length === 0 && (
-          <div className="bg-white rounded-lg shadow-md p-12 text-center">
+          <div className="bg-white rounded-lg border p-12 text-center">
             <svg
               className="w-12 h-12 text-gray-300 mx-auto mb-3"
               fill="none"
@@ -708,10 +947,12 @@ const AcademicCalendarPage = () => {
               No academic calendar entries found.
             </p>
             <p className="text-gray-400 text-xs mt-1">
-              Click "Add Entry" to create one.
+              Use "Add Entry" in Academic Calendar Entries to create one.
             </p>
           </div>
         )}
+
+        </div>
       </div>
     </MainLayout>
   );

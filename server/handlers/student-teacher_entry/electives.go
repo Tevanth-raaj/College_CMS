@@ -56,6 +56,30 @@ type ElectiveSelection struct {
 	CardID     int    `json:"card_id"`
 }
 
+type StudentDashboardCourse struct {
+	CourseID   int    `json:"course_id"`
+	CourseCode string `json:"course_code"`
+	CourseName string `json:"course_name"`
+	Credits    int    `json:"credits"`
+	Category   string `json:"category"`
+	SlotType   string `json:"slot_type"` // CORE / PROFESSIONAL / OPEN / HONOR / MINOR / ADDON
+	Source     string `json:"source"`    // curriculum / selection
+}
+
+type StudentSemesterDashboard struct {
+	Semester    int                    `json:"semester"`
+	Courses     []StudentDashboardCourse `json:"courses"`
+	CourseCount int                    `json:"course_count"`
+	TotalCredit int                    `json:"total_credit"`
+}
+
+type StudentCourseDashboardResponse struct {
+	StudentID       int                       `json:"student_id"`
+	CurrentSemester int                       `json:"current_semester"`
+	NextSemester    int                       `json:"next_semester"`
+	Semesters       []StudentSemesterDashboard `json:"semesters"`
+}
+
 func isOpenElectiveCategory(category, slotName string) bool {
 	cat := strings.ToLower(strings.TrimSpace(category))
 	slot := strings.ToLower(strings.TrimSpace(slotName))
@@ -151,6 +175,43 @@ func resolveStudentCurriculumID(studentID, departmentID int) (int, error) {
 	return 0, nil
 }
 
+// resolveStudentIDByEmail finds student_id from login email with fallbacks.
+// Primary: contact_details.student_email
+// Fallback: users.email -> users.id (when users.id matches students.id)
+func resolveStudentIDByEmail(email string) (int, error) {
+	trimmed := strings.TrimSpace(email)
+	if trimmed == "" {
+		return 0, sql.ErrNoRows
+	}
+
+	var studentID int
+	err := db.DB.QueryRow(`
+		SELECT student_id
+		FROM contact_details
+		WHERE LOWER(TRIM(student_email)) = LOWER(TRIM(?))
+		LIMIT 1
+	`, trimmed).Scan(&studentID)
+	if err == nil {
+		return studentID, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	err = db.DB.QueryRow(`
+		SELECT s.id
+		FROM users u
+		INNER JOIN students s ON s.id = u.id
+		WHERE LOWER(TRIM(u.email)) = LOWER(TRIM(?))
+		LIMIT 1
+	`, trimmed).Scan(&studentID)
+	if err == nil {
+		return studentID, nil
+	}
+
+	return 0, err
+}
+
 // GetAvailableElectives returns electives available for a student based on HOD selections
 func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 	// Get email from query parameter (from logged in user)
@@ -162,19 +223,13 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Fetching electives for email: %s", email)
 
-	// Step 1: Get student_id from contact_details using student_email (email from users table)
-	var studentID int
-	err := db.DB.QueryRow(`
-		SELECT student_id 
-		FROM contact_details 
-		WHERE student_email = ?
-	`, email).Scan(&studentID)
-	
+	// Step 1: Resolve student_id from login email
+	studentID, err := resolveStudentIDByEmail(email)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "Student not found with this email", http.StatusNotFound)
 		} else {
-			log.Printf("Error fetching student from contact_details: %v", err)
+			log.Printf("Error resolving student from email: %v", err)
 			http.Error(w, "Database error", http.StatusInternalServerError)
 		}
 		return
@@ -517,8 +572,7 @@ func SaveElectiveSelections(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Saving elective selections for email: %s", email)
 
 	// Get student_id
-	var studentID int
-	err := db.DB.QueryRow(`SELECT student_id FROM contact_details WHERE student_email = ?`, email).Scan(&studentID)
+	studentID, err := resolveStudentIDByEmail(email)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "Student not found with this email", http.StatusNotFound)
@@ -756,14 +810,8 @@ func GetStudentElectiveSelections(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Fetching saved selections for email: %s", email)
 
-	// Get student_id from contact_details using student_email
-	var studentID int
-	err := db.DB.QueryRow(`
-		SELECT student_id 
-		FROM contact_details 
-		WHERE student_email = ?
-	`, email).Scan(&studentID)
-	
+	// Resolve student_id from login email
+	studentID, err := resolveStudentIDByEmail(email)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "Student not found with this email", http.StatusNotFound)
@@ -834,6 +882,226 @@ func GetStudentElectiveSelections(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(selections)
+}
+
+// GetStudentCourseDashboard returns semester-wise dashboard data from semester 1
+// up to current semester + 1, including core curriculum courses and student
+// selected electives/honour/minor/addon courses.
+func GetStudentCourseDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	email := strings.TrimSpace(r.URL.Query().Get("email"))
+	if email == "" {
+		http.Error(w, "email parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	studentID, err := resolveStudentIDByEmail(email)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Student not found with this email", http.StatusNotFound)
+			return
+		}
+		log.Printf("GetStudentCourseDashboard: student lookup error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	var currentSemester, departmentID int
+	if err := db.DB.QueryRow(`
+		SELECT ad.semester, s.department_id
+		FROM students s
+		INNER JOIN academic_details ad ON s.id = ad.student_id
+		WHERE s.id = ?
+	`, studentID).Scan(&currentSemester, &departmentID); err != nil {
+		log.Printf("GetStudentCourseDashboard: student details error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	nextSemester := currentSemester + 1
+	if nextSemester > 8 {
+		nextSemester = 8
+	}
+	if nextSemester < 1 {
+		nextSemester = 1
+	}
+
+	curriculumID, err := resolveStudentCurriculumID(studentID, departmentID)
+	if err != nil {
+		log.Printf("GetStudentCourseDashboard: resolve curriculum error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	eligibleOpenElectiveCourseIDs, err := getEligibleOpenElectiveCourseSet(curriculumID)
+	if err != nil {
+		log.Printf("GetStudentCourseDashboard: eligible OE fetch error for curriculum %d: %v", curriculumID, err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	buckets := make(map[int][]StudentDashboardCourse)
+	for sem := 1; sem <= nextSemester; sem++ {
+		buckets[sem] = []StudentDashboardCourse{}
+	}
+	seen := map[string]bool{}
+
+	// 1) Core courses from curriculum (exclude elective card types)
+	if curriculumID > 0 {
+		coreRows, err := db.DB.Query(`
+			SELECT
+				nc.semester_number,
+				c.id,
+				COALESCE(c.course_code, ''),
+				COALESCE(c.course_name, ''),
+				COALESCE(c.credit, 0),
+				COALESCE(c.category, ''),
+				LOWER(COALESCE(nc.card_type, ''))
+			FROM curriculum_courses cc
+			INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+			INNER JOIN courses c ON cc.course_id = c.id
+			INNER JOIN departments d ON d.current_curriculum_id = cc.curriculum_id
+			WHERE cc.curriculum_id = ?
+			  AND d.id = ?
+			  AND nc.semester_number BETWEEN 1 AND ?
+			  AND c.status = 1
+			  AND nc.status = 1
+			ORDER BY nc.semester_number, c.course_code
+		`, curriculumID, departmentID, nextSemester)
+		if err != nil {
+			log.Printf("GetStudentCourseDashboard: core query error: %v", err)
+		} else {
+			defer coreRows.Close()
+			for coreRows.Next() {
+				var sem, courseID, credit int
+				var code, name, category, cardType string
+				if err := coreRows.Scan(&sem, &courseID, &code, &name, &credit, &category, &cardType); err != nil {
+					continue
+				}
+				if sem < 1 || sem > nextSemester {
+					continue
+				}
+
+				// Skip elective-like card buckets from curriculum; those are tracked via selections.
+				if cardType == "open_elective" || cardType == "professional_elective" || cardType == "elective" ||
+					cardType == "honour" || cardType == "honor" || cardType == "minor" ||
+					cardType == "addon" || cardType == "add-on" || cardType == "add on" {
+					continue
+				}
+
+				key := fmt.Sprintf("core|%d|%d", sem, courseID)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				buckets[sem] = append(buckets[sem], StudentDashboardCourse{
+					CourseID:   courseID,
+					CourseCode: code,
+					CourseName: name,
+					Credits:    credit,
+					Category:   category,
+					SlotType:   "CORE",
+					Source:     "curriculum",
+				})
+			}
+		}
+	}
+
+	// 2) Selected elective/honour/minor/addon courses from student choices
+	choiceRows, err := db.DB.Query(`
+		SELECT
+			hes.semester,
+			c.id,
+			COALESCE(c.course_code, ''),
+			COALESCE(c.course_name, ''),
+			COALESCE(c.credit, 0),
+			COALESCE(c.category, ''),
+			COALESCE(ess.slot_name, ''),
+			COALESCE(hes.department_id, 0)
+		FROM student_elective_choices sec
+		INNER JOIN hod_elective_selections hes ON hes.id = sec.hod_selection_id
+		INNER JOIN courses c ON c.id = hes.course_id
+		LEFT JOIN elective_semester_slots ess ON ess.id = hes.slot_id
+		WHERE sec.student_id = ?
+		  AND hes.semester BETWEEN 1 AND ?
+		  AND sec.semester = hes.semester
+		ORDER BY hes.semester, c.course_code
+	`, studentID, nextSemester)
+	if err != nil {
+		log.Printf("GetStudentCourseDashboard: selection query error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer choiceRows.Close()
+
+	for choiceRows.Next() {
+		var sem, courseID, credit int
+		var code, name, category, slotName string
+		var hodDepartmentID int
+		if err := choiceRows.Scan(&sem, &courseID, &code, &name, &credit, &category, &slotName, &hodDepartmentID); err != nil {
+			continue
+		}
+		if sem < 1 || sem > nextSemester {
+			continue
+		}
+
+		if isOpenElectiveCategory(category, slotName) {
+			if _, ok := eligibleOpenElectiveCourseIDs[courseID]; !ok {
+				continue
+			}
+		} else {
+			if hodDepartmentID != departmentID {
+				continue
+			}
+		}
+
+		slotType := determineSlotType(slotName, category)
+		key := fmt.Sprintf("selection|%d|%d", sem, courseID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		buckets[sem] = append(buckets[sem], StudentDashboardCourse{
+			CourseID:   courseID,
+			CourseCode: code,
+			CourseName: name,
+			Credits:    credit,
+			Category:   category,
+			SlotType:   slotType,
+			Source:     "selection",
+		})
+	}
+
+	resp := StudentCourseDashboardResponse{
+		StudentID:       studentID,
+		CurrentSemester: currentSemester,
+		NextSemester:    nextSemester,
+		Semesters:       make([]StudentSemesterDashboard, 0, nextSemester),
+	}
+
+	for sem := 1; sem <= nextSemester; sem++ {
+		courses := buckets[sem]
+		totalCredit := 0
+		for _, c := range courses {
+			totalCredit += c.Credits
+		}
+		resp.Semesters = append(resp.Semesters, StudentSemesterDashboard{
+			Semester:    sem,
+			Courses:     courses,
+			CourseCount: len(courses),
+			TotalCredit: totalCredit,
+		})
+	}
+
+	json.NewEncoder(w).Encode(resp)
 }
 
 // Helper function to determine slot type based on slot name and category
