@@ -505,30 +505,6 @@ func saveElectiveExemptionCertificate(r *http.Request) (*string, error) {
 	return &relativePath, nil
 }
 
-<<<<<<< HEAD
-func resolveStudentIDByEmail(email string) (int, error) {
-	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
-	if normalizedEmail == "" {
-		return 0, sql.ErrNoRows
-	}
-
-	var studentID int
-	err := db.DB.QueryRow(`
-		SELECT student_id
-		FROM contact_details
-		WHERE LOWER(TRIM(student_email)) = ?
-		   OR LOWER(TRIM(official_email)) = ?
-		LIMIT 1
-	`, normalizedEmail, normalizedEmail).Scan(&studentID)
-	if err != nil {
-		return 0, err
-	}
-
-	return studentID, nil
-}
-
-=======
->>>>>>> 30f43088941d7e5d6f462a7b0f960f278a66a9d8
 func nullableString(value string) interface{} {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
