@@ -505,6 +505,7 @@ func saveElectiveExemptionCertificate(r *http.Request) (*string, error) {
 	return &relativePath, nil
 }
 
+<<<<<<< HEAD
 func resolveStudentIDByEmail(email string) (int, error) {
 	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
 	if normalizedEmail == "" {
@@ -526,6 +527,8 @@ func resolveStudentIDByEmail(email string) (int, error) {
 	return studentID, nil
 }
 
+=======
+>>>>>>> 30f43088941d7e5d6f462a7b0f960f278a66a9d8
 func nullableString(value string) interface{} {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {

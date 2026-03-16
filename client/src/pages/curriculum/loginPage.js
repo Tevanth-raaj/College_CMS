@@ -16,6 +16,16 @@ function LoginPage() {
   }, [])
 
   const persistLoginAndNavigate = useCallback((data) => {
+    // Clear all previous auth data first to avoid stale data
+    localStorage.removeItem('teacherId')
+    localStorage.removeItem('teacher_id')
+    localStorage.removeItem('teacher_name')
+    localStorage.removeItem('teacher_email')
+    localStorage.removeItem('teacher_dept')
+    localStorage.removeItem('teacher_designation')
+    localStorage.removeItem('faculty_id')
+
+    // Set new user data
     localStorage.setItem('userRole', data.user.role)
     localStorage.setItem('userEmail', data.user.email)
     localStorage.setItem('userId', data.user.id)
@@ -42,7 +52,7 @@ function LoginPage() {
       hod: '/curriculum',
       hr: '/hr/faculty',
       teacher: '/teacher-dashboard',
-      student: '/student/elective-selection',
+      student: '/student/course-dashboard',
     }
 
     navigate(roleRoutes[role] || '/dashboard')

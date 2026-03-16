@@ -284,6 +284,9 @@ function TeacherDashboardPage() {
                           <th className="w-[15%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Windows
                           </th>
+                          <th className="w-[14%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Academic / Sem
+                          </th>
                           <th className="w-[10%] px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Action
                           </th>
@@ -345,6 +348,18 @@ function TeacherDashboardPage() {
                               ) : (
                                 <span className="text-xs text-gray-400">No Window</span>
                               )}
+                            </td>
+                            <td className="px-4 py-4 text-center">
+                              <div className="text-xs text-gray-700 font-medium">
+                                {course.academic_year || '—'}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                {Array.isArray(course.mapped_semesters) && course.mapped_semesters.length > 0
+                                  ? `Sem ${course.mapped_semesters.join(', ')}`
+                                  : 'Sem —'}
+                                {' · '}
+                                {course.semester_type ? String(course.semester_type).toUpperCase() : '—'}
+                              </div>
                             </td>
                             <td className="px-4 py-4 text-center">
                               <svg className="w-5 h-5 text-blue-500 hover:text-blue-700 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">

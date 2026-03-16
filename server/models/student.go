@@ -28,6 +28,8 @@ type Student struct {
 	PlaceOfWork      string    `json:"place_of_work"`
 	ParentIncome     float64   `json:"parent_income"`
 	Status           int       `json:"status"`
+	LearningModeID   *int      `json:"learning_mode_id"`
+	DepartmentID     *int      `json:"department_id"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }

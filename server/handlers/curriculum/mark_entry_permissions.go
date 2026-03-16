@@ -743,7 +743,9 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 			mew.start_at,
 			mew.end_at,
 			mew.course_id,
-			COALESCE(c.course_name, '') as course_name
+			COALESCE(c.course_name, '') as course_name,
+			s.learning_mode_id,
+			COALESCE(s.register_no, '') as register_no
 		FROM mark_entry_student_permissions mesp
 		INNER JOIN mark_entry_windows mew ON mesp.window_id = mew.id
 		INNER JOIN students s ON mesp.student_id = s.id
@@ -811,6 +813,7 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		var courseIDNull sql.NullInt64
 		var courseName sql.NullString
 		var enrollmentNo sql.NullString
+		var registerNo sql.NullString
 
 		err := rows.Scan(
 			&student.StudentID,
@@ -823,6 +826,8 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 			&endAt,
 			&courseIDNull,
 			&courseName,
+			&student.LearningModeID,
+			&registerNo,
 		)
 		if err != nil {
 			log.Printf("[ERROR] GetUserAssignedStudents: Error scanning assigned student: %v", err)
@@ -841,6 +846,9 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		}
 		if enrollmentNo.Valid {
 			student.EnrollmentNo = enrollmentNo.String
+		}
+		if registerNo.Valid {
+			student.RegisterNo = registerNo.String
 		}
 
 		log.Printf("[DEBUG] GetUserAssignedStudents: Row %d - student_id=%d, name=%s, window_id=%d, window: %s to %s",

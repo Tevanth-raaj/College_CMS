@@ -2,8 +2,20 @@ import React, { useMemo, useState } from "react";
 import MainLayout from "../../components/MainLayout";
 import { API_BASE_URL } from "../../config";
 
-const inputClassName =
-  "input-custom text-sm text-gray-900 placeholder:text-gray-400 border border-primary-100 focus:border-primary focus:ring-2 focus:ring-primary/20";
+const adminInputClassName =
+  "w-full rounded-lg border border-primary-100 bg-white px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm transition focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/10";
+
+const adminPrimaryBtnClass =
+  "inline-flex items-center justify-center rounded-lg bg-primary px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60";
+
+const adminSecondaryBtnClass =
+  "inline-flex items-center justify-center rounded-lg border border-primary-100 bg-white px-5 py-3 text-sm font-semibold text-primary shadow-sm transition hover:border-primary hover:bg-primary-50";
+
+const adminSectionCardClass =
+  "card-custom rounded-lg border border-primary-100 bg-white p-6 shadow-sm";
+
+const labelClassName =
+  "mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500";
 
 const requestTypeOptions = [
   {
@@ -277,272 +289,289 @@ function ElectiveExemptionPage() {
   };
 
   const renderCommonFields = () => (
-    <>
-      <div className="grid gap-4 md:grid-cols-2">
-        <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-          Certificate URL
-          <input
-            type="url"
-            name="certificate_url"
-            value={formData.certificate_url}
-            onChange={handleChange}
-            placeholder="https://..."
-            className={inputClassName}
-          />
-        </label>
+    <div className="grid gap-5 lg:grid-cols-2">
+      <div>
+        <label className={labelClassName}>Professional elective number</label>
+        <select
+          name="professional_elective_no"
+          value={formData.professional_elective_no}
+          onChange={handleChange}
+          className={adminInputClassName}
+        >
+          {professionalElectiveOptions.map((electiveNo) => (
+            <option key={electiveNo} value={electiveNo}>
+              Professional Elective {electiveNo}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Certificate proof upload
+      <div>
+        <label className={labelClassName}>Certificate URL</label>
+        <input
+          type="url"
+          name="certificate_url"
+          value={formData.certificate_url}
+          onChange={handleChange}
+          placeholder="https://..."
+          className={adminInputClassName}
+        />
+      </div>
+
+      <div className="lg:col-span-2">
+        <label className={labelClassName}>Certificate proof upload</label>
         <input
           key={fileInputKey}
+          id="elective-exemption-certificate"
           type="file"
           accept=".pdf,.png,.jpg,.jpeg"
           onChange={handleFileChange}
-          className="w-full rounded-xl border border-dashed border-primary-200 bg-background px-3 py-3 text-sm text-gray-700 file:mr-4 file:rounded-lg file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-primary-600"
+          className="hidden"
         />
-      </label>
-    </>
+        <div className="flex min-w-0 items-center gap-4 rounded-lg border border-dashed border-primary-200 bg-gradient-to-r from-primary-50 to-white px-4 py-4">
+          <label
+            htmlFor="elective-exemption-certificate"
+            className={`${adminPrimaryBtnClass} cursor-pointer whitespace-nowrap`}
+          >
+            Choose File
+          </label>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-gray-700">
+              {certificateFile ? certificateFile.name : "No file chosen"}
+            </p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              PDF, PNG, JPG, or JPEG up to 10 MB.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 
   const renderNptelFields = () => (
-    <div className="grid gap-4 md:grid-cols-2">
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700 md:col-span-2">
-        Online course name
+    <div className={`${adminSectionCardClass} grid gap-5 md:grid-cols-2`}>
+      <div className="md:col-span-2">
+        <h4 className="text-base font-semibold text-gray-900">
+          Online course details
+        </h4>
+        <p className="mt-1 text-sm text-gray-500">
+          Enter the certified course information exactly as it appears on the
+          completion proof.
+        </p>
+      </div>
+      <div className="md:col-span-2">
+        <label className={labelClassName}>Online course name</label>
         <input
           type="text"
           name="online_course_name"
           value={formData.online_course_name}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Course type
+      <div>
+        <label className={labelClassName}>Course type</label>
         <input
           type="text"
           name="course_type"
           value={formData.course_type}
           onChange={handleChange}
-          placeholder="Swayam-NPTEL"
-          className={inputClassName}
+          placeholder="Elite / Domain / Certification"
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Professional elective number
-        <select
-          name="professional_elective_no"
-          value={formData.professional_elective_no}
-          onChange={handleChange}
-          className={inputClassName}
-        >
-          {professionalElectiveOptions.map((option) => (
-            <option key={option} value={option}>
-              Professional Elective {option}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Course duration in weeks
+      <div>
+        <label className={labelClassName}>Course duration in weeks</label>
         <input
           type="number"
           min="1"
           name="course_duration_weeks"
           value={formData.course_duration_weeks}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Start date
+      <div>
+        <label className={labelClassName}>Start date</label>
         <input
           type="date"
           name="start_date"
           value={formData.start_date}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        End date
+      <div>
+        <label className={labelClassName}>End date</label>
         <input
           type="date"
           name="end_date"
           value={formData.end_date}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
     </div>
   );
 
   const renderInternshipFields = () => (
-    <div className="grid gap-4 md:grid-cols-2">
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Industry name
+    <div className={`${adminSectionCardClass} grid gap-5 md:grid-cols-2`}>
+      <div className="md:col-span-2">
+        <h4 className="text-base font-semibold text-gray-900">
+          Internship details
+        </h4>
+        <p className="mt-1 text-sm text-gray-500">
+          Provide the organization, duration, and attendance details for the
+          internship or industrial training.
+        </p>
+      </div>
+      <div>
+        <label className={labelClassName}>Industry name</label>
         <input
           type="text"
           name="industry_name"
           value={formData.industry_name}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Professional elective number
-        <select
-          name="professional_elective_no"
-          value={formData.professional_elective_no}
-          onChange={handleChange}
-          className={inputClassName}
-        >
-          {professionalElectiveOptions.map((option) => (
-            <option key={option} value={option}>
-              Professional Elective {option}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Industry contact
+      <div>
+        <label className={labelClassName}>Industry contact</label>
         <input
           type="text"
           name="industry_contact"
           value={formData.industry_contact}
           onChange={handleChange}
           placeholder="Contact person / number"
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Sector
+      <div>
+        <label className={labelClassName}>Sector</label>
         <select
           name="sector"
           value={formData.sector}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         >
           <option value="">Select sector</option>
-          {internshipSectorOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}
+          {internshipSectorOptions.map((sectorOption) => (
+            <option key={sectorOption} value={sectorOption}>
+              {sectorOption}
             </option>
           ))}
         </select>
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700 md:col-span-2">
-        Industry address
+      <div className="md:col-span-2">
+        <label className={labelClassName}>Industry address</label>
         <textarea
           name="industry_address"
           value={formData.industry_address}
           onChange={handleChange}
           rows="3"
-          className={`${inputClassName} resize-y min-h-[96px]`}
+          className={`${adminInputClassName} min-h-[96px] resize-y`}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        City
+      <div>
+        <label className={labelClassName}>City</label>
         <input
           type="text"
           name="city"
           value={formData.city}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        State
+      <div>
+        <label className={labelClassName}>State</label>
         <input
           type="text"
           name="state"
           value={formData.state}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Postal code
+      <div>
+        <label className={labelClassName}>Postal code</label>
         <input
           type="text"
           name="postal_code"
           value={formData.postal_code}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Country
+      <div>
+        <label className={labelClassName}>Country</label>
         <input
           type="text"
           name="country"
           value={formData.country}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700 md:col-span-2">
-        Industry website link
+      <div className="md:col-span-2">
+        <label className={labelClassName}>Industry website link</label>
         <input
           type="url"
           name="industry_website_url"
           value={formData.industry_website_url}
           onChange={handleChange}
           placeholder="https://company.example"
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Start date
+      <div>
+        <label className={labelClassName}>Start date</label>
         <input
           type="date"
           name="start_date"
           value={formData.start_date}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        End date
+      <div>
+        <label className={labelClassName}>End date</label>
         <input
           type="date"
           name="end_date"
           value={formData.end_date}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Number of days attended
+      <div>
+        <label className={labelClassName}>Number of days attended</label>
         <input
           type="number"
           min="1"
           name="number_of_days_attended"
           value={formData.number_of_days_attended}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
 
-      <label className="flex flex-col gap-2 text-sm font-medium text-gray-700">
-        Stipend amount
+      <div>
+        <label className={labelClassName}>Stipend amount</label>
         <input
           type="number"
           min="0"
@@ -550,75 +579,85 @@ function ElectiveExemptionPage() {
           name="stipend_amount"
           value={formData.stipend_amount}
           onChange={handleChange}
-          className={inputClassName}
+          className={adminInputClassName}
         />
-      </label>
+      </div>
     </div>
   );
 
   return (
     <MainLayout
-      title="Elective Excemption"
+      title="Elective Exemption"
       subtitle="Submit exemption requests for elective slots in semesters 4 to 8."
     >
-      <div className="flex w-full flex-col gap-6 py-8 px-6">
-        <section className="card-custom rounded-3xl border border-primary-100 bg-gradient-to-r from-background via-white to-background p-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <div className="flex w-full flex-col gap-6 px-6 py-8">
+        <div className={adminSectionCardClass}>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-primary/70">
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-primary/70">
                 Student request desk
               </p>
               <h2 className="mt-2 text-2xl font-semibold text-gray-900">
-                {userName}, choose the exemption request you want to submit.
+                {userName}, submit your elective exemption request.
               </h2>
             </div>
-            <div className="rounded-2xl border border-primary-100 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm">
+            <div className="rounded-lg border border-primary-100 bg-primary-50 px-4 py-3 text-sm text-gray-600">
               Student email:{" "}
               <span className="font-medium text-primary">
                 {userEmail || "Not available"}
               </span>
             </div>
           </div>
-        </section>
+        </div>
 
-        <section className="grid gap-4 md:grid-cols-3">
-          {requestTypeOptions.map((option) => {
-            const isSelected = option.key === selectedType;
-            return (
-              <button
-                key={option.key}
-                type="button"
-                disabled={!option.enabled}
-                onClick={() => option.enabled && setSelectedType(option.key)}
-                className={`card-custom rounded-3xl border p-5 text-left transition-all duration-200 ${
-                  isSelected
-                    ? "border-primary bg-primary text-white shadow-lg"
-                    : "border-primary-100 bg-white text-gray-900 hover:border-primary"
-                } ${option.enabled ? "hover:-translate-y-0.5" : "cursor-not-allowed opacity-60"}`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-lg font-semibold">{option.label}</h3>
-                  {!option.enabled && (
-                    <span className="rounded-full bg-background px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-primary/70">
-                      Soon
-                    </span>
-                  )}
-                </div>
-                <p
-                  className={`mt-3 text-sm ${isSelected ? "text-primary-100" : "text-gray-600"}`}
+        <div className={adminSectionCardClass}>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">
+                Request type
+              </h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Choose the exemption category you want to apply for.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            {requestTypeOptions.map((option) => {
+              const isSelected = option.key === selectedType;
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  disabled={!option.enabled}
+                  onClick={() => option.enabled && setSelectedType(option.key)}
+                  className={`rounded-lg border p-5 text-left transition-all ${
+                    isSelected
+                      ? "border-primary bg-primary-50 text-primary shadow-sm"
+                      : "border-primary-100 bg-white text-gray-900 hover:border-primary hover:bg-primary-50/40"
+                  } ${option.enabled ? "" : "cursor-not-allowed opacity-60"}`}
                 >
-                  {option.description}
-                </p>
-              </button>
-            );
-          })}
-        </section>
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-base font-semibold">{option.label}</h4>
+                    {!option.enabled && (
+                      <span className="rounded-md bg-gray-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                        Soon
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-3 text-sm text-gray-600">
+                    {option.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {message.text && (
           <div
-            className={`rounded-2xl border px-4 py-3 text-sm ${
+            className={`rounded-lg border px-4 py-3 text-sm ${
               message.type === "success"
-                ? "border-primary-200 bg-background text-primary"
+                ? "border-primary-200 bg-primary-50 text-primary"
                 : "border-red-200 bg-red-50 text-red-700"
             }`}
           >
@@ -628,45 +667,49 @@ function ElectiveExemptionPage() {
 
         <form
           onSubmit={handleSubmit}
-          className="card-custom rounded-3xl border border-primary-100 bg-white p-6"
+          className={`${adminSectionCardClass} space-y-6`}
         >
-          <div className="mb-6 flex items-center justify-between gap-3">
-            <div>
-              <h3 className="text-xl font-semibold text-gray-900">
-                {activeOption?.label}
-              </h3>
-              <p className="mt-1 text-sm text-gray-500">
-                Fill the fields carefully. Attach the certificate file,
-                certificate URL, or both.
-              </p>
-            </div>
-            <span className="rounded-full bg-background px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-primary border border-primary-100">
-              Semesters 4-8
-            </span>
+          <div className="border-b border-primary-100 pb-5">
+            <h3 className="text-xl font-semibold text-gray-900">
+              {activeOption?.label}
+            </h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Fill the required details and attach the supporting proof.
+            </p>
           </div>
 
-          <div className="space-y-6">
-            {selectedType === "NPTEL" && renderNptelFields()}
-            {selectedType === "INTERNSHIP" && renderInternshipFields()}
+          {selectedType === "NPTEL" && renderNptelFields()}
+          {selectedType === "INTERNSHIP" && renderInternshipFields()}
+
+          <div className={adminSectionCardClass}>
+            <div className="mb-5">
+              <h4 className="text-base font-semibold text-gray-900">
+                Proof and elective mapping
+              </h4>
+              <p className="mt-1 text-sm text-gray-500">
+                Select the semester slot and provide the certificate proof for
+                review.
+              </p>
+            </div>
             {renderCommonFields()}
           </div>
 
-          <div className="mt-8 flex flex-col gap-3 border-t border-primary-100 pt-6 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-3 border-t border-primary-100 pt-6 md:flex-row md:items-center md:justify-between">
             <p className="text-sm text-gray-500">
-              Both forms use professional elective number 1 to 9.
+              Applicable only for elective slots in semesters 4 to 8.
             </p>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               <button
                 type="button"
                 onClick={resetForm}
-                className="btn-secondary-custom"
+                className={adminSecondaryBtnClass}
               >
                 Reset
               </button>
               <button
                 type="submit"
                 disabled={submitting || !activeOption?.enabled}
-                className="btn-primary-custom disabled:cursor-not-allowed disabled:opacity-60"
+                className={adminPrimaryBtnClass}
               >
                 {submitting ? "Submitting..." : "Submit Request"}
               </button>

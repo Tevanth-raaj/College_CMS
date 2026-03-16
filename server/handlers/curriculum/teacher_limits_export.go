@@ -22,6 +22,76 @@ type courseEntry struct {
 	CourseNature string // Theory / Lab / Theory with Lab
 }
 
+// courseDetails holds rich metadata from the courses table for expanded exports.
+type courseDetails struct {
+	Credit            int
+	LectureHrs        int
+	TutorialHrs       int
+	PracticalHrs      int
+	ActivityHrs       int
+	TwSlHrs           int
+	TheoryTotalHrs    int
+	TutorialTotalHrs  int
+	PracticalTotalHrs int
+	ActivityTotalHrs  int
+	TotalHrs          int
+	CIAMarks          int
+	SEEMarks          int
+	TotalMarks        int
+}
+
+// fetchCourseDetailsBatch returns a map[courseCode]courseDetails for the given codes.
+func fetchCourseDetailsBatch(codes []string) map[string]courseDetails {
+	result := map[string]courseDetails{}
+	if len(codes) == 0 {
+		return result
+	}
+	placeholders := strings.Repeat("?,", len(codes))
+	placeholders = placeholders[:len(placeholders)-1]
+	query := `
+		SELECT
+			course_code,
+			COALESCE(credit, 0),
+			COALESCE(lecture_hrs, 0),
+			COALESCE(tutorial_hrs, 0),
+			COALESCE(practical_hrs, 0),
+			COALESCE(activity_hrs, 0),
+			COALESCE(` + "`tw/sl`" + `, 0),
+			COALESCE(theory_total_hrs, 0),
+			COALESCE(tutorial_total_hrs, 0),
+			COALESCE(practical_total_hrs, 0),
+			COALESCE(activity_total_hrs, 0),
+			COALESCE(total_hrs, 0),
+			COALESCE(cia_marks, 0),
+			COALESCE(see_marks, 0),
+			COALESCE(total_marks, 0)
+		FROM courses
+		WHERE course_code IN (` + placeholders + `)
+	`
+	args := make([]interface{}, len(codes))
+	for i, c := range codes {
+		args[i] = c
+	}
+	rows, err := db.DB.Query(query, args...)
+	if err != nil {
+		log.Printf("⚠️  fetchCourseDetailsBatch error: %v", err)
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var code string
+		var d courseDetails
+		if err := rows.Scan(&code,
+			&d.Credit, &d.LectureHrs, &d.TutorialHrs, &d.PracticalHrs, &d.ActivityHrs, &d.TwSlHrs,
+			&d.TheoryTotalHrs, &d.TutorialTotalHrs, &d.PracticalTotalHrs, &d.ActivityTotalHrs, &d.TotalHrs,
+			&d.CIAMarks, &d.SEEMarks, &d.TotalMarks,
+		); err == nil {
+			result[code] = d
+		}
+	}
+	return result
+}
+
 // TeacherLimitExportRow represents a row in the export
 type TeacherLimitExportRow struct {
 	ID                     string
@@ -32,36 +102,7 @@ type TeacherLimitExportRow struct {
 	WorkloadLimitTheoryLab string
 	SubjectsAlloted        string
 	LabsAlloted            string
-	Subject1Semester       string
-	Subject1Department     string
-	Subject1CourseCode     string
-	Subject1Title          string
-	Subject1CourseType     string
-	Subject1CourseNature   string
-	Subject2Semester       string
-	Subject2Department     string
-	Subject2CourseCode     string
-	Subject2Title          string
-	Subject2CourseType     string
-	Subject2CourseNature   string
-	Subject3Semester       string
-	Subject3Department     string
-	Subject3CourseCode     string
-	Subject3Title          string
-	Subject3CourseType     string
-	Subject3CourseNature   string
-	Subject4Semester       string
-	Subject4Department     string
-	Subject4CourseCode     string
-	Subject4Title          string
-	Subject4CourseType     string
-	Subject4CourseNature   string
-	Subject5Semester       string
-	Subject5Department     string
-	Subject5CourseCode     string
-	Subject5Title          string
-	Subject5CourseType     string
-	Subject5CourseNature   string
+	Courses                []courseEntry
 }
 
 // AllocationWindow represents a distinct allocation window from teacher_course_history.
@@ -83,18 +124,38 @@ func GetTeacherLimitWindows(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	departmentID := strings.TrimSpace(r.URL.Query().Get("department_id"))
+
 	query := `
 		SELECT DISTINCT
-			DATE_FORMAT(window_start, '%Y-%m-%d') as window_start,
-			DATE_FORMAT(window_end,   '%Y-%m-%d') as window_end,
-			COALESCE(semester_type, '') as semester_type,
-			COALESCE(academic_year, '') as academic_year
-		FROM teacher_course_history
-		WHERE record_type = 'course'
+			DATE_FORMAT(tch.window_start, '%Y-%m-%d') as window_start,
+			DATE_FORMAT(tch.window_end,   '%Y-%m-%d') as window_end,
+			COALESCE(tch.semester_type, '') as semester_type,
+			COALESCE(tch.academic_year, '') as academic_year
+		FROM teacher_course_history tch
+	`
+	args := []interface{}{}
+	if departmentID != "" {
+		query += `
+			JOIN teachers t ON t.faculty_id = tch.teacher_id
+			LEFT JOIN departments d ON d.id = CAST(t.dept AS UNSIGNED)
+			WHERE tch.record_type = 'course' AND (
+				t.dept = ?
+				OR CAST(d.id AS CHAR) = ?
+				OR LOWER(TRIM(d.department_name)) = LOWER(TRIM(?))
+			)
+		`
+		args = append(args, departmentID, departmentID, departmentID)
+	} else {
+		query += `
+			WHERE tch.record_type = 'course'
+		`
+	}
+	query += `
 		ORDER BY window_start DESC
 	`
 
-	rows, err := db.DB.Query(query)
+	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		log.Printf("❌ Error fetching allocation windows: %v\n", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -125,6 +186,122 @@ func GetTeacherLimitWindows(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(windows)
 }
 
+// CourseOption is a lightweight course item for the filter dropdown.
+type CourseOption struct {
+	CourseCode string `json:"course_code"`
+	CourseName string `json:"course_name"`
+	Label      string `json:"label"`
+}
+
+// GetTeacherLimitCourses returns distinct courses for the filter dropdown.
+// It unions three sources:
+//  1. Core courses from teacher_course_history (teacher dept filter)
+//  2. Elective courses from student_elective_choices (PE/OE) via hod_elective_selections
+//  3. Honour/Minor courses from student_elective_choices via hod_elective_selections
+//
+// All three are optionally scoped to a department_id.
+func GetTeacherLimitCourses(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	departmentID := strings.TrimSpace(r.URL.Query().Get("department_id"))
+
+	// ── Part 1: core courses taught by teachers (teacher_course_history) ──────
+	coreQuery := `
+		SELECT
+			tch.course_code,
+			COALESCE(c.course_name, tch.course_name, '') AS course_name
+		FROM teacher_course_history tch
+		LEFT JOIN courses c ON c.course_code = tch.course_code
+		JOIN teachers t ON t.faculty_id = tch.teacher_id AND t.status = 1
+	`
+	coreArgs := []interface{}{}
+	coreWhere := []string{"tch.record_type = 'course'"}
+	if departmentID != "" {
+		coreQuery += `
+			LEFT JOIN departments d ON d.id = CAST(t.dept AS UNSIGNED)
+		`
+		coreWhere = append(coreWhere, `(
+			t.dept = ?
+			OR CAST(d.id AS CHAR) = ?
+			OR LOWER(TRIM(d.department_name)) = LOWER(TRIM(?))
+		)`)
+		coreArgs = append(coreArgs, departmentID, departmentID, departmentID)
+	}
+	coreQuery += "\nWHERE " + strings.Join(coreWhere, " AND ")
+
+	// ── Part 2: elective / honour / minor courses chosen by students ──────────
+	// hod_elective_selections.department_id is the owning department (INT).
+	// We filter by it when departmentID is supplied.
+	electiveQuery := `
+		SELECT
+			c.course_code,
+			COALESCE(c.course_name, '') AS course_name
+		FROM student_elective_choices sec
+		JOIN hod_elective_selections hes ON hes.id = sec.hod_selection_id
+		JOIN courses c ON c.id = hes.course_id
+		WHERE hes.status = 'ACTIVE'
+	`
+	electiveArgs := []interface{}{}
+	if departmentID != "" {
+		electiveQuery += ` AND (
+			CAST(hes.department_id AS CHAR) = ?
+			OR LOWER(TRIM((SELECT department_name FROM departments WHERE id = hes.department_id LIMIT 1)))
+			   = LOWER(TRIM(?))
+		)`
+		electiveArgs = append(electiveArgs, departmentID, departmentID)
+	}
+
+	// Full UNION query – wrap both as subqueries so we can deduplicate and sort
+	allArgs := append(coreArgs, electiveArgs...)
+	fullQuery := `
+		SELECT DISTINCT course_code, course_name
+		FROM (
+			` + coreQuery + `
+			UNION ALL
+			` + electiveQuery + `
+		) AS combined
+		WHERE course_code != ''
+		ORDER BY course_code ASC
+	`
+
+	rows, err := db.DB.Query(fullQuery, allArgs...)
+	if err != nil {
+		log.Printf("❌ GetTeacherLimitCourses query error: %v\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to fetch courses"})
+		return
+	}
+	defer rows.Close()
+
+	seen := map[string]bool{}
+	var options []CourseOption
+	for rows.Next() {
+		var opt CourseOption
+		if err := rows.Scan(&opt.CourseCode, &opt.CourseName); err != nil {
+			continue
+		}
+		if seen[opt.CourseCode] {
+			continue
+		}
+		seen[opt.CourseCode] = true
+		if opt.CourseName != "" {
+			opt.Label = opt.CourseCode + " – " + opt.CourseName
+		} else {
+			opt.Label = opt.CourseCode
+		}
+		options = append(options, opt)
+	}
+	if options == nil {
+		options = []CourseOption{}
+	}
+	json.NewEncoder(w).Encode(options)
+}
+
 // ExportTeacherLimits generates Excel export of teacher assignments and limits
 func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
@@ -135,20 +312,38 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 	// Optional window filter from query params
 	windowStart := r.URL.Query().Get("window_start")
 	windowEnd := r.URL.Query().Get("window_end")
+	departmentID := strings.TrimSpace(r.URL.Query().Get("department_id"))
+	courseCodeFilter := strings.TrimSpace(r.URL.Query().Get("course_code"))
 
-	// Fetch all active teachers
+	// Fetch all active teachers in scope so teachers with no allocations are also
+	// included (with 0 subjects/labs) instead of being skipped.
 	query := `
 		SELECT 
 			t.faculty_id,
-			t.name,
+			COALESCE(t.name, '') as name,
 			COALESCE(t.desg, '') as designation,
 			COALESCE(t.dept, '') as dept
 		FROM teachers t
-		WHERE t.status = 1
+	`
+	args := []interface{}{}
+	whereClauses := []string{"t.status = 1"}
+	if departmentID != "" {
+		query += `
+			LEFT JOIN departments d ON d.id = CAST(t.dept AS UNSIGNED)
+		`
+		whereClauses = append(whereClauses, `(
+			t.dept = ?
+			OR CAST(d.id AS CHAR) = ?
+			OR LOWER(TRIM(d.department_name)) = LOWER(TRIM(?))
+		)`) 
+		args = append(args, departmentID, departmentID, departmentID)
+	}
+	query += "\nWHERE " + strings.Join(whereClauses, " AND ")
+	query += `
 		ORDER BY t.faculty_id ASC
 	`
 
-	rows, err := db.DB.Query(query)
+	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		log.Printf("❌ Error fetching teachers: %v\n", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -189,7 +384,7 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Merge: core first, then special, capped at 5 slots
+		// Merge: core first, then special (no cap)
 		allCourses := append(coreCourses, specialCourses...)
 
 		subjectCount := 0
@@ -211,18 +406,178 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 			WorkloadLimitTheoryLab: formatInt(limitTheoryLab),
 			SubjectsAlloted:        formatInt(subjectCount),
 			LabsAlloted:            formatInt(labCount),
-		}
-
-		for i, c := range allCourses {
-			if i >= 5 {
-				break
-			}
-			fillCourseEntry(c, &exportRow, i+1)
+			Courses:                allCourses,
 		}
 
 		exportRows = append(exportRows, exportRow)
 	}
 
+	// ── MODE SELECTION ─────────────────────────────────────────────────────────
+	// courseCodeFilter == ""       → normal wide format (one row per teacher)
+	// courseCodeFilter == "__ALL__" → expanded format (one row per teacher-course, all)
+	// courseCodeFilter == "<CODE>" → expanded format (one row per teacher, filtered to course)
+
+	if courseCodeFilter != "" {
+		// ── EXPANDED FORMAT ──────────────────────────────────────────────────
+		// ── collect course codes for batch detail lookup ─────────────────────
+		uniqCodes := map[string]bool{}
+		for _, row := range exportRows {
+			for _, c := range row.Courses {
+				if courseCodeFilter == "__ALL__" || strings.EqualFold(c.CourseCode, courseCodeFilter) {
+					uniqCodes[c.CourseCode] = true
+				}
+			}
+		}
+		codeSlice := make([]string, 0, len(uniqCodes))
+		for code := range uniqCodes {
+			codeSlice = append(codeSlice, code)
+		}
+		detailsMap := fetchCourseDetailsBatch(codeSlice)
+
+		type expandedRow struct {
+			FacultyID   string
+			Name        string
+			Designation string
+			LimitTheory string
+			LimitLab    string
+			LimitTL     string
+			Course      courseEntry
+			Details     courseDetails
+		}
+		var expanded []expandedRow
+		for _, row := range exportRows {
+			for _, c := range row.Courses {
+				if courseCodeFilter == "__ALL__" || strings.EqualFold(c.CourseCode, courseCodeFilter) {
+					expanded = append(expanded, expandedRow{
+						FacultyID:   row.ID,
+						Name:        row.FacultyName,
+						Designation: row.Designation,
+						LimitTheory: row.WorkloadLimitTheory,
+						LimitLab:    row.WorkloadLimitLab,
+						LimitTL:     row.WorkloadLimitTheoryLab,
+						Course:      c,
+						Details:     detailsMap[c.CourseCode],
+					})
+				}
+			}
+		}
+
+		f := excelize.NewFile()
+		defer func() { _ = f.Close() }()
+		sheetName := "Teacher Course Mapping"
+		index, err := f.NewSheet(sheetName)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to create  sheet"})
+			return
+		}
+		headers := []string{
+			"Faculty ID", "Faculty Name", "Designation",
+			"Workload Limit - Theory", "Workload Limit - Lab", "Workload Limit - Theory+Lab",
+			"Course Code", "Course Name", "Category", "Course Nature", "Semester", "Department",
+			"Credits",
+			"Lecture Hrs", "Tutorial Hrs", "Practical Hrs", "Activity Hrs", "TW/SL Hrs",
+			"Theory Total Hrs", "Tutorial Total Hrs", "Practical Total Hrs", "Activity Total Hrs", "Total Hrs",
+			"CIA Marks", "SEE Marks", "Total Marks",
+		}
+		for i, h := range headers {
+			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+			f.SetCellValue(sheetName, cell, h)
+		}
+		for ri, ex := range expanded {
+			rowNum := ri + 2
+			d := ex.Details
+			record := []interface{}{
+				ex.FacultyID, ex.Name, ex.Designation,
+				ex.LimitTheory, ex.LimitLab, ex.LimitTL,
+				ex.Course.CourseCode, ex.Course.Title,
+				ex.Course.CourseType, ex.Course.CourseNature,
+				ex.Course.Semester, ex.Course.Department,
+				d.Credit,
+				d.LectureHrs, d.TutorialHrs, d.PracticalHrs, d.ActivityHrs, d.TwSlHrs,
+				d.TheoryTotalHrs, d.TutorialTotalHrs, d.PracticalTotalHrs, d.ActivityTotalHrs, d.TotalHrs,
+				d.CIAMarks, d.SEEMarks, d.TotalMarks,
+			}
+			for ci, val := range record {
+				cell, _ := excelize.CoordinatesToCellName(ci+1, rowNum)
+				f.SetCellValue(sheetName, cell, val)
+			}
+		}
+
+		// Styling: grouped headers + borders + freeze/filter for readability
+		headerTeacherStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#1F4E78"}},
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+		})
+		headerCourseStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#2E7D32"}},
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+		})
+		headerMetricsStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#8A6D3B"}},
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+		})
+		bodyTextStyle, _ := f.NewStyle(&excelize.Style{
+			Alignment: &excelize.Alignment{Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#E6E6E6", Style: 1}, {Type: "right", Color: "#E6E6E6", Style: 1}, {Type: "top", Color: "#E6E6E6", Style: 1}, {Type: "bottom", Color: "#E6E6E6", Style: 1}},
+		})
+		bodyNumberStyle, _ := f.NewStyle(&excelize.Style{
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+			Border: []excelize.Border{{Type: "left", Color: "#E6E6E6", Style: 1}, {Type: "right", Color: "#E6E6E6", Style: 1}, {Type: "top", Color: "#E6E6E6", Style: 1}, {Type: "bottom", Color: "#E6E6E6", Style: 1}},
+		})
+
+		lastRow := len(expanded) + 1
+		if lastRow < 2 {
+			lastRow = 2
+		}
+		_ = f.SetCellStyle(sheetName, "A1", "F1", headerTeacherStyle)
+		_ = f.SetCellStyle(sheetName, "G1", "L1", headerCourseStyle)
+		_ = f.SetCellStyle(sheetName, "M1", "Z1", headerMetricsStyle)
+		_ = f.SetCellStyle(sheetName, "A2", "L"+strconv.Itoa(lastRow), bodyTextStyle)
+		_ = f.SetCellStyle(sheetName, "M2", "Z"+strconv.Itoa(lastRow), bodyNumberStyle)
+
+		_ = f.SetRowHeight(sheetName, 1, 26)
+		_ = f.SetPanes(sheetName, &excelize.Panes{Freeze: true, Split: false, XSplit: 0, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+		_ = f.AutoFilter(sheetName, "A1:Z1", []excelize.AutoFilterOptions{})
+
+		_ = f.SetColWidth(sheetName, "A", "A", 14)
+		_ = f.SetColWidth(sheetName, "B", "B", 24)
+		_ = f.SetColWidth(sheetName, "C", "C", 18)
+		_ = f.SetColWidth(sheetName, "D", "F", 14)
+		_ = f.SetColWidth(sheetName, "G", "G", 14)
+		_ = f.SetColWidth(sheetName, "H", "H", 30)
+		_ = f.SetColWidth(sheetName, "I", "J", 18)
+		_ = f.SetColWidth(sheetName, "K", "K", 12)
+		_ = f.SetColWidth(sheetName, "L", "L", 20)
+		_ = f.SetColWidth(sheetName, "M", "M", 10)
+		_ = f.SetColWidth(sheetName, "N", "R", 11)
+		_ = f.SetColWidth(sheetName, "S", "W", 13)
+		_ = f.SetColWidth(sheetName, "X", "Z", 10)
+		f.SetActiveSheet(index)
+		f.DeleteSheet("Sheet1")
+		buffer, err := f.WriteToBuffer()
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to generate Excel file"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"teacher_course_mapping_"+strings.ReplaceAll(getCurrentDateTime(), " ", "_")+".xlsx\"")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(buffer.Bytes())
+		log.Printf("✅ Expanded teacher-course mapping export served (%d rows)\n", len(expanded))
+		return
+	}
+
+	// ── NORMAL FORMAT (existing behaviour) ───────────────────────────────────
 	// Generate Excel file
 	f := excelize.NewFile()
 	defer func() {
@@ -241,7 +596,7 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	headers := []string{
+	baseHeaders := []string{
 		"Faculty ID",
 		"Faculty Name",
 		"Designation",
@@ -250,36 +605,26 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 		"Workload Limit - Theory+Lab",
 		"Subjects Allotted",
 		"Labs Allotted",
-		"Semester - Subject 1",
-		"Department - Subject 1",
-		"Course Code - Subject 1",
-		"Course Title - Subject 1",
-		"Course Type - Subject 1",
-		"Course Nature - Subject 1",
-		"Semester - Subject 2",
-		"Department - Subject 2",
-		"Course Code - Subject 2",
-		"Course Title - Subject 2",
-		"Course Type - Subject 2",
-		"Course Nature - Subject 2",
-		"Semester - Subject 3",
-		"Department - Subject 3",
-		"Course Code - Subject 3",
-		"Course Title - Subject 3",
-		"Course Type - Subject 3",
-		"Course Nature - Subject 3",
-		"Semester - Subject 4",
-		"Department - Subject 4",
-		"Course Code - Subject 4",
-		"Course Title - Subject 4",
-		"Course Type - Subject 4",
-		"Course Nature - Subject 4",
-		"Semester - Subject 5",
-		"Department - Subject 5",
-		"Course Code - Subject 5",
-		"Course Title - Subject 5",
-		"Course Type - Subject 5",
-		"Course Nature - Subject 5",
+	}
+
+	maxSubjects := 0
+	for _, row := range exportRows {
+		if len(row.Courses) > maxSubjects {
+			maxSubjects = len(row.Courses)
+		}
+	}
+
+	headers := make([]string, 0, len(baseHeaders)+(maxSubjects*6))
+	headers = append(headers, baseHeaders...)
+	for i := 1; i <= maxSubjects; i++ {
+		headers = append(headers,
+			"Semester - Subject "+strconv.Itoa(i),
+			"Department - Subject "+strconv.Itoa(i),
+			"Course Code - Subject "+strconv.Itoa(i),
+			"Course Title - Subject "+strconv.Itoa(i),
+			"Course Type - Subject "+strconv.Itoa(i),
+			"Course Nature - Subject "+strconv.Itoa(i),
+		)
 	}
 
 	for i, header := range headers {
@@ -298,42 +643,95 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 			row.WorkloadLimitTheoryLab,
 			row.SubjectsAlloted,
 			row.LabsAlloted,
-			row.Subject1Semester,
-			row.Subject1Department,
-			row.Subject1CourseCode,
-			row.Subject1Title,
-			row.Subject1CourseType,
-			row.Subject1CourseNature,
-			row.Subject2Semester,
-			row.Subject2Department,
-			row.Subject2CourseCode,
-			row.Subject2Title,
-			row.Subject2CourseType,
-			row.Subject2CourseNature,
-			row.Subject3Semester,
-			row.Subject3Department,
-			row.Subject3CourseCode,
-			row.Subject3Title,
-			row.Subject3CourseType,
-			row.Subject3CourseNature,
-			row.Subject4Semester,
-			row.Subject4Department,
-			row.Subject4CourseCode,
-			row.Subject4Title,
-			row.Subject4CourseType,
-			row.Subject4CourseNature,
-			row.Subject5Semester,
-			row.Subject5Department,
-			row.Subject5CourseCode,
-			row.Subject5Title,
-			row.Subject5CourseType,
-			row.Subject5CourseNature,
+		}
+
+		for i := 0; i < maxSubjects; i++ {
+			if i < len(row.Courses) {
+				c := row.Courses[i]
+				record = append(record,
+					c.Semester,
+					c.Department,
+					c.CourseCode,
+					c.Title,
+					c.CourseType,
+					c.CourseNature,
+				)
+			} else {
+				record = append(record, "", "", "", "", "", "")
+			}
 		}
 
 		for colIndex, value := range record {
 			cell, _ := excelize.CoordinatesToCellName(colIndex+1, rowNum)
 			f.SetCellValue(sheetName, cell, value)
 		}
+	}
+
+	// Styling: fixed columns + per-subject block colors + borders + freeze/filter
+	baseHeaderStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#1F4E78"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+	})
+	subjectHeaderStyleA, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#2E7D32"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+	})
+	subjectHeaderStyleB, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#6A1B9A"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+	})
+	bodyStyle, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#E6E6E6", Style: 1}, {Type: "right", Color: "#E6E6E6", Style: 1}, {Type: "top", Color: "#E6E6E6", Style: 1}, {Type: "bottom", Color: "#E6E6E6", Style: 1}},
+	})
+
+	lastColName, _ := excelize.ColumnNumberToName(len(headers))
+	lastRow := len(exportRows) + 1
+	if lastRow < 2 {
+		lastRow = 2
+	}
+	_ = f.SetCellStyle(sheetName, "A1", "H1", baseHeaderStyle)
+	for i := 1; i <= maxSubjects; i++ {
+		startCol := 9 + ((i - 1) * 6)
+		endCol := startCol + 5
+		startName, _ := excelize.ColumnNumberToName(startCol)
+		endName, _ := excelize.ColumnNumberToName(endCol)
+		if i%2 == 1 {
+			_ = f.SetCellStyle(sheetName, startName+"1", endName+"1", subjectHeaderStyleA)
+		} else {
+			_ = f.SetCellStyle(sheetName, startName+"1", endName+"1", subjectHeaderStyleB)
+		}
+	}
+	_ = f.SetCellStyle(sheetName, "A2", lastColName+strconv.Itoa(lastRow), bodyStyle)
+
+	_ = f.SetRowHeight(sheetName, 1, 26)
+	_ = f.SetPanes(sheetName, &excelize.Panes{Freeze: true, Split: false, XSplit: 0, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+	_ = f.AutoFilter(sheetName, "A1:"+lastColName+"1", []excelize.AutoFilterOptions{})
+
+	_ = f.SetColWidth(sheetName, "A", "A", 14)
+	_ = f.SetColWidth(sheetName, "B", "B", 24)
+	_ = f.SetColWidth(sheetName, "C", "C", 18)
+	_ = f.SetColWidth(sheetName, "D", "F", 14)
+	_ = f.SetColWidth(sheetName, "G", "H", 14)
+	for i := 1; i <= maxSubjects; i++ {
+		semCol, _ := excelize.ColumnNumberToName(9 + ((i - 1) * 6))
+		deptCol, _ := excelize.ColumnNumberToName(10 + ((i - 1) * 6))
+		codeCol, _ := excelize.ColumnNumberToName(11 + ((i - 1) * 6))
+		titleCol, _ := excelize.ColumnNumberToName(12 + ((i - 1) * 6))
+		typeCol, _ := excelize.ColumnNumberToName(13 + ((i - 1) * 6))
+		natureCol, _ := excelize.ColumnNumberToName(14 + ((i - 1) * 6))
+		_ = f.SetColWidth(sheetName, semCol, semCol, 12)
+		_ = f.SetColWidth(sheetName, deptCol, deptCol, 18)
+		_ = f.SetColWidth(sheetName, codeCol, codeCol, 14)
+		_ = f.SetColWidth(sheetName, titleCol, titleCol, 30)
+		_ = f.SetColWidth(sheetName, typeCol, typeCol, 20)
+		_ = f.SetColWidth(sheetName, natureCol, natureCol, 16)
 	}
 
 	f.SetActiveSheet(index)
@@ -418,7 +816,7 @@ func fetchCoreCourses(facultyID, windowStart, windowEnd string) ([]courseEntry, 
 			COALESCE(MAX(cur.name), '') as department
 		FROM teacher_course_history tch
 		LEFT JOIN courses c ON tch.course_code = c.course_code
-		LEFT JOIN course_type ct ON c.course_type = ct.id
+		LEFT JOIN course_type ct ON c.course_type = ct.course_type
 		LEFT JOIN curriculum_courses cc ON c.id = cc.course_id
 		LEFT JOIN normal_cards nc ON cc.semester_id = nc.id
 		LEFT JOIN curriculum cur ON nc.curriculum_id = cur.id
@@ -433,7 +831,6 @@ func fetchCoreCourses(facultyID, windowStart, windowEnd string) ([]courseEntry, 
 		  )` + windowFilter + `
 		GROUP BY tch.course_code, tch.course_name, c.category, ct.course_type
 		ORDER BY tch.course_code ASC
-		LIMIT 5
 	`
 
 	rows, err := db.DB.Query(query, args...)
@@ -484,7 +881,7 @@ func fetchSpecialCourses(facultyID string, teacherDept string, windowStart, wind
 			COALESCE(d.department_name, '') as department
 		FROM teacher_course_history tch
 		JOIN courses c ON tch.course_code = c.course_code
-		LEFT JOIN course_type ct ON c.course_type = ct.id
+		LEFT JOIN course_type ct ON c.course_type = ct.course_type
 		LEFT JOIN hod_elective_selections hes
 			ON hes.course_id = c.id
 			AND hes.department_id = CAST(? AS UNSIGNED)
@@ -495,8 +892,7 @@ func fetchSpecialCourses(facultyID string, teacherDept string, windowStart, wind
 			'PE - Professional Elective', 'OE - Open Elective',
 			'Elective', 'Open Elective', 'Honour', 'Minor', 'Addon'
 		  )` + windowFilter + `
-		ORDER BY hes.semester ASC, tch.course_code ASC
-		LIMIT 5
+		ORDER BY semester ASC, tch.course_code ASC
 	`
 
 	rows, err := db.DB.Query(query, args...)
@@ -527,47 +923,6 @@ func fetchSpecialCourses(facultyID string, teacherDept string, windowStart, wind
 		})
 	}
 	return entries, rows.Err()
-}
-
-// fillCourseEntry copies a courseEntry into the numbered subject slot of an export row.
-func fillCourseEntry(c courseEntry, row *TeacherLimitExportRow, index int) {
-	switch index {
-	case 1:
-		row.Subject1Semester = c.Semester
-		row.Subject1Department = c.Department
-		row.Subject1CourseCode = c.CourseCode
-		row.Subject1Title = c.Title
-		row.Subject1CourseType = c.CourseType
-		row.Subject1CourseNature = c.CourseNature
-	case 2:
-		row.Subject2Semester = c.Semester
-		row.Subject2Department = c.Department
-		row.Subject2CourseCode = c.CourseCode
-		row.Subject2Title = c.Title
-		row.Subject2CourseType = c.CourseType
-		row.Subject2CourseNature = c.CourseNature
-	case 3:
-		row.Subject3Semester = c.Semester
-		row.Subject3Department = c.Department
-		row.Subject3CourseCode = c.CourseCode
-		row.Subject3Title = c.Title
-		row.Subject3CourseType = c.CourseType
-		row.Subject3CourseNature = c.CourseNature
-	case 4:
-		row.Subject4Semester = c.Semester
-		row.Subject4Department = c.Department
-		row.Subject4CourseCode = c.CourseCode
-		row.Subject4Title = c.Title
-		row.Subject4CourseType = c.CourseType
-		row.Subject4CourseNature = c.CourseNature
-	case 5:
-		row.Subject5Semester = c.Semester
-		row.Subject5Department = c.Department
-		row.Subject5CourseCode = c.CourseCode
-		row.Subject5Title = c.Title
-		row.Subject5CourseType = c.CourseType
-		row.Subject5CourseNature = c.CourseNature
-	}
 }
 
 // formatCourseNature converts raw course_type.course_type to a display label.

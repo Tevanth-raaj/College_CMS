@@ -379,7 +379,7 @@ func runMigrations() error {
 // runSQLMigrations reads and executes SQL files from db/migrations directory
 func runSQLMigrations() error {
 	migrationsDir := "./db/migrations"
-	
+
 	// Check if migrations directory exists
 	if _, err := os.Stat(migrationsDir); os.IsNotExist(err) {
 		log.Printf("Migrations directory not found: %s", migrationsDir)
@@ -417,7 +417,7 @@ func runSQLMigrations() error {
 			if stmt == "" || strings.HasPrefix(stmt, "--") {
 				continue
 			}
-			
+
 			_, err = DB.Exec(stmt)
 			if err != nil {
 				// Log error but continue with other statements

@@ -235,7 +235,12 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/minor-eligibility/template", curriculum.DownloadMinorTemplate).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/minor-eligibility/import", curriculum.ImportMinorEligibility).Methods("POST", "OPTIONS")
 
+	router.HandleFunc("/api/hod/teacher-limits/windows", curriculum.GetTeacherLimitWindows).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/teacher-limits/courses", curriculum.GetTeacherLimitCourses).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/teacher-limits/export", curriculum.ExportTeacherLimits).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/teacher-preferences/periods", curriculum.GetTeacherPreferencePeriods).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/teacher-preferences/teachers", curriculum.GetTeacherPreferenceTeachers).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/teacher-preferences/export", curriculum.ExportTeacherPreferences).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/academic-calendar/current", curriculum.GetCurrentAcademicCalendar).Methods("GET", "OPTIONS")
 
 	// Academic Calendar Admin routes
@@ -244,6 +249,11 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/admin/academic-calendars/{id}", curriculum.UpdateAcademicCalendar).Methods("PUT", "OPTIONS")
 	router.HandleFunc("/api/admin/academic-calendars/{id}", curriculum.DeleteAcademicCalendar).Methods("DELETE", "OPTIONS")
 	router.HandleFunc("/api/admin/academic-calendars/advance", curriculum.AdvanceAcademicYear).Methods("POST", "OPTIONS")
+
+	// Admin teacher-course manual assignment routes
+	router.HandleFunc("/api/admin/teacher-course-assignment/teachers", curriculum.GetAdminTeacherAssignmentTeachers).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/teacher-course-assignment/{teacherId}", curriculum.GetAdminTeacherCourseAssignmentContext).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/teacher-course-assignment/{teacherId}", curriculum.UpdateAdminTeacherCourseAssignments).Methods("PUT", "OPTIONS")
 
 	// Honour Program Management routes
 	router.HandleFunc("/api/hod/honour-verticals", curriculum.GetHonourVerticals).Methods("GET", "OPTIONS")
@@ -302,6 +312,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/students/electives/available", studentteacher.GetAvailableElectives).Methods("GET", "OPTIONS")         // ?email=
 	router.HandleFunc("/api/students/electives/selections", studentteacher.SaveElectiveSelections).Methods("POST", "OPTIONS")      // ?email=
 	router.HandleFunc("/api/students/electives/selections", studentteacher.GetStudentElectiveSelections).Methods("GET", "OPTIONS") // ?email=
+	router.HandleFunc("/api/students/course-dashboard", studentteacher.GetStudentCourseDashboard).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students/elective-exemption-requests", studentteacher.CreateElectiveExemptionRequest).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/students/elective-exemption-requests", studentteacher.GetStudentElectiveExemptionRequests).Methods("GET", "OPTIONS")
 
@@ -314,6 +325,11 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/teachers/{teacher_id}/course-preferences", studentteacher.GetTeacherCoursePreferences).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/teachers/course-preferences", studentteacher.SaveTeacherCoursePreferences).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/teachers/course-window/{academic_year}", studentteacher.GetTeacherCourseWindow).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/teacher-course-windows", studentteacher.GetTeacherCourseWindows).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/admin/teacher-course-windows", studentteacher.CreateTeacherCourseWindow).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/admin/teacher-course-windows/{id}", studentteacher.UpdateTeacherCourseWindow).Methods("PUT", "OPTIONS")
+	router.HandleFunc("/api/admin/teacher-course-windows/{id}", studentteacher.DeleteTeacherCourseWindow).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/admin/teacher-course-windows/{id}/rerun-allocation", allocation.RerunAllocationForWindow).Methods("POST", "OPTIONS")
 
 	// Teacher Course Appeal routes
 	router.HandleFunc("/api/teachers/appeals", studentteacher.CreateCourseAppeal).Methods("POST", "OPTIONS")

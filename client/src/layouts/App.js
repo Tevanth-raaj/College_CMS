@@ -22,6 +22,7 @@ import TeacherDetailsPage from "../pages/student-teacher_entry/TeacherDetailsPag
 import TeacherStudentMappingPage from "../pages/student-teacher_entry/TeacherStudentMappingPage";
 import CourseAllocationPage from "../pages/curriculum/CourseAllocationPage";
 import ElectiveSelectionPage from "../pages/student/ElectiveSelectionPage";
+import StudentCourseDashboardPage from "../pages/student/StudentCourseDashboardPage";
 import ElectiveExemptionPage from "../pages/student/ElectiveExemptionPage";
 import ElectiveExemptionStatusPage from "../pages/student/ElectiveExemptionStatusPage";
 import TeacherCourseSelectionPage from "../pages/teacher/TeacherCourseSelectionPage";
@@ -35,11 +36,14 @@ import TeacherCoursesPage from "../pages/curriculum/TeacherCoursesPage";
 import TeacherCourseStudentsPage from "../pages/curriculum/TeacherCourseStudentsPage";
 import MarkEntryPage from "../pages/curriculum/MarkEntryPage";
 import MarkEntryPermissionsPage from "../pages/curriculum/MarkEntryPermissionsPage";
+import MarkEntryWindowDetailsPage from "../pages/curriculum/MarkEntryWindowDetailsPage";
+import MarkEntryWindowTeacherDetailsPage from "../pages/curriculum/MarkEntryWindowTeacherDetailsPage";
 import HODMarkEntryDashboardPage from "../pages/curriculum/HODMarkEntryDashboardPage";
 import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
 import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
+import AdminTeacherCourseAssignmentPage from "../pages/curriculum/AdminTeacherCourseAssignmentPage";
 
 //404 page
 import NotFoundPage from "../components/NotFoundPage";
@@ -91,7 +95,18 @@ function App() {
             path="mark-entry-permissions"
             element={<MarkEntryPermissionsPage />}
           />
-          <Route path="mark-monitor" element={<HODMarkEntryDashboardPage />} />
+          <Route
+            path="mark-entry-windows/:windowId"
+            element={<MarkEntryWindowDetailsPage />}
+          />
+          <Route
+            path="mark-entry-windows/:windowId/teacher-details"
+            element={<MarkEntryWindowTeacherDetailsPage />}
+          />
+          <Route
+            path="mark-monitor"
+            element={<HODMarkEntryDashboardPage />}
+          />
           <Route path="result-analysis" element={<ResultAnalysisPage />} />
           <Route
             path="my-assigned-students"
@@ -99,14 +114,10 @@ function App() {
           />
 
           <Route path="course-allocation" element={<CourseAllocationPage />} />
-          <Route
-            path="elective-selection"
-            element={<ElectiveSelectionPage />}
-          />
-          <Route
-            path="student/elective-selection"
-            element={<ElectiveSelectionPage />}
-          />
+          <Route path="elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/course-dashboard" element={<StudentCourseDashboardPage />} />
+          <Route path="teacher/course-selection" element={<TeacherCourseSelectionPage />} />
           <Route
             path="student/elective-exemption"
             element={<ElectiveExemptionPage />}
@@ -136,6 +147,7 @@ function App() {
             element={<HODHonourMinorEligibilityPage />}
           />
           <Route path="academic-calendar" element={<AcademicCalendarPage />} />
+          <Route path="admin/teacher-course-assignment" element={<AdminTeacherCourseAssignmentPage />} />
           <Route path="exam-absentees" element={<AbsenteesPage />} />
 
           <Route path="regulations" element={<RegulationPage />} />

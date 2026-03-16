@@ -94,6 +94,7 @@ type MarkEntryWindow struct {
 	StartAt      string  `json:"start_at"`
 	EndAt        string  `json:"end_at"`
 	Enabled      bool    `json:"enabled"`
+	WindowName   string  `json:"window_name,omitempty"`
 	ComponentIDs []int   `json:"component_ids,omitempty"` // Empty = all components allowed
 }
 
@@ -167,14 +168,16 @@ type UserAssignedStudentsRequest struct {
 
 // AssignedStudentInfo represents detailed information about an assigned student
 type AssignedStudentInfo struct {
-	StudentID    int    `json:"student_id"`
-	EnrollmentNo string `json:"enrollment_no"`
-	StudentName  string `json:"student_name"`
-	Department   string `json:"department"`
-	Year         int    `json:"year"`
-	WindowID     int    `json:"window_id"`
-	WindowStart  string `json:"window_start"`
-	WindowEnd    string `json:"window_end"`
-	CourseID     *int   `json:"course_id,omitempty"`
-	CourseName   string `json:"course_name,omitempty"`
+	StudentID      int    `json:"student_id"`
+	EnrollmentNo   string `json:"enrollment_no"`
+	RegisterNo     string `json:"register_no"`
+	StudentName    string `json:"student_name"`
+	Department     string `json:"department"`
+	Year           int    `json:"year"`
+	WindowID       int    `json:"window_id"`
+	WindowStart    string `json:"window_start"`
+	WindowEnd      string `json:"window_end"`
+	CourseID       *int   `json:"course_id,omitempty"`
+	CourseName     string `json:"course_name,omitempty"`
+	LearningModeID *int   `json:"learning_mode_id"`
 }

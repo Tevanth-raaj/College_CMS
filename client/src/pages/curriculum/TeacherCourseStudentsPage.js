@@ -1,7 +1,35 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
+
+const getInnovativePracticeBaseName = (name = '') => {
+  const normalized = String(name).replace(/\s+/g, ' ').trim()
+  const match = normalized.match(/^(Innovative Practice\s+[12])\s*-\s*\(\s*[12]\s*\)$/i)
+  return match ? match[1] : null
+}
+
+const formatWindowComponentNames = (componentNames = []) => {
+  const uniqueNames = [...new Set(componentNames)]
+  const groupedSeen = new Set()
+  const formatted = []
+
+  uniqueNames.forEach((name) => {
+    const baseName = getInnovativePracticeBaseName(name)
+    if (!baseName) {
+      formatted.push(name)
+      return
+    }
+
+    const key = baseName.toLowerCase()
+    if (!groupedSeen.has(key)) {
+      groupedSeen.add(key)
+      formatted.push(baseName)
+    }
+  })
+
+  return formatted
+}
 
 function TeacherCourseStudentsPage() {
   const { courseId } = useParams()
@@ -24,6 +52,7 @@ function TeacherCourseStudentsPage() {
     if (courseId) {
       fetchCourseStudents()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId])
 
   const fetchCourseStudents = async () => {
@@ -302,8 +331,7 @@ function TeacherCourseStudentsPage() {
                       <div className="col-span-2">
                         <p className="text-sm text-gray-600">Assessment Components</p>
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {/* Remove duplicates and render unique component names */}
-                          {[...new Set(course.window.component_names)].map((compName, idx) => (
+                          {formatWindowComponentNames(course.window.component_names).map((compName, idx) => (
                             <span key={idx} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
                               {compName}
                             </span>
