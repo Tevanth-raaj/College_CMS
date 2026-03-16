@@ -364,20 +364,6 @@ func saveElectiveExemptionCertificate(r *http.Request) (*string, error) {
 	return &relativePath, nil
 }
 
-func resolveStudentIDByEmail(email string) (int, error) {
-	var studentID int
-	err := db.DB.QueryRow(`
-		SELECT student_id
-		FROM contact_details
-		WHERE student_email = ?
-	`, email).Scan(&studentID)
-	if err != nil {
-		return 0, err
-	}
-
-	return studentID, nil
-}
-
 func nullableString(value string) interface{} {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
