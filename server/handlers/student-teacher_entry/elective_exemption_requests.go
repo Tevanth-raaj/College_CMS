@@ -28,6 +28,24 @@ type electiveExemptionRequestResponse struct {
 	ID      int64  `json:"id,omitempty"`
 }
 
+type studentElectiveExemptionRequestItem struct {
+	ID                     int    `json:"id"`
+	RequestType            string `json:"request_type"`
+	ProfessionalElectiveNo int    `json:"professional_elective_no"`
+	OnlineCourseName       string `json:"online_course_name"`
+	CourseType             string `json:"course_type"`
+	IndustryName           string `json:"industry_name"`
+	IndustryContact        string `json:"industry_contact"`
+	Sector                 string `json:"sector"`
+	StartDate              string `json:"start_date"`
+	EndDate                string `json:"end_date"`
+	CertificateFilePath    string `json:"certificate_file_path"`
+	CertificateURL         string `json:"certificate_url"`
+	Status                 string `json:"status"`
+	CreatedAt              string `json:"created_at"`
+	UpdatedAt              string `json:"updated_at"`
+}
+
 func CreateElectiveExemptionRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -47,7 +65,7 @@ func CreateElectiveExemptionRequest(w http.ResponseWriter, r *http.Request) {
 
 	studentEmail := strings.TrimSpace(r.FormValue("student_email"))
 	requestType := strings.ToUpper(strings.TrimSpace(r.FormValue("request_type")))
-	electiveSemesterValue := strings.TrimSpace(r.FormValue("elective_semester_no"))
+	professionalElectiveValue := strings.TrimSpace(r.FormValue("professional_elective_no"))
 	certificateURL := strings.TrimSpace(r.FormValue("certificate_url"))
 	hasCertificateFile := false
 	if r.MultipartForm != nil {
@@ -63,12 +81,6 @@ func CreateElectiveExemptionRequest(w http.ResponseWriter, r *http.Request) {
 
 	if requestType != electiveExemptionTypeNPTEL && requestType != electiveExemptionTypeInternship {
 		http.Error(w, "invalid request_type", http.StatusBadRequest)
-		return
-	}
-
-	electiveSemesterNo, err := strconv.Atoi(electiveSemesterValue)
-	if err != nil {
-		http.Error(w, "invalid elective_semester_no", http.StatusBadRequest)
 		return
 	}
 
@@ -89,9 +101,11 @@ func CreateElectiveExemptionRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	formValues := electiveExemptionFormValues{
+		ProfessionalNumber:  professionalElectiveValue,
 		OnlineCourseName:    strings.TrimSpace(r.FormValue("online_course_name")),
 		CourseType:          strings.TrimSpace(r.FormValue("course_type")),
 		IndustryName:        strings.TrimSpace(r.FormValue("industry_name")),
+		IndustryContact:     strings.TrimSpace(r.FormValue("industry_contact")),
 		Sector:              strings.TrimSpace(r.FormValue("sector")),
 		IndustryAddress:     strings.TrimSpace(r.FormValue("industry_address")),
 		City:                strings.TrimSpace(r.FormValue("city")),
@@ -124,11 +138,12 @@ func CreateElectiveExemptionRequest(w http.ResponseWriter, r *http.Request) {
 			student_id,
 			student_email,
 			request_type,
-			elective_semester_no,
+			professional_elective_no,
 			status,
 			online_course_name,
 			course_type,
 			industry_name,
+			industry_contact,
 			sector,
 			industry_address,
 			city,
@@ -143,15 +158,16 @@ func CreateElectiveExemptionRequest(w http.ResponseWriter, r *http.Request) {
 			stipend_amount,
 			certificate_file_path,
 			certificate_url
-		) VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		studentID,
 		studentEmail,
 		requestType,
-		electiveSemesterNo,
+		nullableInt(validatedValues.ProfessionalNumber),
 		nullableString(validatedValues.OnlineCourseName),
 		nullableString(validatedValues.CourseType),
 		nullableString(validatedValues.IndustryName),
+		nullableString(validatedValues.IndustryContact),
 		nullableString(validatedValues.Sector),
 		nullableString(validatedValues.IndustryAddress),
 		nullableString(validatedValues.City),
@@ -185,10 +201,100 @@ func CreateElectiveExemptionRequest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func GetStudentElectiveExemptionRequests(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	studentEmail := strings.TrimSpace(r.URL.Query().Get("email"))
+	if studentEmail == "" {
+		http.Error(w, "email parameter required", http.StatusBadRequest)
+		return
+	}
+
+	studentID, err := resolveStudentIDByEmail(studentEmail)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Student not found with this email", http.StatusNotFound)
+			return
+		}
+		log.Printf("Error resolving student by email %s: %v", studentEmail, err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.DB.Query(`
+		SELECT
+			id,
+			COALESCE(request_type, ''),
+			COALESCE(professional_elective_no, 0),
+			COALESCE(online_course_name, ''),
+			COALESCE(course_type, ''),
+			COALESCE(industry_name, ''),
+			COALESCE(industry_contact, ''),
+			COALESCE(sector, ''),
+			COALESCE(DATE_FORMAT(start_date, '%Y-%m-%d'), ''),
+			COALESCE(DATE_FORMAT(end_date, '%Y-%m-%d'), ''),
+			COALESCE(certificate_file_path, ''),
+			COALESCE(certificate_url, ''),
+			COALESCE(status, 'submitted'),
+			COALESCE(DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s'), ''),
+			COALESCE(DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s'), '')
+		FROM student_elective_exemption_requests
+		WHERE student_id = ?
+		ORDER BY created_at DESC
+	`, studentID)
+	if err != nil {
+		log.Printf("Error fetching student elective exemption requests: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	requests := make([]studentElectiveExemptionRequestItem, 0)
+	for rows.Next() {
+		var item studentElectiveExemptionRequestItem
+		if err := rows.Scan(
+			&item.ID,
+			&item.RequestType,
+			&item.ProfessionalElectiveNo,
+			&item.OnlineCourseName,
+			&item.CourseType,
+			&item.IndustryName,
+			&item.IndustryContact,
+			&item.Sector,
+			&item.StartDate,
+			&item.EndDate,
+			&item.CertificateFilePath,
+			&item.CertificateURL,
+			&item.Status,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			log.Printf("Error scanning student exemption request row: %v", err)
+			continue
+		}
+		requests = append(requests, item)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"requests": requests,
+	})
+}
+
 type electiveExemptionFormValues struct {
+	ProfessionalNumber  string
 	OnlineCourseName    string
 	CourseType          string
 	IndustryName        string
+	IndustryContact     string
 	Sector              string
 	IndustryAddress     string
 	City                string
@@ -204,9 +310,11 @@ type electiveExemptionFormValues struct {
 }
 
 type validatedElectiveExemptionValues struct {
+	ProfessionalNumber   *int
 	OnlineCourseName     string
 	CourseType           string
 	IndustryName         string
+	IndustryContact      string
 	Sector               string
 	IndustryAddress      string
 	City                 string
@@ -240,6 +348,7 @@ func validateElectiveExemptionForm(requestType string, values electiveExemptionF
 		OnlineCourseName:   values.OnlineCourseName,
 		CourseType:         values.CourseType,
 		IndustryName:       values.IndustryName,
+		IndustryContact:    values.IndustryContact,
 		Sector:             values.Sector,
 		IndustryAddress:    values.IndustryAddress,
 		City:               values.City,
@@ -253,6 +362,12 @@ func validateElectiveExemptionForm(requestType string, values electiveExemptionF
 
 	switch requestType {
 	case electiveExemptionTypeNPTEL:
+		professionalNumber, err := parseRangedIntField(values.ProfessionalNumber, "professional_elective_no", 1, 9)
+		if err != nil {
+			return validatedElectiveExemptionValues{}, err
+		}
+		validated.ProfessionalNumber = professionalNumber
+
 		if values.OnlineCourseName == "" || values.CourseType == "" || startDate == nil || endDate == nil {
 			return validatedElectiveExemptionValues{}, fmt.Errorf("online course name, course type, start date, and end date are required")
 		}
@@ -264,8 +379,18 @@ func validateElectiveExemptionForm(requestType string, values electiveExemptionF
 		validated.CourseDurationWeeks = courseDurationWeeks
 
 	case electiveExemptionTypeInternship:
-		if values.IndustryName == "" || values.Sector == "" || values.IndustryAddress == "" || values.City == "" || values.State == "" || values.PostalCode == "" || values.Country == "" || values.IndustryWebsiteURL == "" || startDate == nil || endDate == nil {
-			return validatedElectiveExemptionValues{}, fmt.Errorf("industry name, sector, address, city, state, postal code, country, website, start date, and end date are required")
+		professionalNumber, err := parseRangedIntField(values.ProfessionalNumber, "professional_elective_no", 1, 9)
+		if err != nil {
+			return validatedElectiveExemptionValues{}, err
+		}
+		validated.ProfessionalNumber = professionalNumber
+
+		if values.IndustryName == "" || values.IndustryContact == "" || values.Sector == "" || values.IndustryAddress == "" || values.City == "" || values.State == "" || values.PostalCode == "" || values.Country == "" || values.IndustryWebsiteURL == "" || startDate == nil || endDate == nil {
+			return validatedElectiveExemptionValues{}, fmt.Errorf("industry name, industry contact, sector, address, city, state, postal code, country, website, start date, and end date are required")
+		}
+
+		if !isValidInternshipSector(values.Sector) {
+			return validatedElectiveExemptionValues{}, fmt.Errorf("sector must be Government or Private")
 		}
 
 		daysAttended, err := parsePositiveIntField(values.DaysAttended, "number_of_days_attended")
@@ -299,6 +424,11 @@ func parseElectiveExemptionDate(value, fieldName string) (*time.Time, error) {
 	return &parsed, nil
 }
 
+func isValidInternshipSector(value string) bool {
+	sector := strings.TrimSpace(strings.ToLower(value))
+	return sector == "government" || sector == "private"
+}
+
 func parsePositiveIntField(value, fieldName string) (*int, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -311,6 +441,17 @@ func parsePositiveIntField(value, fieldName string) (*int, error) {
 	}
 
 	return &parsed, nil
+}
+
+func parseRangedIntField(value, fieldName string, minValue, maxValue int) (*int, error) {
+	parsed, err := parsePositiveIntField(value, fieldName)
+	if err != nil {
+		return nil, err
+	}
+	if *parsed < minValue || *parsed > maxValue {
+		return nil, fmt.Errorf("%s must be between %d and %d", fieldName, minValue, maxValue)
+	}
+	return parsed, nil
 }
 
 func parseNonNegativeFloatField(value, fieldName string) (*float64, error) {
