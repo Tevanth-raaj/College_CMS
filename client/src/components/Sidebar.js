@@ -174,6 +174,26 @@ function Sidebar({ onExpandedChange }) {
         roles: ["student"],
       },
       {
+        name: "Course Dashboard",
+        path: "/student/course-dashboard",
+        icon: (
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M3 3h18v4H3V3zm0 7h18v11H3V10zm4 3h4m2 0h4m-10 4h4m2 0h4"
+            />
+          </svg>
+        ),
+        roles: ["student"],
+      },
+      {
         name: "Curriculum",
         path: "/curriculum",
         icon: (
@@ -314,19 +334,24 @@ function Sidebar({ onExpandedChange }) {
         roles: ["admin", "teacher"],
       },
       {
-        name: "Electives",
-        path: "/student/elective-selection",
+        name: "Teacher Assign",
+        path: "/admin/teacher-course-assignment",
         icon: (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth={2}
-              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3v-6"
+              d="M8 7a4 4 0 118 0v2h1a2 2 0 012 2v8a2 2 0 01-2 2H7a2 2 0 01-2-2v-8a2 2 0 012-2h1V7zm2 0v2h4V7a2 2 0 10-4 0zm2 6v4m-2-2h4"
             />
           </svg>
         ),
-        roles: ["student"],
+        roles: ["admin"],
       },
       {
         name: "Mark Entry",

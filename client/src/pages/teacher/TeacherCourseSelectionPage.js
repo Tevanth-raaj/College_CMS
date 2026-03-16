@@ -1,11 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import MainLayout from '../../components/MainLayout';
 import { API_BASE_URL } from '../../config';
 
 const TeacherCourseSelectionPage = () => {
-  const navigate = useNavigate();
-  
   // State
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -452,13 +449,34 @@ const TeacherCourseSelectionPage = () => {
   const totalSelected = selectedCourses.length;
   const progressPercent = totalRequired > 0 ? (totalSelected / totalRequired) * 100 : 0;
 
+  const adminCardClass = 'bg-white border rounded-lg';
+  const adminInputClass = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary';
+  const adminPrimaryBtnClass = 'bg-primary text-white px-3 py-2 rounded-lg text-sm disabled:opacity-60 disabled:cursor-not-allowed';
+  const adminSecondaryBtnClass = 'border border-gray-300 px-3 py-2 rounded-lg text-sm text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed';
+  const tabBaseClass = 'px-3 py-2 rounded-lg text-sm font-medium transition-all';
+
+  const formatTypeLabel = (typeName) => {
+    const normalized = String(typeName || '').toLowerCase().trim();
+    if (normalized === 'theory_with_lab') return 'Theory + Lab';
+    if (normalized === 'theory') return 'Theory';
+    if (normalized === 'lab') return 'Lab';
+    return String(typeName || 'Type');
+  };
+
+  const workloadTypeSummaries = Array.isArray(allocationSummary?.type_summaries)
+    ? allocationSummary.type_summaries
+    : [];
+
   // Main render
   return (
-    <MainLayout>
-      <div className="min-h-screen bg-gray-50">
+    <MainLayout
+      title="Teacher Course Selection"
+      subtitle="Select and submit your next-semester course preferences"
+    >
+      <div>
         {/* Sticky Header */}
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
-          <div className="max-w-7xl mx-auto px-6 py-4">
+        <div className={`${adminCardClass} sticky top-0 z-10`}>
+          <div className="w-full px-6 py-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 {/* <button
@@ -509,7 +527,7 @@ const TeacherCourseSelectionPage = () => {
                 {!hasPendingAppeal && windowStatus.isOpen && (
                   <button
                     onClick={() => setShowAppealModal(true)}
-                    className="px-3 py-2 bg-orange-600 text-white text-sm font-medium rounded-lg hover:bg-orange-700 transition-colors flex items-center gap-2 shadow-sm"
+                    className={`${adminPrimaryBtnClass} flex items-center gap-2`}
                     title="Appeal Workload"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -532,6 +550,31 @@ const TeacherCourseSelectionPage = () => {
 
             {/* Progress Bar */}
             <div className="mt-4">
+              {workloadTypeSummaries.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {workloadTypeSummaries.map((summary) => {
+                    const typeName = formatTypeLabel(summary.type_name);
+                    const allocated = Number(summary.allocated || 0);
+                    const selected = Number(summary.selected || 0);
+                    return (
+                      <div
+                        key={`${summary.course_type_id || summary.type_name}`}
+                        className="px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-xs"
+                        title={`Allocation limit for ${typeName}`}
+                      >
+                        <span className="font-semibold text-gray-800">{typeName}</span>
+                        <span className="mx-1 text-gray-400">•</span>
+                        <span className="text-gray-600">Limit:</span>{' '}
+                        <span className="font-semibold text-gray-900">{allocated}</span>
+                        <span className="mx-1 text-gray-400">|</span>
+                        <span className="text-gray-600">Selected:</span>{' '}
+                        <span className="font-semibold text-primary">{selected}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-gray-700">Progress: {totalSelected} / {totalRequired} courses selected</span>
                 <span className="text-sm font-medium text-primary">{Math.round(progressPercent)}%</span>
@@ -547,10 +590,10 @@ const TeacherCourseSelectionPage = () => {
         </div>
 
         {/* Main Content */}
-        <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="w-full px-6 py-8">
           {/* Alert Messages */}
           {error && (
-            <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded-r-lg">
+            <div className="bg-red-50 border border-red-200 p-4 mb-6 rounded-lg">
               <div className="flex items-start">
                 <svg className="w-5 h-5 text-red-500 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
@@ -560,7 +603,7 @@ const TeacherCourseSelectionPage = () => {
             </div>
           )}
           {success && (
-            <div className="bg-green-50 border-l-4 border-green-500 p-4 mb-6 rounded-r-lg">
+            <div className="bg-green-50 border border-green-200 p-4 mb-6 rounded-lg">
               <div className="flex items-start">
                 <svg className="w-5 h-5 text-green-500 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
@@ -573,7 +616,7 @@ const TeacherCourseSelectionPage = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left Sidebar - Requirements */}
             <div className="lg:col-span-1 space-y-4">
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 sticky top-32">
+              <div className={`${adminCardClass} p-6 sticky top-32`}>
                 <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
                   <svg className="w-5 h-5 text-primary" fill="currentColor" viewBox="0 0 20 20">
                     <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
@@ -631,7 +674,7 @@ const TeacherCourseSelectionPage = () => {
                         ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
                         : totalSelected !== totalRequired
                         ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'bg-primary text-white shadow-sm hover:shadow-md'
+                        : 'bg-primary text-white'
                     }`}
                     title={!lockCheckDone ? 'Checking lock status...' : preferencesLocked ? 'You have already submitted your preferences for this semester window' : totalSelected !== totalRequired ? `Select ${totalRequired - totalSelected} more course(s)` : ''}
                   >
@@ -667,7 +710,7 @@ const TeacherCourseSelectionPage = () => {
                     className={`w-full py-3 rounded-lg font-semibold text-sm transition-all ${
                       preferencesLocked
                         ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'text-white border-2 bg-red-500'
+                        : 'border border-gray-300 text-gray-700 bg-white hover:bg-gray-50'
                     }`}
                   >
                     Clear All
@@ -679,17 +722,17 @@ const TeacherCourseSelectionPage = () => {
             {/* Right Side - Course Selection */}
             <div className="lg:col-span-2">              {/* Course Categories Info */}
               <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="card-custom p-4">
+                <div className={`${adminCardClass} p-4`}>
                   <h3 className="text-sm font-semibold text-gray-900">Core Theory Courses (Select 2)</h3>
                   <p className="text-xs text-gray-600 mt-1">Required core courses for all students</p>
                 </div>
-                <div className="card-custom p-4">
+                <div className={`${adminCardClass} p-4`}>
                   <h3 className="text-sm font-semibold text-gray-900">Student Elective Theory (Select 2)</h3>
                   <p className="text-xs text-gray-600 mt-1">Theory courses chosen by students</p>
                 </div>
               </div>
               {/* Search and Filter */}
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
+              <div className={`${adminCardClass} p-4 mb-6`}>
                 <div className="flex flex-col sm:flex-row gap-4">
                   <div className="flex-1 relative">
                     <svg className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -700,7 +743,7 @@ const TeacherCourseSelectionPage = () => {
                       placeholder="Search courses..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="input-custom pl-10"
+                      className={`${adminInputClass} pl-10`}
                     />
                   </div>
                   <div className="flex gap-2">
@@ -712,10 +755,10 @@ const TeacherCourseSelectionPage = () => {
                       <button
                         key={type.value}
                         onClick={() => setActiveTab(type.value)}
-                        className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                        className={`${tabBaseClass} ${
                           activeTab === type.value
-                            ? 'bg-primary text-white shadow-sm'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            ? 'bg-primary text-white'
+                            : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
                         }`}
                       >
                         {type.label}
@@ -727,7 +770,7 @@ const TeacherCourseSelectionPage = () => {
 
               {/* Course Grid */}
               {filteredCourses.length === 0 ? (
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+                <div className={`${adminCardClass} p-12 text-center`}>
                   <svg className="mx-auto w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
@@ -742,10 +785,10 @@ const TeacherCourseSelectionPage = () => {
                       <div
                         key={course.id}
                         onClick={() => toggleCourseSelection(course)}
-                        className={`bg-white rounded-lg border-2 p-5 cursor-pointer transition-all hover:shadow-md ${
+                        className={`bg-white rounded-lg border p-5 cursor-pointer transition-all ${
                           isSelected
-                            ? 'border-indigo-500 bg-indigo-50 shadow-sm'
-                            : 'border-gray-200 hover:border-indigo-300'
+                            ? 'border-primary bg-blue-50'
+                            : 'border-gray-200 hover:border-primary/40'
                         }`}
                       >
                         <div className="flex items-start gap-4">
@@ -766,12 +809,12 @@ const TeacherCourseSelectionPage = () => {
                             <div className="flex items-center gap-2 mb-1">
                               <h3 className="text-base font-semibold text-gray-900">{course.course_name}</h3>
                               {course.courseSource === 'extra' && (
-                                <span className="inline-block px-2 py-0.5 bg-green-100 text-green-700 text-xs font-semibold rounded">
+                                <span className="inline-block px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded">
                                   Student Choice
                                 </span>
                               )}
                               {course.courseSource === 'core' && (
-                                <span className="inline-block px-2 py-0.5 bg-background text-primary text-xs font-semibold rounded">
+                                <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-700 text-xs font-semibold rounded">
                                   Core
                                 </span>
                               )}
@@ -794,7 +837,7 @@ const TeacherCourseSelectionPage = () => {
                           <div className={`flex-shrink-0 px-4 py-2 rounded-lg text-xs font-bold ${
                             isSelected
                               ? 'bg-primary text-white'
-                              : 'bg-gray-100 text-gray-600'
+                              : 'border border-gray-300 bg-white text-gray-700'
                           }`}>
                             {isSelected ? 'SELECTED' : 'SELECT'}
                           </div>
@@ -831,7 +874,7 @@ const TeacherCourseSelectionPage = () => {
                 onChange={(e) => setAppealMessage(e.target.value)}
                 placeholder="Please explain why you need a workload reduction..."
                 rows="5"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary resize-none"
               />
             </div>
 
@@ -841,14 +884,14 @@ const TeacherCourseSelectionPage = () => {
                   setShowAppealModal(false);
                   setAppealMessage('');
                 }}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50"
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 text-sm hover:bg-gray-50"
                 disabled={appealSubmitting}
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmitAppeal}
-                className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 disabled:opacity-50"
+                className="flex-1 px-4 py-2 bg-primary text-white rounded-lg text-sm disabled:opacity-50"
                 disabled={appealSubmitting || !appealMessage.trim()}
               >
                 {appealSubmitting ? 'Submitting...' : 'Submit Appeal'}

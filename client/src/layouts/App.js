@@ -22,6 +22,7 @@ import TeacherDetailsPage from "../pages/student-teacher_entry/TeacherDetailsPag
 import TeacherStudentMappingPage from "../pages/student-teacher_entry/TeacherStudentMappingPage";
 import CourseAllocationPage from "../pages/curriculum/CourseAllocationPage";
 import ElectiveSelectionPage from "../pages/student/ElectiveSelectionPage";
+import StudentCourseDashboardPage from "../pages/student/StudentCourseDashboardPage";
 import TeacherCourseSelectionPage from "../pages/teacher/TeacherCourseSelectionPage";
 import HRFacultyPage from "../pages/hr/HRFacultyPage";
 import HRAppealsReviewPage from "../pages/hr/HRAppealsReviewPage";
@@ -37,6 +38,7 @@ import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
 import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
+import AdminTeacherCourseAssignmentPage from "../pages/curriculum/AdminTeacherCourseAssignmentPage";
 
 //404 page
 import NotFoundPage from "../components/NotFoundPage";
@@ -101,6 +103,7 @@ function App() {
           <Route path="course-allocation" element={<CourseAllocationPage />} />
           <Route path="elective-selection" element={<ElectiveSelectionPage />} />
           <Route path="student/elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/course-dashboard" element={<StudentCourseDashboardPage />} />
           <Route path="teacher/course-selection" element={<TeacherCourseSelectionPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="hr/faculty" element={<HRFacultyPage />} />
@@ -112,6 +115,7 @@ function App() {
           <Route path="hod/elective-management" element={<HODElectivePage />} />
           <Route path="hod/honour-minor-eligibility" element={<HODHonourMinorEligibilityPage />} />
           <Route path="academic-calendar" element={<AcademicCalendarPage />} />
+          <Route path="admin/teacher-course-assignment" element={<AdminTeacherCourseAssignmentPage />} />
           <Route path="exam-absentees" element={<AbsenteesPage />} />
 
           <Route path="regulations" element={<RegulationPage />} />

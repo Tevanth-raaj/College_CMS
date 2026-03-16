@@ -27,7 +27,7 @@ function Dashboard() {
     if (userRole === 'teacher') {
       navigate('/teacher/course-selection');
     } else if (userRole === 'student') {
-      navigate('/student/elective-selection');
+      navigate('/student/course-dashboard');
     } else if (userRole === 'hr') {
       navigate('/hr/faculty');
     }
