@@ -22,6 +22,7 @@ import TeacherDetailsPage from "../pages/student-teacher_entry/TeacherDetailsPag
 import TeacherStudentMappingPage from "../pages/student-teacher_entry/TeacherStudentMappingPage";
 import CourseAllocationPage from "../pages/curriculum/CourseAllocationPage";
 import ElectiveSelectionPage from "../pages/student/ElectiveSelectionPage";
+import StudentCourseDashboardPage from "../pages/student/StudentCourseDashboardPage";
 import ElectiveExemptionPage from "../pages/student/ElectiveExemptionPage";
 import TeacherCourseSelectionPage from "../pages/teacher/TeacherCourseSelectionPage";
 import HRFacultyPage from "../pages/hr/HRFacultyPage";
@@ -40,6 +41,7 @@ import ResultAnalysisPage from "../pages/curriculum/ResultAnalysisPage";
 import MyAssignedStudentsPage from "../pages/curriculum/MyAssignedStudentsPage";
 import AcademicCalendarPage from "../pages/curriculum/AcademicCalendarPage";
 import AbsenteesPage from "../pages/curriculum/AbsenteesPage";
+import AdminTeacherCourseAssignmentPage from "../pages/curriculum/AdminTeacherCourseAssignmentPage";
 
 //404 page
 import NotFoundPage from "../components/NotFoundPage";
@@ -110,21 +112,13 @@ function App() {
           />
 
           <Route path="course-allocation" element={<CourseAllocationPage />} />
-          <Route
-            path="elective-selection"
-            element={<ElectiveSelectionPage />}
-          />
-          <Route
-            path="student/elective-selection"
-            element={<ElectiveSelectionPage />}
-          />
+          <Route path="elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/elective-selection" element={<ElectiveSelectionPage />} />
+          <Route path="student/course-dashboard" element={<StudentCourseDashboardPage />} />
+          <Route path="teacher/course-selection" element={<TeacherCourseSelectionPage />} />
           <Route
             path="student/elective-exemption"
             element={<ElectiveExemptionPage />}
-          />
-          <Route
-            path="teacher/course-selection"
-            element={<TeacherCourseSelectionPage />}
           />
           <Route path="users" element={<UsersPage />} />
           <Route path="hr/faculty" element={<HRFacultyPage />} />
@@ -139,6 +133,7 @@ function App() {
             element={<HODHonourMinorEligibilityPage />}
           />
           <Route path="academic-calendar" element={<AcademicCalendarPage />} />
+          <Route path="admin/teacher-course-assignment" element={<AdminTeacherCourseAssignmentPage />} />
           <Route path="exam-absentees" element={<AbsenteesPage />} />
 
           <Route path="regulations" element={<RegulationPage />} />

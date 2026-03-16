@@ -504,6 +504,62 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 				f.SetCellValue(sheetName, cell, val)
 			}
 		}
+
+		// Styling: grouped headers + borders + freeze/filter for readability
+		headerTeacherStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#1F4E78"}},
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+		})
+		headerCourseStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#2E7D32"}},
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+		})
+		headerMetricsStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#8A6D3B"}},
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+		})
+		bodyTextStyle, _ := f.NewStyle(&excelize.Style{
+			Alignment: &excelize.Alignment{Vertical: "center", WrapText: true},
+			Border: []excelize.Border{{Type: "left", Color: "#E6E6E6", Style: 1}, {Type: "right", Color: "#E6E6E6", Style: 1}, {Type: "top", Color: "#E6E6E6", Style: 1}, {Type: "bottom", Color: "#E6E6E6", Style: 1}},
+		})
+		bodyNumberStyle, _ := f.NewStyle(&excelize.Style{
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+			Border: []excelize.Border{{Type: "left", Color: "#E6E6E6", Style: 1}, {Type: "right", Color: "#E6E6E6", Style: 1}, {Type: "top", Color: "#E6E6E6", Style: 1}, {Type: "bottom", Color: "#E6E6E6", Style: 1}},
+		})
+
+		lastRow := len(expanded) + 1
+		if lastRow < 2 {
+			lastRow = 2
+		}
+		_ = f.SetCellStyle(sheetName, "A1", "F1", headerTeacherStyle)
+		_ = f.SetCellStyle(sheetName, "G1", "L1", headerCourseStyle)
+		_ = f.SetCellStyle(sheetName, "M1", "Z1", headerMetricsStyle)
+		_ = f.SetCellStyle(sheetName, "A2", "L"+strconv.Itoa(lastRow), bodyTextStyle)
+		_ = f.SetCellStyle(sheetName, "M2", "Z"+strconv.Itoa(lastRow), bodyNumberStyle)
+
+		_ = f.SetRowHeight(sheetName, 1, 26)
+		_ = f.SetPanes(sheetName, &excelize.Panes{Freeze: true, Split: false, XSplit: 0, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+		_ = f.AutoFilter(sheetName, "A1:Z1", []excelize.AutoFilterOptions{})
+
+		_ = f.SetColWidth(sheetName, "A", "A", 14)
+		_ = f.SetColWidth(sheetName, "B", "B", 24)
+		_ = f.SetColWidth(sheetName, "C", "C", 18)
+		_ = f.SetColWidth(sheetName, "D", "F", 14)
+		_ = f.SetColWidth(sheetName, "G", "G", 14)
+		_ = f.SetColWidth(sheetName, "H", "H", 30)
+		_ = f.SetColWidth(sheetName, "I", "J", 18)
+		_ = f.SetColWidth(sheetName, "K", "K", 12)
+		_ = f.SetColWidth(sheetName, "L", "L", 20)
+		_ = f.SetColWidth(sheetName, "M", "M", 10)
+		_ = f.SetColWidth(sheetName, "N", "R", 11)
+		_ = f.SetColWidth(sheetName, "S", "W", 13)
+		_ = f.SetColWidth(sheetName, "X", "Z", 10)
 		f.SetActiveSheet(index)
 		f.DeleteSheet("Sheet1")
 		buffer, err := f.WriteToBuffer()
@@ -609,6 +665,73 @@ func ExportTeacherLimits(w http.ResponseWriter, r *http.Request) {
 			cell, _ := excelize.CoordinatesToCellName(colIndex+1, rowNum)
 			f.SetCellValue(sheetName, cell, value)
 		}
+	}
+
+	// Styling: fixed columns + per-subject block colors + borders + freeze/filter
+	baseHeaderStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#1F4E78"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+	})
+	subjectHeaderStyleA, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#2E7D32"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+	})
+	subjectHeaderStyleB, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#6A1B9A"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#D9D9D9", Style: 1}, {Type: "right", Color: "#D9D9D9", Style: 1}, {Type: "top", Color: "#D9D9D9", Style: 1}, {Type: "bottom", Color: "#D9D9D9", Style: 1}},
+	})
+	bodyStyle, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Vertical: "center", WrapText: true},
+		Border: []excelize.Border{{Type: "left", Color: "#E6E6E6", Style: 1}, {Type: "right", Color: "#E6E6E6", Style: 1}, {Type: "top", Color: "#E6E6E6", Style: 1}, {Type: "bottom", Color: "#E6E6E6", Style: 1}},
+	})
+
+	lastColName, _ := excelize.ColumnNumberToName(len(headers))
+	lastRow := len(exportRows) + 1
+	if lastRow < 2 {
+		lastRow = 2
+	}
+	_ = f.SetCellStyle(sheetName, "A1", "H1", baseHeaderStyle)
+	for i := 1; i <= maxSubjects; i++ {
+		startCol := 9 + ((i - 1) * 6)
+		endCol := startCol + 5
+		startName, _ := excelize.ColumnNumberToName(startCol)
+		endName, _ := excelize.ColumnNumberToName(endCol)
+		if i%2 == 1 {
+			_ = f.SetCellStyle(sheetName, startName+"1", endName+"1", subjectHeaderStyleA)
+		} else {
+			_ = f.SetCellStyle(sheetName, startName+"1", endName+"1", subjectHeaderStyleB)
+		}
+	}
+	_ = f.SetCellStyle(sheetName, "A2", lastColName+strconv.Itoa(lastRow), bodyStyle)
+
+	_ = f.SetRowHeight(sheetName, 1, 26)
+	_ = f.SetPanes(sheetName, &excelize.Panes{Freeze: true, Split: false, XSplit: 0, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+	_ = f.AutoFilter(sheetName, "A1:"+lastColName+"1", []excelize.AutoFilterOptions{})
+
+	_ = f.SetColWidth(sheetName, "A", "A", 14)
+	_ = f.SetColWidth(sheetName, "B", "B", 24)
+	_ = f.SetColWidth(sheetName, "C", "C", 18)
+	_ = f.SetColWidth(sheetName, "D", "F", 14)
+	_ = f.SetColWidth(sheetName, "G", "H", 14)
+	for i := 1; i <= maxSubjects; i++ {
+		semCol, _ := excelize.ColumnNumberToName(9 + ((i - 1) * 6))
+		deptCol, _ := excelize.ColumnNumberToName(10 + ((i - 1) * 6))
+		codeCol, _ := excelize.ColumnNumberToName(11 + ((i - 1) * 6))
+		titleCol, _ := excelize.ColumnNumberToName(12 + ((i - 1) * 6))
+		typeCol, _ := excelize.ColumnNumberToName(13 + ((i - 1) * 6))
+		natureCol, _ := excelize.ColumnNumberToName(14 + ((i - 1) * 6))
+		_ = f.SetColWidth(sheetName, semCol, semCol, 12)
+		_ = f.SetColWidth(sheetName, deptCol, deptCol, 18)
+		_ = f.SetColWidth(sheetName, codeCol, codeCol, 14)
+		_ = f.SetColWidth(sheetName, titleCol, titleCol, 30)
+		_ = f.SetColWidth(sheetName, typeCol, typeCol, 20)
+		_ = f.SetColWidth(sheetName, natureCol, natureCol, 16)
 	}
 
 	f.SetActiveSheet(index)
