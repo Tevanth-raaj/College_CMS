@@ -5,6 +5,7 @@ function SearchBarWithDropdown({
   onChange,
   items = [],
   onSelect,
+  onFocus,
   placeholder = "Search...",
   width = "w-full",
   label = null,
@@ -89,7 +90,10 @@ function SearchBarWithDropdown({
             onChange(e)
             setShowDropdown(true)
           }}
-          onFocus={() => setShowDropdown(true)}
+          onFocus={(e) => {
+            setShowDropdown(true)
+            if (onFocus) onFocus(e)
+          }}
           disabled={disabled}
           placeholder={placeholder}
           className={`w-full px-3 py-3 border-none bg-background rounded-xl outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed transition-all duration-200 placeholder:text-gray-400 ${value ? 'pr-10' : ''}`}

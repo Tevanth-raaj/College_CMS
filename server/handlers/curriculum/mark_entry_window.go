@@ -1636,9 +1636,10 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		filteredWindowID = parsedWindowID
 	}
 
-	// Fetch all enabled windows — we'll filter by time in Go to avoid timezone mismatches
+	// Fetch all enabled windows — we'll filter by time in Go to avoid timezone mismatches.
+	// Build WHERE first, then append ORDER BY so optional filters don't break SQL syntax.
 	windowQuery := `
-		SELECT 
+		SELECT
 			w.id, w.teacher_id, w.department_id, w.semester, w.course_id,
 			w.start_at, w.end_at, w.enabled,
 			COALESCE(d.department_name, '') as department_name,
@@ -1649,13 +1650,16 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN departments d ON w.department_id = d.id
 		LEFT JOIN courses c ON w.course_id = c.id
 		WHERE w.enabled = 1
-		ORDER BY w.end_at DESC
 	`
 
 	var rows *sql.Rows
 	var err error
 	if hasWindowFilter {
 		windowQuery += " AND w.id = ?"
+	}
+	windowQuery += " ORDER BY w.end_at DESC"
+
+	if hasWindowFilter {
 		rows, err = database.Query(windowQuery, filteredWindowID)
 	} else {
 		rows, err = database.Query(windowQuery)

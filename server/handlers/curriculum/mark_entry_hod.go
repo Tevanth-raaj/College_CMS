@@ -1455,7 +1455,7 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 		SELECT
 			DISTINCT
 			s.id,
-			COALESCE(s.enrollment_no, ''),
+			COALESCE(s.register_no, ''),
 			s.student_name
 		FROM course_student_teacher_allocation csta
 		JOIN students s ON s.id = csta.student_id
@@ -1528,9 +1528,9 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 	seenStudents := make(map[int]bool)
 	for rows.Next() {
 		var studentID int
-		var enrollmentNo string
+		var registerID string
 		var studentName string
-		if scanErr := rows.Scan(&studentID, &enrollmentNo, &studentName); scanErr != nil {
+		if scanErr := rows.Scan(&studentID, &registerID, &studentName); scanErr != nil {
 			continue
 		}
 		if seenStudents[studentID] {
@@ -1541,7 +1541,7 @@ func GetTeacherEnteredStudents(w http.ResponseWriter, r *http.Request) {
 		hasEntries := len(components) > 0
 		items = append(items, map[string]interface{}{
 			"student_id":     studentID,
-			"enrollment_no":  enrollmentNo,
+			"register_id":    registerID,
 			"student_name":   studentName,
 			"total_marks":    totalByStudent[studentID],
 			"has_mark_entry": hasEntries,

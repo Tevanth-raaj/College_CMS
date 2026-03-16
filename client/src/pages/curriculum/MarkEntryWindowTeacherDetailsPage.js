@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import * as XLSX from 'xlsx'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
 
@@ -16,6 +17,7 @@ function MarkEntryWindowTeacherDetailsPage() {
 
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [error, setError] = useState('')
   const [students, setStudents] = useState([])
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
@@ -76,6 +78,58 @@ function MarkEntryWindowTeacherDetailsPage() {
     }
   }, [students])
 
+  const getInnovativePracticeBaseName = (name = '') => {
+    const normalized = String(name).replace(/\s+/g, ' ').trim()
+    const match = normalized.match(/^(Innovative Practice\s+[12])\s*-\s*\(\s*[12]\s*\)$/i)
+    return match ? match[1] : null
+  }
+
+  const buildDisplayComponents = (components = []) => {
+    const display = []
+    const groupedMap = new Map()
+
+    components.forEach((component) => {
+      const baseName = getInnovativePracticeBaseName(component.assessment_component_name)
+      if (!baseName) {
+        display.push(component)
+        return
+      }
+
+      const learningModePart = component.learning_mode_id || component.learning_mode || 'na'
+      const key = `${learningModePart}|${baseName.toLowerCase()}`
+
+      if (!groupedMap.has(key)) {
+        groupedMap.set(key, {
+          ...component,
+          assessment_component_name: baseName,
+          assessment_component_ids: [component.assessment_component_id].filter(Boolean),
+        })
+        display.push(groupedMap.get(key))
+        return
+      }
+
+      const grouped = groupedMap.get(key)
+      if (component.assessment_component_id) {
+        grouped.assessment_component_ids.push(component.assessment_component_id)
+      }
+
+      const groupedMarkMissing = grouped.obtained_marks === '' || grouped.obtained_marks === null || grouped.obtained_marks === undefined
+      const componentMarkPresent = component.obtained_marks !== '' && component.obtained_marks !== null && component.obtained_marks !== undefined
+      if (groupedMarkMissing && componentMarkPresent) {
+        grouped.obtained_marks = component.obtained_marks
+      }
+    })
+
+    return display
+  }
+
+  const getDisplayTotalMarks = (displayComponents = []) => {
+    return displayComponents.reduce((sum, component) => {
+      const mark = Number(component?.obtained_marks)
+      return Number.isFinite(mark) ? sum + mark : sum
+    }, 0)
+  }
+
   const formatDateTime = (value) => {
     if (!value) return '-'
     return new Date(value).toLocaleString('en-US', {
@@ -100,6 +154,44 @@ function MarkEntryWindowTeacherDetailsPage() {
     return `Course ${courseId}`
   }
 
+  const downloadStudentDetailsExcel = () => {
+    try {
+      setDownloading(true)
+      const rows = students.map((student) => {
+        const components = Array.isArray(student.components) ? student.components : []
+        const displayComponents = buildDisplayComponents(components)
+        const enteredMarks = displayComponents.length > 0
+          ? displayComponents
+            .map((component) => `${component.assessment_component_name}: ${Number(component.obtained_marks || 0).toFixed(2)}`)
+            .join('; ')
+          : 'Not Updated'
+
+        return {
+          RegisterNo: student.register_id || '-',
+          StudentName: student.student_name || '-',
+          TotalMarks: getDisplayTotalMarks(displayComponents).toFixed(2),
+          Status: student.has_mark_entry ? 'Updated' : 'Not Updated',
+          EnteredMarks: enteredMarks,
+        }
+      })
+
+      const wb = XLSX.utils.book_new()
+      const ws = XLSX.utils.json_to_sheet(rows)
+      XLSX.utils.book_append_sheet(wb, ws, 'Teacher Student Marks')
+
+      const safeTeacher = String(getDisplayName())
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+      const safeCourse = String(courseCode || courseName || courseId || 'course')
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+
+      XLSX.writeFile(wb, `window_${windowId}_${safeTeacher || 'teacher'}_${safeCourse || 'course'}_student_marks.xlsx`)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
     <MainLayout title="Teacher Student Mark Details" subtitle="Live view of entered marks for this teacher in the selected window">
       <div className="space-y-5">
@@ -110,13 +202,22 @@ function MarkEntryWindowTeacherDetailsPage() {
           >
             ← Back to Window Details
           </button>
-          <button
-            onClick={() => loadStudents(true)}
-            disabled={!canFetch || refreshing}
-            className="px-4 py-2 text-sm font-medium text-white bg-primary border border-primary rounded-lg hover:opacity-90 disabled:opacity-60"
-          >
-            {refreshing ? 'Refreshing...' : 'Refresh Now'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={downloadStudentDetailsExcel}
+              disabled={loading || students.length === 0 || downloading}
+              className="px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 disabled:opacity-60"
+            >
+              {downloading ? 'Downloading...' : 'Download Excel'}
+            </button>
+            <button
+              onClick={() => loadStudents(true)}
+              disabled={!canFetch || refreshing}
+              className="px-4 py-2 text-sm font-medium text-white bg-primary border border-primary rounded-lg hover:opacity-90 disabled:opacity-60"
+            >
+              {refreshing ? 'Refreshing...' : 'Refresh Now'}
+            </button>
+          </div>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -165,7 +266,7 @@ function MarkEntryWindowTeacherDetailsPage() {
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Enrollment</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Register No</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Student</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Total Marks</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
@@ -175,12 +276,14 @@ function MarkEntryWindowTeacherDetailsPage() {
                 <tbody className="divide-y divide-gray-100">
                   {students.map((student) => {
                     const components = Array.isArray(student.components) ? student.components : []
+                    const displayComponents = buildDisplayComponents(components)
+                    const displayTotalMarks = getDisplayTotalMarks(displayComponents)
                     const hasMarks = Boolean(student.has_mark_entry)
                     return (
                       <tr key={student.student_id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-sm text-gray-700">{student.enrollment_no || '-'}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">{student.register_id || '-'}</td>
                         <td className="px-4 py-3 text-sm text-gray-800 font-medium">{student.student_name || '-'}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700 text-right">{Number(student.total_marks || 0).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700 text-right">{displayTotalMarks.toFixed(2)}</td>
                         <td className="px-4 py-3 text-sm">
                           {hasMarks ? (
                             <span className="inline-flex items-center px-2 py-1 rounded border text-xs font-medium bg-green-100 text-green-700 border-green-200">Updated</span>
@@ -189,10 +292,10 @@ function MarkEntryWindowTeacherDetailsPage() {
                           )}
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-700">
-                          {hasMarks && components.length > 0 ? (
+                          {hasMarks && displayComponents.length > 0 ? (
                             <div className="flex flex-wrap gap-1">
-                              {components.map((component, index) => (
-                                <span key={`${student.student_id}-${component.assessment_component_id || index}`} className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-700 border border-gray-200">
+                              {displayComponents.map((component, index) => (
+                                <span key={`${student.student_id}-${(component.assessment_component_ids || [component.assessment_component_id || index]).join('-')}`} className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-700 border border-gray-200">
                                   {component.assessment_component_name}: {Number(component.obtained_marks || 0).toFixed(2)}
                                 </span>
                               ))}

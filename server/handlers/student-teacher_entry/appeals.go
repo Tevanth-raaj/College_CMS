@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"server/db"
+
 	"github.com/gorilla/mux"
 )
 
@@ -132,7 +133,7 @@ func GetTeacherPendingAppeal(w http.ResponseWriter, r *http.Request) {
 		ORDER BY created_at DESC
 		LIMIT 1
 	`
-	
+
 	var appeal struct {
 		ID             int       `json:"id"`
 		FacultyID      int       `json:"faculty_id"`
@@ -286,9 +287,9 @@ func UpdateAppealStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var requestData struct {
-		HRAction   string            `json:"hr_action"`
-		HRMessage  string            `json:"hr_message"`
-		NewCounts  []CourseTypeCount `json:"new_counts"` // Array of course type updates
+		HRAction  string            `json:"hr_action"`
+		HRMessage string            `json:"hr_message"`
+		NewCounts []CourseTypeCount `json:"new_counts"` // Array of course type updates
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
@@ -741,10 +742,10 @@ func DeactivateAllocationsForAcademicYear(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":         "Allocations archived and cleared successfully",
-		"archived_count":  archivedCount,
-		"cleared_count":   deletedCount,
-		"academic_year":   academicYear,
+		"message":        "Allocations archived and cleared successfully",
+		"archived_count": archivedCount,
+		"cleared_count":  deletedCount,
+		"academic_year":  academicYear,
 	})
 }
 

@@ -10,6 +10,7 @@ import (
 	"server/db"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -63,7 +64,7 @@ type StudentNullModeWarning struct {
 
 // ReallocationInfo tracks inactive teacher reallocations
 type ReallocationInfo struct {
-	InactiveTeachers []InactiveTeacherInfo `json:"inactive_teachers"`
+	InactiveTeachers  []InactiveTeacherInfo `json:"inactive_teachers"`
 	StudentsRelocated int                   `json:"students_relocated"`
 }
 
@@ -76,20 +77,22 @@ type InactiveTeacherInfo struct {
 
 // AllocationSummary represents the overall allocation result
 type AllocationSummary struct {
-	Success              bool                      `json:"success"`
-	TotalCourses         int                       `json:"total_courses"`
-	SuccessfulCourses    int                       `json:"successful_courses"`
-	FailedCourses        int                       `json:"failed_courses"`
-	TotalStudentsAllocated int                     `json:"total_students_allocated"`
-	ExecutionTime        float64                   `json:"execution_time_seconds"`
-	CourseResults        []CourseAllocationResult  `json:"course_results"`
-	Timestamp            time.Time                 `json:"timestamp"`
+	Success                bool                     `json:"success"`
+	TotalCourses           int                      `json:"total_courses"`
+	SuccessfulCourses      int                      `json:"successful_courses"`
+	FailedCourses          int                      `json:"failed_courses"`
+	TotalStudentsAllocated int                      `json:"total_students_allocated"`
+	ExecutionTime          float64                  `json:"execution_time_seconds"`
+	CourseResults          []CourseAllocationResult `json:"course_results"`
+	Timestamp              time.Time                `json:"timestamp"`
 }
 
 // AllocateStudentsToTeachers - Main endpoint for full student allocation
 func AllocateStudentsToTeachers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	forceRebalance := parseForceRebalance(r)
 
 	startTime := time.Now()
 	log.Println("🎓 STARTING STUDENT-TEACHER-COURSE ALLOCATION")
@@ -116,10 +119,10 @@ func AllocateStudentsToTeachers(w http.ResponseWriter, r *http.Request) {
 	// Process each course
 	for _, course := range courses {
 		log.Printf("\n📖 Processing Course: %s (ID: %d)", course.CourseName, course.CourseID)
-		
-		result := allocateCourse(course.CourseID, course.CourseName)
+
+		result := allocateCourse(course.CourseID, course.CourseName, forceRebalance)
 		summary.CourseResults = append(summary.CourseResults, result)
-		
+
 		if result.Success {
 			summary.SuccessfulCourses++
 			summary.TotalStudentsAllocated += result.AllocatedCount
@@ -146,6 +149,8 @@ func AllocateSingleCourse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	forceRebalance := parseForceRebalance(r)
+
 	vars := mux.Vars(r)
 	courseIDStr := vars["course_id"]
 	courseID, err := strconv.Atoi(courseIDStr)
@@ -170,12 +175,12 @@ func AllocateSingleCourse(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("🎓 Allocating single course: %s (ID: %d)", courseName, courseID)
 
-	result := allocateCourse(courseID, courseName)
+	result := allocateCourse(courseID, courseName, forceRebalance)
 	json.NewEncoder(w).Encode(result)
 }
 
 // allocateCourse - Core allocation logic for a single course
-func allocateCourse(courseID int, courseName string) CourseAllocationResult {
+func allocateCourse(courseID int, courseName string, forceRebalance bool) CourseAllocationResult {
 	result := CourseAllocationResult{
 		CourseID:   courseID,
 		CourseName: courseName,
@@ -220,7 +225,7 @@ func allocateCourse(courseID int, courseName string) CourseAllocationResult {
 	if err != nil {
 		log.Printf("⚠️  Error handling inactive teachers: %v", err)
 	} else if reallocationInfo != nil && len(reallocationInfo.InactiveTeachers) > 0 {
-		log.Printf("♻️  Reallocated %d students from %d inactive teachers", 
+		log.Printf("♻️  Reallocated %d students from %d inactive teachers",
 			reallocationInfo.StudentsRelocated, len(reallocationInfo.InactiveTeachers))
 		result.ReallocationInfo = reallocationInfo
 	}
@@ -250,6 +255,37 @@ func allocateCourse(courseID int, courseName string) CourseAllocationResult {
 
 	log.Printf("📊 Unallocated students: %d UAL, %d PBL", len(unallocatedUAL), len(unallocatedPBL))
 
+	// Step 5b: Optionally rebalance fully allocated courses.
+	// This handles the common case where new teachers are added to an already fully allocated course.
+	if shouldRebalanceCourse(forceRebalance, availableTeachers, existingAllocations, len(unallocatedUAL), len(unallocatedPBL)) {
+		log.Printf("♻️  Rebalancing course %d (force=%v)", courseID, forceRebalance)
+
+		if err := deactivateCourseAllocations(courseID); err != nil {
+			result.Error = fmt.Sprintf("Failed to reset course allocations for rebalance: %v", err)
+			result.ErrorCode = "DATABASE_ERROR"
+			return result
+		}
+
+		// Refresh allocation context after reset.
+		existingAllocations = []ExistingAllocation{}
+
+		unallocatedUAL, err = getUnallocatedStudents(courseID, 1)
+		if err != nil {
+			result.Error = fmt.Sprintf("Failed to fetch UAL students after rebalance reset: %v", err)
+			result.ErrorCode = "DATABASE_ERROR"
+			return result
+		}
+
+		unallocatedPBL, err = getUnallocatedStudents(courseID, 2)
+		if err != nil {
+			result.Error = fmt.Sprintf("Failed to fetch PBL students after rebalance reset: %v", err)
+			result.ErrorCode = "DATABASE_ERROR"
+			return result
+		}
+
+		log.Printf("📊 Rebalance reset complete: %d UAL, %d PBL now unallocated", len(unallocatedUAL), len(unallocatedPBL))
+	}
+
 	// If no students to allocate, return success
 	if len(unallocatedUAL) == 0 && len(unallocatedPBL) == 0 {
 		log.Printf("✅ No unallocated students for course %d", courseID)
@@ -270,8 +306,8 @@ func allocateCourse(courseID int, courseName string) CourseAllocationResult {
 	}
 
 	// Step 7: Build teacher mode mapping from existing allocations
-	teacherModes := make(map[string]int)       // teacher_id -> learning_mode_id
-	teacherLoads := make(map[string]int)       // teacher_id -> current student count
+	teacherModes := make(map[string]int) // teacher_id -> learning_mode_id
+	teacherLoads := make(map[string]int) // teacher_id -> current student count
 
 	for _, alloc := range existingAllocations {
 		teacherModes[alloc.TeacherID] = alloc.LearningModeID
@@ -294,7 +330,7 @@ func allocateCourse(courseID int, courseName string) CourseAllocationResult {
 		}
 	}
 
-	log.Printf("👥 Teacher availability: %d free, %d UAL-locked, %d PBL-locked", 
+	log.Printf("👥 Teacher availability: %d free, %d UAL-locked, %d PBL-locked",
 		len(freeTeachers), len(availableForUAL)-len(freeTeachers), len(availableForPBL)-len(freeTeachers))
 
 	// Step 9: Assign free teachers to modes based on student ratios
@@ -312,7 +348,7 @@ func allocateCourse(courseID int, courseName string) CourseAllocationResult {
 				ualTeachersNeeded = len(freeTeachers) - 1
 			}
 
-			log.Printf("🎯 Assigning %d free teachers: %d to UAL, %d to PBL", 
+			log.Printf("🎯 Assigning %d free teachers: %d to UAL, %d to PBL",
 				len(freeTeachers), ualTeachersNeeded, len(freeTeachers)-ualTeachersNeeded)
 
 			for i, teacher := range freeTeachers {
@@ -326,6 +362,21 @@ func allocateCourse(courseID int, courseName string) CourseAllocationResult {
 	}
 
 	// Step 10: Validate sufficient teachers
+	// If one mode is starved (common after partial manual deletes), reset and reallocate this course.
+	if len(existingAllocations) > 0 {
+		modeStarved := (len(unallocatedUAL) > 0 && len(availableForUAL) == 0) || (len(unallocatedPBL) > 0 && len(availableForPBL) == 0)
+		if modeStarved {
+			log.Printf("♻️  Mode starvation detected for course %d; resetting active allocations and retrying", courseID)
+			if err := deactivateCourseAllocations(courseID); err != nil {
+				result.Error = fmt.Sprintf("Failed to reset allocations after mode starvation: %v", err)
+				result.ErrorCode = "DATABASE_ERROR"
+				return result
+			}
+
+			return allocateCourse(courseID, courseName, false)
+		}
+	}
+
 	if len(unallocatedUAL) > 0 && len(availableForUAL) == 0 {
 		result.Error = "No teachers available for UAL students. Please allocate more teachers to this course."
 		result.ErrorCode = "INSUFFICIENT_TEACHERS"
@@ -778,6 +829,50 @@ func insertBatch(tx *sql.Tx, batch []StudentAllocationMapping) error {
 	`
 
 	_, err := tx.Exec(query, values...)
+	return err
+}
+
+// parseForceRebalance returns true when query parameter force_rebalance is set to true/1/yes.
+func parseForceRebalance(r *http.Request) bool {
+	value := r.URL.Query().Get("force_rebalance")
+	if value == "" {
+		return false
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return normalized == "true" || normalized == "1" || normalized == "yes"
+}
+
+// shouldRebalanceCourse decides whether to reset active allocations and redistribute.
+func shouldRebalanceCourse(forceRebalance bool, availableTeachers []string, existingAllocations []ExistingAllocation, unallocatedUAL int, unallocatedPBL int) bool {
+	if len(existingAllocations) == 0 {
+		return false
+	}
+
+	if forceRebalance {
+		return true
+	}
+
+	// Auto-rebalance only when course is fully allocated but has newly added teachers.
+	if unallocatedUAL > 0 || unallocatedPBL > 0 {
+		return false
+	}
+
+	allocatedTeacherSet := make(map[string]bool)
+	for _, alloc := range existingAllocations {
+		allocatedTeacherSet[alloc.TeacherID] = true
+	}
+
+	return len(availableTeachers) > len(allocatedTeacherSet)
+}
+
+// deactivateCourseAllocations marks all active allocations for the course as inactive.
+func deactivateCourseAllocations(courseID int) error {
+	_, err := db.DB.Exec(`
+		UPDATE course_student_teacher_allocation
+		SET status = 0
+		WHERE course_id = ? AND status = 1
+	`, courseID)
 	return err
 }
 

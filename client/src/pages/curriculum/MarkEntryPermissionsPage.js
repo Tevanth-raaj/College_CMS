@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import * as XLSX from 'xlsx'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
 import SearchBarWithDropdown from '../../components/SearchBarWithDropdown'
@@ -114,6 +115,7 @@ function MarkEntryPermissionsPage() {
   const [availableUsers, setAvailableUsers] = useState([])
   const [selectedUserId, setSelectedUserId] = useState('')
   const [userSearchTerm, setUserSearchTerm] = useState('')
+  const [userRoleFilter, setUserRoleFilter] = useState('all')
   const [students, setStudents] = useState([])
   const [selectedStudents, setSelectedStudents] = useState([])
   const [studentFilters, setStudentFilters] = useState({
@@ -168,11 +170,42 @@ function MarkEntryPermissionsPage() {
   // Load all students when student-assignment tab is opened
   useEffect(() => {
     if (activeTab === 'student-assignment') {
+      fetchAvailableUsers(userSearchTerm)
       fetchStudentsForAssignment()
       fetchUserAssignedWindows()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
+
+  const filteredAvailableUsers = useMemo(() => {
+    const search = userSearchTerm.trim().toLowerCase()
+    const roleFiltered = availableUsers.filter((user) => {
+      if (userRoleFilter === 'all') return true
+      return (user.role || '').toLowerCase() === userRoleFilter
+    })
+
+    const scored = roleFiltered.map((user) => {
+      const username = (user.username || '').toLowerCase()
+      const email = (user.email || '').toLowerCase()
+      const role = (user.role || '').toLowerCase()
+
+      let score = 0
+      if (!search) score = 1
+      else if (username === search) score = 100
+      else if (username.startsWith(search)) score = 80
+      else if (email.startsWith(search)) score = 60
+      else if (username.includes(search)) score = 50
+      else if (email.includes(search)) score = 40
+      else if (role.includes(search)) score = 30
+
+      return { user, score }
+    })
+
+    return scored
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || (a.user.username || '').localeCompare(b.user.username || ''))
+      .map((item) => item.user)
+  }, [availableUsers, userRoleFilter, userSearchTerm])
 
   // Reload students when Window Scope department changes
   useEffect(() => {
@@ -1083,6 +1116,73 @@ function MarkEntryPermissionsPage() {
     }
   }
 
+  const downloadWindowTeacherDetails = async (win) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?window_id=${win.id}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'Failed to fetch window details for export')
+      }
+
+      const data = await res.json()
+      const details = Array.isArray(data) && data.length > 0 ? data[0] : null
+      if (!details) {
+        setMessage({ type: 'error', text: 'No teacher data found for this window.' })
+        return
+      }
+
+      const teacherRows = [
+        ...(Array.isArray(details.pending_teachers) ? details.pending_teachers : []).map((teacher) => ({
+          WindowID: details.window_id,
+          WindowName: details.window_name || '',
+          Department: details.department_name || 'All',
+          Semester: details.semester || 'All',
+          CourseCode: teacher.course_code || details.course_code || '',
+          CourseName: teacher.course_name || details.course_name || '',
+          TeacherID: teacher.teacher_id || '',
+          TeacherName: teacher.teacher_name || '',
+          LearningModes: Array.isArray(teacher.learning_modes) ? teacher.learning_modes.join(', ') : '',
+          SubmissionStatus: 'Pending',
+          SubmittedAt: '',
+          StartAt: details.start_at || '',
+          EndAt: details.end_at || '',
+        })),
+        ...(Array.isArray(details.completed_teachers) ? details.completed_teachers : []).map((teacher) => ({
+          WindowID: details.window_id,
+          WindowName: details.window_name || '',
+          Department: details.department_name || 'All',
+          Semester: details.semester || 'All',
+          CourseCode: teacher.course_code || details.course_code || '',
+          CourseName: teacher.course_name || details.course_name || '',
+          TeacherID: teacher.teacher_id || '',
+          TeacherName: teacher.teacher_name || '',
+          LearningModes: Array.isArray(teacher.learning_modes) ? teacher.learning_modes.join(', ') : '',
+          SubmissionStatus: 'Completed',
+          SubmittedAt: teacher.submitted_at || '',
+          StartAt: details.start_at || '',
+          EndAt: details.end_at || '',
+        })),
+      ]
+
+      if (teacherRows.length === 0) {
+        setMessage({ type: 'error', text: 'No teacher data found for this window.' })
+        return
+      }
+
+      const wb = XLSX.utils.book_new()
+      const ws = XLSX.utils.json_to_sheet(teacherRows)
+      XLSX.utils.book_append_sheet(wb, ws, 'Teacher Details')
+
+      const safeName = String(details.window_name || `window_${details.window_id}`)
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+      XLSX.writeFile(wb, `mark_window_${safeName || details.window_id}_teachers.xlsx`)
+    } catch (error) {
+      console.error('Error downloading teacher details export:', error)
+      setMessage({ type: 'error', text: error.message || 'Failed to download teacher details.' })
+    }
+  }
+
   // Student Assignment Functions
   const fetchAvailableUsers = async (search = '') => {
     try {
@@ -1093,6 +1193,14 @@ function MarkEntryPermissionsPage() {
       console.error('Error fetching users:', error)
       setMessage({ type: 'error', text: 'Failed to load users.' })
     }
+  }
+
+  const handleUserSearchFocus = () => {
+    // On box click/focus, show full list for current role filter instead of narrowing to selected label text.
+    if (userSearchTerm.trim() !== '') {
+      setUserSearchTerm('')
+    }
+    fetchAvailableUsers('')
   }
 
   const fetchStudentsForAssignment = async () => {
@@ -1682,6 +1790,28 @@ function MarkEntryPermissionsPage() {
                 {/* User Selection */}
                 <div className="p-6 border-b border-gray-100">
                   <h4 className="text-sm font-semibold text-gray-700 mb-3">Select User</h4>
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    {[
+                      { key: 'all', label: 'All Roles' },
+                      { key: 'teacher', label: 'Teacher' },
+                      { key: 'hod', label: 'HOD' },
+                      { key: 'coe', label: 'COE' },
+                      { key: 'admin', label: 'Admin' },
+                    ].map((roleItem) => (
+                      <button
+                        key={roleItem.key}
+                        type="button"
+                        onClick={() => setUserRoleFilter(roleItem.key)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-full border transition-colors ${
+                          userRoleFilter === roleItem.key
+                            ? 'bg-primary text-white border-primary'
+                            : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        {roleItem.label}
+                      </button>
+                    ))}
+                  </div>
                   <div className="relative user-search-container">
                     <SearchBarWithDropdown
                       value={userSearchTerm}
@@ -1689,20 +1819,13 @@ function MarkEntryPermissionsPage() {
                         setUserSearchTerm(e.target.value)
                         fetchAvailableUsers(e.target.value)
                       }}
-                      onFocus={() => fetchAvailableUsers(userSearchTerm)}
-                      items={availableUsers}
+                      onFocus={handleUserSearchFocus}
+                      items={filteredAvailableUsers}
                       onSelect={(user) => {
                         setSelectedUserId(user.username)
-                        setUserSearchTerm(`${user.username} (${user.email}) - ${user.role}`)
+                        setUserSearchTerm(user.username)
                       }}
-                      filterFunction={(user, term) => {
-                        const search = term.toLowerCase()
-                        return (
-                          user.username.toLowerCase().includes(search) ||
-                          user.email.toLowerCase().includes(search) ||
-                          user.role.toLowerCase().includes(search)
-                        )
-                      }}
+                      filterFunction={() => true}
                       renderItem={(user) => (
                         <div className={selectedUserId === user.username ? 'bg-blue-50' : ''}>
                           <div className="font-medium text-gray-900">{user.username}</div>
@@ -1715,12 +1838,25 @@ function MarkEntryPermissionsPage() {
                       getItemKey={(user) => user.id}
                       label="User"
                       placeholder="Search users by name, email, or role..."
-                      width="w-1/3"
+                      width="w-full md:w-2/3"
                     />
                   </div>
+                  <p className="mt-2 text-xs text-gray-500">
+                    Showing {filteredAvailableUsers.length} user{filteredAvailableUsers.length === 1 ? '' : 's'}
+                  </p>
                   {selectedUserId && (
                     <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm text-green-800">
                       ✓ Selected: <span className="font-semibold">{selectedUserId}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedUserId('')
+                          setUserSearchTerm('')
+                        }}
+                        className="ml-3 text-xs font-semibold text-green-700 underline hover:text-green-900"
+                      >
+                        Clear
+                      </button>
                     </div>
                   )}
                 </div>
@@ -2081,6 +2217,12 @@ function MarkEntryPermissionsPage() {
                                 className="px-3 py-1.5 text-xs text-primary hover:bg-blue-50 rounded-lg font-medium transition-colors"
                               >
                                 View Details
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); downloadWindowTeacherDetails(win) }}
+                                className="px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 rounded-lg font-medium transition-colors"
+                              >
+                                Download Excel
                               </button>
                               <button onClick={(e) => { e.stopPropagation(); editWindow(win); setMainTab('create'); setActiveTab('windows') }}
                                 className="px-3 py-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-lg font-medium transition-colors">Edit</button>
