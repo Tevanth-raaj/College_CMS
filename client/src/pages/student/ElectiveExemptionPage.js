@@ -39,10 +39,11 @@ const requestTypeOptions = [
   },
 ];
 
-const semesterOptions = [4, 5, 6, 7, 8];
+const professionalElectiveOptions = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const internshipSectorOptions = ["Government", "Private"];
 
 const initialFormState = {
-  elective_semester_no: "4",
+  professional_elective_no: "1",
   online_course_name: "",
   course_type: "",
   start_date: "",
@@ -50,6 +51,7 @@ const initialFormState = {
   course_duration_weeks: "",
   certificate_url: "",
   industry_name: "",
+  industry_contact: "",
   sector: "",
   industry_address: "",
   city: "",
@@ -98,10 +100,6 @@ function ElectiveExemptionPage() {
       return "Student email is not available in the current session.";
     }
 
-    if (!formData.elective_semester_no) {
-      return "Select the elective semester number.";
-    }
-
     if (!formData.certificate_url.trim() && !certificateFile) {
       return "Attach a certificate file or provide the certificate URL.";
     }
@@ -125,6 +123,7 @@ function ElectiveExemptionPage() {
 
     if (selectedType === "NPTEL") {
       if (
+        !formData.professional_elective_no ||
         !formData.online_course_name.trim() ||
         !formData.course_type.trim() ||
         !formData.start_date ||
@@ -137,11 +136,23 @@ function ElectiveExemptionPage() {
       if (Number(formData.course_duration_weeks) <= 0) {
         return "Course duration in weeks must be greater than zero.";
       }
+
+      if (
+        Number(formData.professional_elective_no) < 1 ||
+        Number(formData.professional_elective_no) > 9
+      ) {
+        return "Professional elective number must be between 1 and 9.";
+      }
     }
 
     if (selectedType === "INTERNSHIP") {
+      if (!formData.professional_elective_no) {
+        return "Select the professional elective number.";
+      }
+
       const requiredFields = [
         formData.industry_name,
+        formData.industry_contact,
         formData.sector,
         formData.industry_address,
         formData.city,
@@ -165,6 +176,13 @@ function ElectiveExemptionPage() {
 
       if (Number(formData.stipend_amount) < 0) {
         return "Stipend amount cannot be negative.";
+      }
+
+      if (
+        Number(formData.professional_elective_no) < 1 ||
+        Number(formData.professional_elective_no) > 9
+      ) {
+        return "Professional elective number must be between 1 and 9.";
       }
     }
 
@@ -195,7 +213,6 @@ function ElectiveExemptionPage() {
       const payload = new FormData();
       payload.append("student_email", userEmail);
       payload.append("request_type", selectedType);
-      payload.append("elective_semester_no", formData.elective_semester_no);
       payload.append("certificate_url", formData.certificate_url.trim());
 
       if (certificateFile) {
@@ -203,6 +220,10 @@ function ElectiveExemptionPage() {
       }
 
       if (selectedType === "NPTEL") {
+        payload.append(
+          "professional_elective_no",
+          formData.professional_elective_no,
+        );
         payload.append(
           "online_course_name",
           formData.online_course_name.trim(),
@@ -214,7 +235,12 @@ function ElectiveExemptionPage() {
       }
 
       if (selectedType === "INTERNSHIP") {
+        payload.append(
+          "professional_elective_no",
+          formData.professional_elective_no,
+        );
         payload.append("industry_name", formData.industry_name.trim());
+        payload.append("industry_contact", formData.industry_contact.trim());
         payload.append("sector", formData.sector.trim());
         payload.append("industry_address", formData.industry_address.trim());
         payload.append("city", formData.city.trim());
@@ -265,31 +291,31 @@ function ElectiveExemptionPage() {
   const renderCommonFields = () => (
     <div className="grid gap-5 lg:grid-cols-2">
       <div>
-        <label className={labelClassName}>Elective semester number</label>
-          <select
-            name="elective_semester_no"
-            value={formData.elective_semester_no}
-            onChange={handleChange}
-            className={adminInputClassName}
-          >
-            {semesterOptions.map((semester) => (
-              <option key={semester} value={semester}>
-                Semester {semester}
-              </option>
-            ))}
-          </select>
+        <label className={labelClassName}>Professional elective number</label>
+        <select
+          name="professional_elective_no"
+          value={formData.professional_elective_no}
+          onChange={handleChange}
+          className={adminInputClassName}
+        >
+          {professionalElectiveOptions.map((electiveNo) => (
+            <option key={electiveNo} value={electiveNo}>
+              Professional Elective {electiveNo}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div>
         <label className={labelClassName}>Certificate URL</label>
-          <input
-            type="url"
-            name="certificate_url"
-            value={formData.certificate_url}
-            onChange={handleChange}
-            placeholder="https://..."
-            className={adminInputClassName}
-          />
+        <input
+          type="url"
+          name="certificate_url"
+          value={formData.certificate_url}
+          onChange={handleChange}
+          placeholder="https://..."
+          className={adminInputClassName}
+        />
       </div>
 
       <div className="lg:col-span-2">
@@ -325,8 +351,13 @@ function ElectiveExemptionPage() {
   const renderNptelFields = () => (
     <div className={`${adminSectionCardClass} grid gap-5 md:grid-cols-2`}>
       <div className="md:col-span-2">
-        <h4 className="text-base font-semibold text-gray-900">Online course details</h4>
-        <p className="mt-1 text-sm text-gray-500">Enter the certified course information exactly as it appears on the completion proof.</p>
+        <h4 className="text-base font-semibold text-gray-900">
+          Online course details
+        </h4>
+        <p className="mt-1 text-sm text-gray-500">
+          Enter the certified course information exactly as it appears on the
+          completion proof.
+        </p>
       </div>
       <div className="md:col-span-2">
         <label className={labelClassName}>Online course name</label>
@@ -390,8 +421,13 @@ function ElectiveExemptionPage() {
   const renderInternshipFields = () => (
     <div className={`${adminSectionCardClass} grid gap-5 md:grid-cols-2`}>
       <div className="md:col-span-2">
-        <h4 className="text-base font-semibold text-gray-900">Internship details</h4>
-        <p className="mt-1 text-sm text-gray-500">Provide the organization, duration, and attendance details for the internship or industrial training.</p>
+        <h4 className="text-base font-semibold text-gray-900">
+          Internship details
+        </h4>
+        <p className="mt-1 text-sm text-gray-500">
+          Provide the organization, duration, and attendance details for the
+          internship or industrial training.
+        </p>
       </div>
       <div>
         <label className={labelClassName}>Industry name</label>
@@ -405,14 +441,32 @@ function ElectiveExemptionPage() {
       </div>
 
       <div>
-        <label className={labelClassName}>Sector</label>
+        <label className={labelClassName}>Industry contact</label>
         <input
           type="text"
+          name="industry_contact"
+          value={formData.industry_contact}
+          onChange={handleChange}
+          placeholder="Contact person / number"
+          className={adminInputClassName}
+        />
+      </div>
+
+      <div>
+        <label className={labelClassName}>Sector</label>
+        <select
           name="sector"
           value={formData.sector}
           onChange={handleChange}
           className={adminInputClassName}
-        />
+        >
+          <option value="">Select sector</option>
+          {internshipSectorOptions.map((sectorOption) => (
+            <option key={sectorOption} value={sectorOption}>
+              {sectorOption}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="md:col-span-2">
@@ -548,7 +602,10 @@ function ElectiveExemptionPage() {
               </h2>
             </div>
             <div className="rounded-lg border border-primary-100 bg-primary-50 px-4 py-3 text-sm text-gray-600">
-              Student email: <span className="font-medium text-primary">{userEmail || "Not available"}</span>
+              Student email:{" "}
+              <span className="font-medium text-primary">
+                {userEmail || "Not available"}
+              </span>
             </div>
           </div>
         </div>
@@ -556,7 +613,9 @@ function ElectiveExemptionPage() {
         <div className={adminSectionCardClass}>
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-lg font-semibold text-gray-900">Request type</h3>
+              <h3 className="text-lg font-semibold text-gray-900">
+                Request type
+              </h3>
               <p className="mt-1 text-sm text-gray-500">
                 Choose the exemption category you want to apply for.
               </p>
@@ -585,7 +644,9 @@ function ElectiveExemptionPage() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-3 text-sm text-gray-600">{option.description}</p>
+                  <p className="mt-3 text-sm text-gray-600">
+                    {option.description}
+                  </p>
                 </button>
               );
             })}
@@ -604,9 +665,14 @@ function ElectiveExemptionPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className={`${adminSectionCardClass} space-y-6`}>
+        <form
+          onSubmit={handleSubmit}
+          className={`${adminSectionCardClass} space-y-6`}
+        >
           <div className="border-b border-primary-100 pb-5">
-            <h3 className="text-xl font-semibold text-gray-900">{activeOption?.label}</h3>
+            <h3 className="text-xl font-semibold text-gray-900">
+              {activeOption?.label}
+            </h3>
             <p className="mt-1 text-sm text-gray-500">
               Fill the required details and attach the supporting proof.
             </p>
@@ -617,9 +683,12 @@ function ElectiveExemptionPage() {
 
           <div className={adminSectionCardClass}>
             <div className="mb-5">
-              <h4 className="text-base font-semibold text-gray-900">Proof and elective mapping</h4>
+              <h4 className="text-base font-semibold text-gray-900">
+                Proof and elective mapping
+              </h4>
               <p className="mt-1 text-sm text-gray-500">
-                Select the semester slot and provide the certificate proof for review.
+                Select the semester slot and provide the certificate proof for
+                review.
               </p>
             </div>
             {renderCommonFields()}

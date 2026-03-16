@@ -222,6 +222,8 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/hod/profile", curriculum.GetHODProfile).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/electives/available", curriculum.GetAvailableElectives).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/electives/save", curriculum.SaveHODSelections).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/hod/elective-exemption-requests", curriculum.GetHODElectiveExemptionRequests).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/hod/elective-exemption-requests/{id}/status", curriculum.UpdateHODElectiveExemptionRequestStatus).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/hod/batches", curriculum.GetHODBatches).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/elective-slots", curriculum.GetElectiveSemesterSlots).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/hod/honour-minor-eligibility/template", curriculum.DownloadHonourMinorEligibilityTemplate).Methods("GET", "OPTIONS")
@@ -312,6 +314,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/students/electives/selections", studentteacher.GetStudentElectiveSelections).Methods("GET", "OPTIONS") // ?email=
 	router.HandleFunc("/api/students/course-dashboard", studentteacher.GetStudentCourseDashboard).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/students/elective-exemption-requests", studentteacher.CreateElectiveExemptionRequest).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/students/elective-exemption-requests", studentteacher.GetStudentElectiveExemptionRequests).Methods("GET", "OPTIONS")
 
 	// HR routes
 	router.HandleFunc("/api/hr/faculty", studentteacher.GetAllFaculty).Methods("GET", "OPTIONS")
