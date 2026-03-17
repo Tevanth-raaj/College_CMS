@@ -441,7 +441,7 @@ function TeacherDetailsPage() {
                       <option value="">Select Department</option>
                       {departments.map((dept) => (
                         <option key={dept.id} value={dept.id}>
-                          {dept.department_name}
+                          {dept.name}
                         </option>
                       ))}
                     </select>

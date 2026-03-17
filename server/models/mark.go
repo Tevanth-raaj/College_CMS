@@ -178,6 +178,7 @@ type AssignedStudentInfo struct {
 	WindowStart    string `json:"window_start"`
 	WindowEnd      string `json:"window_end"`
 	CourseID       *int   `json:"course_id,omitempty"`
+	CourseCode     string `json:"course_code,omitempty"`
 	CourseName     string `json:"course_name,omitempty"`
 	LearningModeID *int   `json:"learning_mode_id"`
 }

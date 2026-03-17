@@ -61,43 +61,110 @@ function TeacherCourseStudentsPage() {
 
     try {
       const teacherID = localStorage.getItem('teacherId') || localStorage.getItem('teacher_id')
-      if (!teacherID) {
-        setError('Teacher ID not found. Please login again.')
+      const userIdentifier = localStorage.getItem('username') || teacherID
+      const courseIdInt = parseInt(courseId, 10)
+
+      if (!userIdentifier) {
+        setError('User identifier not found. Please login again.')
         setLoading(false)
         return
       }
-      
-      const url = `${API_BASE_URL}/teachers/${teacherID}/courses`
-      const response = await fetch(url)
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch course details')
+      let foundCourse = null
+
+      if (teacherID) {
+        const url = `${API_BASE_URL}/teachers/${teacherID}/courses`
+        const response = await fetch(url)
+        if (response.ok) {
+          const data = await response.json()
+          foundCourse = Array.isArray(data)
+            ? data.find((c) => c.id === courseIdInt)
+            : null
+        }
       }
 
-      const data = await response.json()
-      const foundCourse = data.find(c => c.id === parseInt(courseId))
+      // Fallback for user-window route if teacher course not found or teacher course exists without active window
+      let assignedStudentList = []
+      const tryAssignedWindowFallback = async () => {
+        const assignedUrl = `${API_BASE_URL}/mark-entry/user-assigned-students?user_id=${encodeURIComponent(userIdentifier)}&course_id=${courseIdInt}`
+        const assignedResponse = await fetch(assignedUrl)
+        if (!assignedResponse.ok) return []
+
+        const assignedData = await assignedResponse.json()
+        return Array.isArray(assignedData) ? assignedData : []
+      }
+
+      if (!foundCourse || !foundCourse.has_window) {
+        assignedStudentList = await tryAssignedWindowFallback()
+
+        if (assignedStudentList.length > 0) {
+          const first = assignedStudentList[0]
+          const windowPayload = {
+            id: first.window_id,
+            start_at: first.window_start,
+            end_at: first.window_end,
+          }
+
+          if (!foundCourse) {
+            foundCourse = {
+              id: courseIdInt,
+              course_id: first.course_id || courseIdInt,
+              course_code: first.course_code || '',
+              course_name: first.course_name || '',
+              has_window: true,
+              window: windowPayload,
+              is_submitted: false,
+              submitted_at: null,
+              has_missed_submission: false,
+              missed_window: null,
+              submitted_expired_window: null,
+            }
+          } else {
+            // Preserve existing teacher course metadata and overlay user-assigned window
+            foundCourse.has_window = true
+            foundCourse.window = windowPayload
+            foundCourse.is_submitted = foundCourse.is_submitted || false
+            foundCourse.submitted_at = foundCourse.submitted_at || null
+          }
+        }
+      }
+
+      if (!foundCourse) {
+        setError('Course not found')
+        setLoading(false)
+        return
+      }
+
+      setCourse(foundCourse)
+
+      if (assignedStudentList.length > 0) {
+        setStudents(assignedStudentList)
+      } else {
+        setStudents(foundCourse.enrollments || [])
+      }
 
       if (foundCourse) {
+        const activeStudents = assignedStudentList.length > 0 ? assignedStudentList : (foundCourse.enrollments || [])
         setCourse(foundCourse)
-        setStudents(foundCourse.enrollments || [])
+        setStudents(activeStudents)
+
+        const idForAppeal = teacherID || userIdentifier
+        const courseIdParam = foundCourse.course_id || foundCourse.id
+
         if (foundCourse.has_window && foundCourse.window) {
-          // Seed submission info directly from the course payload (already computed by the server)
           setSubmissionInfo({
             submitted: foundCourse.is_submitted === true,
             submitted_at: foundCourse.submitted_at || null,
           })
-          // Always fetch appeal status using the correct course_id (courses.id, not allocation row id)
-          fetchAppealStatus(teacherID, foundCourse.course_id, foundCourse.window.id)
+          fetchAppealStatus(idForAppeal, courseIdParam, foundCourse.window.id)
         } else if (!foundCourse.has_window && foundCourse.submitted_expired_window) {
-          // Window expired but teacher DID submit — seed submission info + fetch appeal status
           setSubmissionInfo({
             submitted: true,
             submitted_at: foundCourse.submitted_expired_window.submitted_at || null,
           })
-          fetchAppealStatus(teacherID, foundCourse.course_id, foundCourse.submitted_expired_window.id)
+          fetchAppealStatus(idForAppeal, courseIdParam, foundCourse.submitted_expired_window.id)
         } else if (!foundCourse.has_window && foundCourse.missed_window) {
-          // Expired window — fetch both submission + appeal status
-          fetchExpiredWindowStatus(teacherID, foundCourse.course_id, foundCourse.missed_window.id)
+          fetchExpiredWindowStatus(idForAppeal, courseIdParam, foundCourse.missed_window.id)
         }
       } else {
         setError('Course not found')

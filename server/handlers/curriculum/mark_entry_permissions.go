@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,73 @@ import (
 	"server/db"
 	"server/models"
 )
+
+// resolveNumericUserID resolves user identifier from username, numeric id, or teacher mapping.
+func resolveNumericUserID(database *sql.DB, identifier string) (int, error) {
+	if identifier == "" {
+		return 0, sql.ErrNoRows
+	}
+
+	// Direct numeric user id path
+	if parsedID, err := strconv.Atoi(identifier); err == nil && parsedID > 0 {
+		var numericUserID int
+		err = database.QueryRow(`SELECT id FROM users WHERE id = ? AND is_active = 1`, parsedID).Scan(&numericUserID)
+		if err == nil {
+			return numericUserID, nil
+		}
+		if err != sql.ErrNoRows {
+			return 0, err
+		}
+
+		// Try to map teacher data to a user account via faculty_id or teacher id
+		var teacherEmail sql.NullString
+		err = database.QueryRow(`SELECT email FROM teachers WHERE faculty_id = ? OR id = ?`, identifier, identifier).Scan(&teacherEmail)
+		if err == nil && teacherEmail.Valid {
+			err = database.QueryRow(`SELECT id FROM users WHERE email = ? AND is_active = 1`, teacherEmail.String).Scan(&numericUserID)
+			if err == nil {
+				return numericUserID, nil
+			}
+			if err != sql.ErrNoRows {
+				return 0, err
+			}
+		}
+
+		return 0, sql.ErrNoRows
+	}
+
+	// Non-numeric path: username or email
+	var numericUserID int
+	err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, identifier).Scan(&numericUserID)
+	if err == nil {
+		return numericUserID, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	err = database.QueryRow(`SELECT id FROM users WHERE email = ? AND is_active = 1`, identifier).Scan(&numericUserID)
+	if err == nil {
+		return numericUserID, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	// try teacher mapping by faculty_id or teacher id-> user email
+	var teacherEmail sql.NullString
+	err = database.QueryRow(`SELECT email FROM teachers WHERE faculty_id = ? OR id = ?`, identifier, identifier).Scan(&teacherEmail)
+	if err == nil && teacherEmail.Valid {
+		err = database.QueryRow(`SELECT id FROM users WHERE email = ? AND is_active = 1`, teacherEmail.String).Scan(&numericUserID)
+		if err == nil {
+			return numericUserID, nil
+		}
+		if err != sql.ErrNoRows {
+			return 0, err
+		}
+	}
+
+	return 0, sql.ErrNoRows
+}
 
 // GetMarkEntryPermissions returns all mark categories with enabled status for a course and teacher.
 func GetMarkEntryPermissions(w http.ResponseWriter, r *http.Request) {
@@ -319,12 +387,15 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 	departmentIDStr := r.URL.Query().Get("department_id")
 	yearStr := r.URL.Query().Get("year")
 	semester := r.URL.Query().Get("semester")
+	learningMode := strings.TrimSpace(strings.ToUpper(r.URL.Query().Get("learning_mode"))) // UAL / PBL / UAL&PBL
+	limitStr := r.URL.Query().Get("limit")
 
 	query := `
 		SELECT 
 			s.id,
 			s.enrollment_no,
 			s.student_name,
+			COALESCE(s.learning_mode_id, 2) AS learning_mode_id,
 			ad.department,
 			ad.year,
 			ad.semester,
@@ -363,13 +434,32 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 		args = append(args, semester)
 	}
 
+	if learningMode != "" && learningMode != "ALL" && learningMode != "UAL&PBL" {
+		if learningMode == "UAL" {
+			query += " AND COALESCE(s.learning_mode_id, 2) = ?"
+			args = append(args, 1)
+		} else if learningMode == "PBL" {
+			query += " AND COALESCE(s.learning_mode_id, 2) = ?"
+			args = append(args, 2)
+		}
+	}
+
 	if searchQuery != "" {
 		query += " AND (s.enrollment_no LIKE ? OR s.student_name LIKE ?)"
 		searchPattern := "%" + searchQuery + "%"
 		args = append(args, searchPattern, searchPattern)
 	}
 
-	query += " ORDER BY s.student_name ASC LIMIT 500"
+	query += " ORDER BY s.student_name ASC"
+	// Default limit to 5000 to avoid unbounded result sets, but allow override
+	maxLimit := 5000
+	if limitStr != "" {
+		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 && parsedLimit <= 20000 {
+			maxLimit = parsedLimit
+		}
+	}
+	query += " LIMIT ?"
+	args = append(args, maxLimit)
 
 	rows, err := database.Query(query, args...)
 	if err != nil {
@@ -383,18 +473,23 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var studentID int
 		var studentName string
+		var learningModeID sql.NullInt64
 		var enrollmentNo, department, batch sql.NullString
 		var year, semester sql.NullInt64
 
-		err := rows.Scan(&studentID, &enrollmentNo, &studentName, &department, &year, &semester, &batch)
+		err := rows.Scan(&studentID, &enrollmentNo, &studentName, &learningModeID, &department, &year, &semester, &batch)
 		if err != nil {
 			log.Printf("Error scanning student: %v", err)
 			continue
 		}
 
 		student := map[string]interface{}{
-			"student_id":   studentID,
-			"student_name": studentName,
+			"student_id":       studentID,
+			"student_name":     studentName,
+			"learning_mode_id": 2,
+		}
+		if learningModeID.Valid {
+			student["learning_mode_id"] = int(learningModeID.Int64)
 		}
 
 		if enrollmentNo.Valid {
@@ -709,25 +804,19 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve numeric user ID (accept numeric ID directly or lookup by username)
-	var numericUserID int
-	if parsedID, err := strconv.Atoi(userIdentifier); err == nil && parsedID > 0 {
-		numericUserID = parsedID
-		log.Printf("[DEBUG] GetUserAssignedStudents: Using numeric user_id=%d", numericUserID)
-	} else {
-		err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, userIdentifier).Scan(&numericUserID)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				log.Printf("[ERROR] GetUserAssignedStudents: User '%s' not found or inactive", userIdentifier)
-				http.Error(w, "User not found or inactive", http.StatusBadRequest)
-			} else {
-				log.Printf("[ERROR] GetUserAssignedStudents: Error looking up user ID: %v", err)
-				http.Error(w, "Failed to lookup user", http.StatusInternalServerError)
-			}
+	// Resolve numeric user ID from username/user_id/teacher mapping
+	numericUserID, err := resolveNumericUserID(database, userIdentifier)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("[ERROR] GetUserAssignedStudents: User '%s' not found or inactive", userIdentifier)
+			http.Error(w, "User not found or inactive", http.StatusBadRequest)
 			return
 		}
-		log.Printf("[DEBUG] GetUserAssignedStudents: Resolved username '%s' to user_id=%d", userIdentifier, numericUserID)
+		log.Printf("[ERROR] GetUserAssignedStudents: Error resolving user ID for '%s': %v", userIdentifier, err)
+		http.Error(w, "Failed to lookup user", http.StatusInternalServerError)
+		return
 	}
+	log.Printf("[DEBUG] GetUserAssignedStudents: Resolved user identifier '%s' to user_id=%d", userIdentifier, numericUserID)
 
 	log.Printf("[INFO] GetUserAssignedStudents: user_id=%s resolved_user_id=%d course_id=%v now=%s", userIdentifier, numericUserID, courseID, time.Now().Format("2006-01-02 15:04:05"))
 
@@ -743,6 +832,7 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 			mew.start_at,
 			mew.end_at,
 			mew.course_id,
+			COALESCE(c.course_code, '') as course_code,
 			COALESCE(c.course_name, '') as course_name,
 			s.learning_mode_id,
 			COALESCE(s.register_no, '') as register_no
@@ -771,7 +861,7 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 
 	// Check windows before executing main query
 	var windowCount int
-	err := database.QueryRow(`
+	err = database.QueryRow(`
 		SELECT COUNT(*) FROM mark_entry_windows 
 		WHERE user_id = ? AND enabled = 1 AND start_at <= ? AND end_at > ?
 	`, numericUserID, now, now).Scan(&windowCount)
@@ -811,6 +901,7 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		var student models.AssignedStudentInfo
 		var startAt, endAt time.Time
 		var courseIDNull sql.NullInt64
+		var courseCode sql.NullString
 		var courseName sql.NullString
 		var enrollmentNo sql.NullString
 		var registerNo sql.NullString
@@ -825,6 +916,7 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 			&startAt,
 			&endAt,
 			&courseIDNull,
+			&courseCode,
 			&courseName,
 			&student.LearningModeID,
 			&registerNo,
@@ -840,6 +932,9 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		if courseIDNull.Valid {
 			id := int(courseIDNull.Int64)
 			student.CourseID = &id
+		}
+		if courseCode.Valid {
+			student.CourseCode = courseCode.String
 		}
 		if courseName.Valid {
 			student.CourseName = courseName.String
@@ -969,22 +1064,17 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve numeric user ID (accept numeric ID directly or lookup by username)
-	var numericUserID int
-	if parsedID, err := strconv.Atoi(userIdentifier); err == nil && parsedID > 0 {
-		numericUserID = parsedID
-	} else {
-		err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, userIdentifier).Scan(&numericUserID)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				log.Printf("GetUserCourses: User '%s' not found or inactive", userIdentifier)
-				http.Error(w, "User not found or inactive", http.StatusBadRequest)
-			} else {
-				log.Printf("Error looking up user ID: %v", err)
-				http.Error(w, "Failed to lookup user", http.StatusInternalServerError)
-			}
+	// Resolve numeric user ID from username/user_id/teacher mapping
+	numericUserID, err := resolveNumericUserID(database, userIdentifier)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("GetUserCourses: User '%s' not found or inactive", userIdentifier)
+			http.Error(w, "User not found or inactive", http.StatusBadRequest)
 			return
 		}
+		log.Printf("GetUserCourses: Error resolving user ID for '%s': %v", userIdentifier, err)
+		http.Error(w, "Failed to lookup user", http.StatusInternalServerError)
+		return
 	}
 
 	log.Printf("GetUserCourses: Looking up courses for username='%s', user_id=%d", userIdentifier, numericUserID)
@@ -1033,6 +1123,23 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		WindowID   int    `json:"window_id"`
 	}
 
+	// Use map to deduplicate courses (by course_id)
+	courseMap := make(map[int]UserCourse)
+	addCourse := func(course UserCourse) {
+		if course.CourseID == 0 {
+			return
+		}
+		if existing, found := courseMap[course.CourseID]; found {
+			// Preserve window_id if not set in existing and set now
+			if existing.WindowID == 0 && course.WindowID != 0 {
+				existing.WindowID = course.WindowID
+				courseMap[course.CourseID] = existing
+			}
+			return
+		}
+		courseMap[course.CourseID] = course
+	}
+
 	var courses []UserCourse
 	for rows.Next() {
 		var course UserCourse
@@ -1053,12 +1160,89 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 			semInt := int(semester.Int64)
 			course.Semester = &semInt
 		}
-		courses = append(courses, course)
+		addCourse(course)
 	}
 
-	if courses == nil {
-		courses = []UserCourse{}
+	// Include courses from active user windows (course_id, dept+semester windows)
+	windowRows, err := database.Query(`
+		SELECT id, course_id, department_id, semester
+		FROM mark_entry_windows
+		WHERE user_id = ? AND enabled = 1 AND start_at <= ? AND end_at >= ?
+	`, numericUserID, now, now)
+	if err == nil {
+		defer windowRows.Close()
+		for windowRows.Next() {
+			var windowID, courseID, deptID, semID sql.NullInt64
+			if err := windowRows.Scan(&windowID, &courseID, &deptID, &semID); err != nil {
+				continue
+			}
+
+			// If explicit course_id is set, include that course directly
+			if courseID.Valid && courseID.Int64 > 0 {
+				var c UserCourse
+				c.WindowID = int(windowID.Int64)
+				c.Semester = nil
+				if semID.Valid {
+					v := int(semID.Int64)
+					c.Semester = &v
+				}
+				courseDetailRow := database.QueryRow(`SELECT id, course_code, course_name, category FROM courses WHERE id = ?`, courseID.Int64)
+				if err := courseDetailRow.Scan(&c.CourseID, &c.CourseCode, &c.CourseName, &c.Category); err == nil {
+					addCourse(c)
+				}
+				continue
+			}
+
+			// If window is dept/semester based, query curriculum-based courses
+			if deptID.Valid || semID.Valid {
+				query := `
+				SELECT DISTINCT c.id, c.course_code, c.course_name, c.category
+				FROM departments d
+				INNER JOIN curriculum_courses cc ON d.current_curriculum_id = cc.curriculum_id
+				INNER JOIN normal_cards nc ON cc.semester_id = nc.id
+				INNER JOIN courses c ON cc.course_id = c.id
+				WHERE d.status = 1`
+				args := []interface{}{}
+				if deptID.Valid {
+					query += ` AND d.id = ?`
+					args = append(args, deptID.Int64)
+				}
+				if semID.Valid {
+					query += ` AND nc.semester_number = ?`
+					args = append(args, semID.Int64)
+				}
+				query += ` ORDER BY c.course_code`
+
+				deptRows, deptErr := database.Query(query, args...)
+				if deptErr != nil {
+					continue
+				}
+				for deptRows.Next() {
+					var c UserCourse
+					c.WindowID = int(windowID.Int64)
+					if semID.Valid {
+						tmp := int(semID.Int64)
+						c.Semester = &tmp
+					}
+					if err := deptRows.Scan(&c.CourseID, &c.CourseCode, &c.CourseName, &c.Category); err == nil {
+						addCourse(c)
+					}
+				}
+				deptRows.Close()
+			}
+		}
 	}
+
+	// If no courses found, convert to empty slice
+	courses = make([]UserCourse, 0, len(courseMap))
+	for _, c := range courseMap {
+		courses = append(courses, c)
+	}
+
+	// Sort courses by code for stable order
+	sort.Slice(courses, func(i, j int) bool {
+		return courses[i].CourseCode < courses[j].CourseCode
+	})
 
 	log.Printf("GetUserCourses: Returning %d courses for user '%s' (id=%d)", len(courses), userIdentifier, numericUserID)
 

@@ -323,7 +323,8 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 	// Convert numeric teacher ID to faculty_id if needed
 	// All allocation tables (teacher_course_allocation, department_teachers, mark_entry_windows) use faculty_id
 	var facultyID string
-	err := database.QueryRow(`SELECT faculty_id FROM teachers WHERE id = ? OR faculty_id = ?`, teacherID, teacherID).Scan(&facultyID)
+	var teacherEmail sql.NullString
+	err := database.QueryRow(`SELECT faculty_id, email FROM teachers WHERE id = ? OR faculty_id = ?`, teacherID, teacherID).Scan(&facultyID, &teacherEmail)
 	if err != nil && err != sql.ErrNoRows {
 		log.Printf("Error looking up faculty_id for teacher %s: %v", teacherID, err)
 		// Not a teacher, might be a user - continue
@@ -335,12 +336,19 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 		facultyID = teacherID
 	}
 
-	// Try to lookup numeric user ID from username (for users)
+	// Try to lookup numeric user ID from different identifiers (username/email)
 	var numericUserID sql.NullInt64
-	err = database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, facultyID).Scan(&numericUserID)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Error looking up user ID for %s: %v", facultyID, err)
-		return false, nil, nil, err
+	userLookupErr := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, facultyID).Scan(&numericUserID)
+	if userLookupErr == sql.ErrNoRows && teacherEmail.Valid {
+		userLookupErr = database.QueryRow(`SELECT id FROM users WHERE email = ? AND is_active = 1`, teacherEmail.String).Scan(&numericUserID)
+	}
+	if userLookupErr == sql.ErrNoRows && teacherID != facultyID {
+		// Try teacherID as username directly if it differs
+		userLookupErr = database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, teacherID).Scan(&numericUserID)
+	}
+	if userLookupErr != nil && userLookupErr != sql.ErrNoRows {
+		log.Printf("Error looking up user ID for %s: %v", facultyID, userLookupErr)
+		return false, nil, nil, userLookupErr
 	}
 
 	// Get ALL departments the teacher belongs to (a teacher can be in multiple depts)

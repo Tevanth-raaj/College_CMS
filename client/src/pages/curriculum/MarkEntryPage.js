@@ -11,6 +11,11 @@ function MarkEntryPage() {
   const [studentMarks, setStudentMarks] = useState({})
   const [loading, setLoading] = useState(false)
   const [savingMarks, setSavingMarks] = useState(false)
+
+  const [isFetchingAssigned, setIsFetchingAssigned] = useState(false)
+  const assignedCourseRef = useRef(null)
+  const markCategoriesFetchKeyRef = useRef('')
+  const existingMarksFetchKeyRef = useRef('')
   const [message, setMessage] = useState({ type: '', text: '' })
   const [learningMode, setLearningMode] = useState(null) // Will be auto-detected: 'PBL' or 'UAL'
   const [hasActiveWindow, setHasActiveWindow] = useState(true)
@@ -31,7 +36,7 @@ function MarkEntryPage() {
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
   const userRole = localStorage.getItem('userRole') || localStorage.getItem('role')
   const isTeacher = userRole === 'teacher' && !!teacherId
-  const facultyIdentifier = isTeacher ? teacherId : username
+  const facultyIdentifier = username || teacherId
 
   // Fetch courses on component mount (teacher or user)
   useEffect(() => {
@@ -53,24 +58,59 @@ function MarkEntryPage() {
       console.log('localStorage.teacher_id:', localStorage.getItem('teacher_id'))
       console.log('localStorage.teacherId:', localStorage.getItem('teacherId'))
       console.log('Using teacherId value:', teacherId)
-      console.log('API URL:', `${API_BASE_URL}/teachers/${teacherId}/courses`)
-      console.log('======================')
+
+      // Fetch teacher-assigned courses first
       const response = await fetch(`${API_BASE_URL}/teachers/${teacherId}/courses`)
-      if (!response.ok) throw new Error('Failed to fetch courses')
+      if (!response.ok) throw new Error('Failed to fetch teacher courses')
       const data = await response.json()
-      console.log('Received courses data:', data)
-      
-      // Filter courses with enrollments
-      const coursesWithStudents = data.filter((course) => course.enrollments && course.enrollments.length > 0)
-      console.log('Filtered courses with students:', coursesWithStudents)
-      console.log('Filtered out courses:', data.filter((course) => !course.enrollments || course.enrollments.length === 0))
-      setCourses(coursesWithStudents)
-      
-      // Select first course if available
-      if (coursesWithStudents.length > 0) {
-        setSelectedCourse(coursesWithStudents[0])
+      console.log('Received teacher courses data:', data)
+
+      // Keep courses with students for teachers
+      let mergedCourses = data.filter((course) => course.enrollments && course.enrollments.length > 0)
+      console.log('Teacher courses with students:', mergedCourses)
+
+      // If user account is available, include user-assigned courses (for user-student windows)
+      const userIdForFallback = username || teacherId
+      if (userIdForFallback) {
+        try {
+          const userResponse = await fetch(`${API_BASE_URL}/users/${userIdForFallback}/courses`)
+          if (userResponse.ok) {
+            const userData = await userResponse.json()
+            const formattedUserCourses = Array.isArray(userData)
+              ? userData.map((course) => ({
+                  course_id: course.course_id,
+                  course_code: course.course_code,
+                  course_name: course.course_name,
+                  category: course.category,
+                  semester: course.semester,
+                  window_id: course.window_id,
+                  enrollments: []
+                }))
+              : []
+
+            // Add only non-duplicated courses
+            const existingCourseIds = new Set(mergedCourses.map((course) => course.course_id))
+            formattedUserCourses.forEach((course) => {
+              if (!existingCourseIds.has(course.course_id)) {
+                mergedCourses.push(course)
+              }
+            })
+          }
+        } catch (userErr) {
+          console.warn('Error fetching user courses fallback:', userErr)
+        }
       }
-      setMessage({ type: '', text: '' })
+
+      setCourses(mergedCourses)
+      if (mergedCourses.length > 0) {
+        setSelectedCourse(mergedCourses[0])
+      }
+
+      if (mergedCourses.length === 0) {
+        setMessage({ type: 'warning', text: 'No courses assigned. Check if a user-level mark entry window exists.' })
+      } else {
+        setMessage({ type: '', text: '' })
+      }
     } catch (error) {
       console.error('Error fetching courses:', error)
       setMessage({ type: 'error', text: 'Failed to load courses. Please try again.' })
@@ -112,30 +152,56 @@ function MarkEntryPage() {
     }
   }
 
-  // Auto-detect learning mode when course is selected
+  // Auto-detect learning mode when course or student list changes
   useEffect(() => {
-    if (!selectedCourse || !selectedCourse.enrollments || selectedCourse.enrollments.length === 0) return
-    
+    const sourceStudents =
+      selectedCourse && selectedCourse.enrollments && selectedCourse.enrollments.length > 0
+        ? selectedCourse.enrollments
+        : allStudents
+
+    if (!sourceStudents || sourceStudents.length === 0) return
+
     // Detect which learning modes students have
-    const learningModes = selectedCourse.enrollments
-      .map(s => s.learning_mode_id)
-      .filter(mode => mode === 1 || mode === 2)
-    
+    const learningModes = sourceStudents
+      .map((s) => s.learning_mode_id)
+      .filter((mode) => mode === 1 || mode === 2)
+
     const hasUAL = learningModes.includes(1)
     const hasPBL = learningModes.includes(2)
-    
+
     // Set default mode: prefer UAL if present, otherwise PBL
-    if (hasUAL) {
+    if (hasUAL && !hasPBL) {
       setLearningMode('UAL')
       console.log('Auto-detected learning mode: UAL')
-    } else if (hasPBL) {
+    } else if (!hasUAL && hasPBL) {
       setLearningMode('PBL')
       console.log('Auto-detected learning mode: PBL')
+    } else if (hasUAL && hasPBL) {
+      // Preserve existing mode if it exists, or default to UAL
+      setLearningMode((current) => current || 'UAL')
+      console.log('Mixed learning modes detected, defaulting to existing or UAL')
     } else {
       setLearningMode('UAL') // Default fallback
       console.log('No learning mode detected, defaulting to: UAL')
     }
-  }, [selectedCourse])
+  }, [selectedCourse, allStudents])
+
+  // Apply current learning mode filter to students when selection or mode changes
+  useEffect(() => {
+    const sourceStudents =
+      selectedCourse && selectedCourse.enrollments && selectedCourse.enrollments.length > 0
+        ? selectedCourse.enrollments
+        : allStudents
+
+    if (!sourceStudents || sourceStudents.length === 0 || !learningMode) {
+      setStudents([])
+      return
+    }
+
+    const learningModeId = learningMode === 'UAL' ? 1 : 2
+    const filteredStudents = sourceStudents.filter((student) => student.learning_mode_id === learningModeId)
+    setStudents(filteredStudents)
+  }, [selectedCourse, allStudents, learningMode])
 
   // Fetch mark categories when course is selected or learning mode changes
   useEffect(() => {
@@ -147,6 +213,15 @@ function MarkEntryPage() {
   }, [selectedCourse, learningMode, hasActiveWindow, userRole])
 
   const fetchMarkCategories = async () => {
+    if (!selectedCourse || !learningMode || !facultyIdentifier) return
+
+    const fetchKey = `${selectedCourse.course_id}|${learningMode}|${hasActiveWindow}|${userRole}`
+    if (markCategoriesFetchKeyRef.current === fetchKey) {
+      console.debug('Skipping duplicate mark categories request', fetchKey)
+      return
+    }
+    markCategoriesFetchKeyRef.current = fetchKey
+
     try {
       if (!facultyIdentifier) {
         setMessage({ type: 'error', text: 'User identifier not found. Please login again.' })
@@ -252,6 +327,15 @@ function MarkEntryPage() {
   }
 
   const loadExistingMarks = async () => {
+    if (!selectedCourse || !learningMode || !facultyIdentifier) return
+
+    const fetchKey = `${selectedCourse.course_id}|${learningMode}|${hasActiveWindow}|${userRole}`
+    if (existingMarksFetchKeyRef.current === fetchKey) {
+      console.debug('Skipping duplicate existing marks request', fetchKey)
+      return
+    }
+    existingMarksFetchKeyRef.current = fetchKey
+
     try {
       if (!facultyIdentifier) {
         setMessage({ type: 'error', text: 'User identifier not found. Please login again.' })
@@ -312,34 +396,49 @@ function MarkEntryPage() {
   useEffect(() => {
     if (!selectedCourse) return
 
-    // For users, fetch assigned students from window
-    if (!isTeacher && username) {
+    const hasEnrollments = Array.isArray(selectedCourse.enrollments) && selectedCourse.enrollments.length > 0
+
+    if (!hasEnrollments && username) {
+      // For user-based window selections (including teacher user-student windows), fetch assigned students
       fetchUserAssignedStudents()
+      return
     }
-    // For teachers, use enrollments from course (already includes enrollment_no, register_no, learning_mode_id)
-    else if (selectedCourse.enrollments) {
+
+    if (hasEnrollments) {
       const enrollments = selectedCourse.enrollments
       setAllStudents(enrollments)
-      
-      // Filter students by learning mode (UAL=1, PBL=2) - strict matching only
-      const learningModeId = learningMode === 'UAL' ? 1 : 2
-      const filteredStudents = enrollments.filter(
-        (student) => student.learning_mode_id === learningModeId
-      )
-      
-      setStudents(filteredStudents)
-      
-      // Initialize marks for new students
+
+      // Keep student list locked to current learningMode in a dedicated effect
+      setStudents((prev) => {
+        const learningModeId = learningMode === 'UAL' ? 1 : 2
+        return enrollments.filter((student) => student.learning_mode_id === learningModeId)
+      })
+
       const newMarks = {}
       enrollments.forEach((student) => {
         newMarks[student.student_id] = studentMarks[student.student_id] || {}
       })
       setStudentMarks(newMarks)
+      assignedCourseRef.current = selectedCourse.course_id
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCourse, learningMode, username, teacherId])
+  }, [selectedCourse, username, teacherId])
 
   const fetchUserAssignedStudents = async () => {
+    if (!selectedCourse || !username) return
+
+    if (isFetchingAssigned) {
+      console.debug('Skipping duplicate assigned students fetch while previous request is in-flight')
+      return
+    }
+
+    if (assignedCourseRef.current === selectedCourse.course_id && allStudents.length > 0) {
+      console.debug('Skipping assigned students fetch; already loaded for course', selectedCourse.course_id)
+      return
+    }
+
+    setIsFetchingAssigned(true)
+    assignedCourseRef.current = selectedCourse.course_id
+
     try {
       const response = await fetch(
         `${API_BASE_URL}/mark-entry/user-assigned-students?user_id=${username}&course_id=${selectedCourse.course_id}`
@@ -351,6 +450,10 @@ function MarkEntryPage() {
       const studentList = Array.isArray(data) ? data : []
       
       setAllStudents(studentList)
+      setSelectedCourse((prevCourse) => {
+        if (!prevCourse) return prevCourse
+        return { ...prevCourse, enrollments: studentList }
+      })
 
       const hasWindow = studentList.length > 0
       setHasActiveWindow(hasWindow)
@@ -359,6 +462,16 @@ function MarkEntryPage() {
         setStudentMarks({})
         setMessage({ type: 'warning', text: 'No active mark entry window for this course.' })
         return
+      }
+
+      // Detect and set initial learning mode from assigned students
+      const modeSet = new Set(studentList.map((student) => student.learning_mode_id))
+      if (modeSet.has(1) && !modeSet.has(2)) {
+        setLearningMode('UAL')
+      } else if (modeSet.has(2) && !modeSet.has(1)) {
+        setLearningMode('PBL')
+      } else if (modeSet.has(1) && modeSet.has(2) && !learningMode) {
+        setLearningMode('UAL')
       }
       
       // Filter by learning mode - strict matching only
@@ -379,6 +492,8 @@ function MarkEntryPage() {
       console.error('Error fetching assigned students:', error)
       setHasActiveWindow(false)
       setMessage({ type: 'error', text: 'Failed to load assigned students.' })
+    } finally {
+      setIsFetchingAssigned(false)
     }
   }
 

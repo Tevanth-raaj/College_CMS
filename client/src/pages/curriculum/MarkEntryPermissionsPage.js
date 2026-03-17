@@ -122,7 +122,8 @@ function MarkEntryPermissionsPage() {
     department: '',
     year: '',
     semester: '',
-    search: ''
+    search: '',
+    learning_mode: 'UAL&PBL'
   })
   const [assignmentLoading, setAssignmentLoading] = useState(false)
   const [userAssignedWindows, setUserAssignedWindows] = useState([])
@@ -1213,6 +1214,7 @@ function MarkEntryPermissionsPage() {
       }
       // Additional filters from student filter section
       if (studentFilters.department) params.append('department', studentFilters.department)
+      if (studentFilters.learning_mode && studentFilters.learning_mode !== 'UAL&PBL') params.append('learning_mode', studentFilters.learning_mode)
       if (studentFilters.year) params.append('year', studentFilters.year)
       if (studentFilters.semester) params.append('semester', studentFilters.semester)
       if (studentFilters.search) params.append('search', studentFilters.search)
@@ -2011,7 +2013,7 @@ function MarkEntryPermissionsPage() {
                 {/* Student Selection */}
                 <div className="p-6">
                   <h4 className="text-sm font-semibold text-gray-700 mb-3">Select Students</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4">
                     <input type="text" placeholder="Search by name/enrollment..." value={studentFilters.search}
                       onChange={(e) => setStudentFilters({ ...studentFilters, search: e.target.value })}
                       className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500" />
@@ -2024,6 +2026,13 @@ function MarkEntryPermissionsPage() {
                           {dept.department_name || dept.name || `Department ${dept.id}`}
                         </option>
                       ))}
+                    </select>
+                    <select value={studentFilters.learning_mode}
+                      onChange={(e) => setStudentFilters({ ...studentFilters, learning_mode: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 bg-white">
+                      <option value="UAL&PBL">UAL & PBL</option>
+                      <option value="UAL">UAL</option>
+                      <option value="PBL">PBL</option>
                     </select>
                     <input type="number" placeholder="Year (optional)" value={studentFilters.year}
                       onChange={(e) => setStudentFilters({ ...studentFilters, year: e.target.value })}
