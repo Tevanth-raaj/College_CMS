@@ -23,20 +23,42 @@ function MarkEntryPage() {
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [markErrors, setMarkErrors] = useState({}) // key: `${studentId}_${categoryId}`
   const [absentees, setAbsentees] = useState([]) // [{student_id, mark_category_id}]
+  const [studentRegisterFilter, setStudentRegisterFilter] = useState('')
   const [autoSaveStatus, setAutoSaveStatus] = useState('') // '', 'saving', 'saved', 'error'
+  const [courseSearchQuery, setCourseSearchQuery] = useState('')
+  const [isCourseDropdownOpen, setIsCourseDropdownOpen] = useState(false)
   const autoSaveTimerRef = useRef(null)
   const pendingMarksRef = useRef({})
+  const courseDropdownRef = useRef(null)
 
   // Missed-window appeal states (for teachers who never submitted before the window closed)
   const [missedWindowAppeals, setMissedWindowAppeals] = useState({}) // { courseId → appeal | null }
   const [appealReason, setAppealReason] = useState('')
   const [appealSubmitting, setAppealSubmitting] = useState(false)
 
+  const normalizeKey = (value) => String(value)
+  const normalizeLearningModeId = (value) => Number(value)
+
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
   const userRole = localStorage.getItem('userRole') || localStorage.getItem('role')
   const isTeacher = userRole === 'teacher' && !!teacherId
   const facultyIdentifier = username || teacherId
+
+  const getCourseDisplayLabel = (course) => {
+    if (!course) return ''
+    return `${course.course_code} - ${course.course_name}`
+  }
+
+  const selectedCourseLabel = getCourseDisplayLabel(selectedCourse)
+  const normalizedCourseQuery = courseSearchQuery.trim().toLowerCase()
+  const normalizedSelectedCourseLabel = selectedCourseLabel.trim().toLowerCase()
+  const filteredCourses = courses.filter((course) => {
+    if (!normalizedCourseQuery || normalizedCourseQuery === normalizedSelectedCourseLabel) return true
+    const code = String(course.course_code || '').toLowerCase()
+    const name = String(course.course_name || '').toLowerCase()
+    return code.includes(normalizedCourseQuery) || name.includes(normalizedCourseQuery)
+  })
 
   // Fetch courses on component mount (teacher or user)
   useEffect(() => {
@@ -50,6 +72,21 @@ function MarkEntryPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTeacher, teacherId, username, userRole])
+
+  useEffect(() => {
+    setCourseSearchQuery(getCourseDisplayLabel(selectedCourse))
+  }, [selectedCourse?.course_id])
+
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (courseDropdownRef.current && !courseDropdownRef.current.contains(event.target)) {
+        setIsCourseDropdownOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [])
 
   const fetchTeacherCourses = async () => {
     try {
@@ -197,7 +234,7 @@ function MarkEntryPage() {
 
     // Detect which learning modes students have
     const learningModes = sourceStudents
-      .map((s) => s.learning_mode_id)
+      .map((s) => normalizeLearningModeId(s.learning_mode_id))
       .filter((mode) => mode === 1 || mode === 2)
 
     const hasUAL = learningModes.includes(1)
@@ -233,9 +270,17 @@ function MarkEntryPage() {
     }
 
     const learningModeId = learningMode === 'UAL' ? 1 : 2
-    const filteredStudents = sourceStudents.filter((student) => student.learning_mode_id === learningModeId)
+    const filteredStudents = sourceStudents.filter(
+      (student) => normalizeLearningModeId(student.learning_mode_id) === learningModeId
+    )
     setStudents(filteredStudents)
   }, [selectedCourse, allStudents, learningMode])
+
+  // Reset dedupe keys whenever course/user context changes so data always refreshes correctly.
+  useEffect(() => {
+    markCategoriesFetchKeyRef.current = ''
+    existingMarksFetchKeyRef.current = ''
+  }, [selectedCourse?.course_id, selectedCourse?.window_id, facultyIdentifier])
 
   // Fetch mark categories when course is selected or learning mode changes
   useEffect(() => {
@@ -244,12 +289,12 @@ function MarkEntryPage() {
     fetchMarkCategories()
     loadExistingMarks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCourse, learningMode, hasActiveWindow, userRole])
+  }, [selectedCourse, learningMode, hasActiveWindow, userRole, facultyIdentifier])
 
   const fetchMarkCategories = async () => {
     if (!selectedCourse || !learningMode || !facultyIdentifier) return
 
-    const fetchKey = `${selectedCourse.course_id}|${learningMode}|${hasActiveWindow}|${userRole}`
+    const fetchKey = `${selectedCourse.course_id}|${learningMode}|${hasActiveWindow}|${userRole}|${facultyIdentifier}`
     if (markCategoriesFetchKeyRef.current === fetchKey) {
       console.debug('Skipping duplicate mark categories request', fetchKey)
       return
@@ -347,9 +392,10 @@ function MarkEntryPage() {
   }
 
   const getDisplayMarkValue = (studentId, category) => {
+    const studentKey = normalizeKey(studentId)
     const componentIds = category.component_ids || [category.id]
     for (const componentId of componentIds) {
-      const value = studentMarks[studentId]?.[componentId]
+      const value = studentMarks[studentKey]?.[normalizeKey(componentId)]
       if (value !== '' && value !== null && value !== undefined) return value
     }
     return ''
@@ -363,7 +409,7 @@ function MarkEntryPage() {
   const loadExistingMarks = async () => {
     if (!selectedCourse || !learningMode || !facultyIdentifier) return
 
-    const fetchKey = `${selectedCourse.course_id}|${learningMode}|${hasActiveWindow}|${userRole}`
+    const fetchKey = `${selectedCourse.course_id}|${selectedCourse.window_id || ''}|${learningMode}|${hasActiveWindow}|${userRole}|${facultyIdentifier}`
     if (existingMarksFetchKeyRef.current === fetchKey) {
       console.debug('Skipping duplicate existing marks request', fetchKey)
       return
@@ -390,10 +436,12 @@ function MarkEntryPage() {
       const marksObj = {}
       if (data && Array.isArray(data)) {
         data.forEach((mark) => {
-          if (!marksObj[mark.student_id]) {
-            marksObj[mark.student_id] = {}
+          const studentKey = normalizeKey(mark.student_id)
+          const componentKey = normalizeKey(mark.assessment_component_id)
+          if (!marksObj[studentKey]) {
+            marksObj[studentKey] = {}
           }
-          marksObj[mark.student_id][mark.assessment_component_id] = mark.obtained_marks
+          marksObj[studentKey][componentKey] = mark.obtained_marks
         })
       }
       setStudentMarks(marksObj)
@@ -418,9 +466,10 @@ function MarkEntryPage() {
     } catch (error) {
       console.error('Error loading existing marks:', error)
       // Initialize empty marks if fetch fails
+      existingMarksFetchKeyRef.current = ''
       const emptyMarks = {}
       selectedCourse.enrollments.forEach((student) => {
-        emptyMarks[student.student_id] = {}
+        emptyMarks[normalizeKey(student.student_id)] = {}
       })
       setStudentMarks(emptyMarks)
     }
@@ -445,17 +494,22 @@ function MarkEntryPage() {
       // Keep student list locked to current learningMode in a dedicated effect
       setStudents((prev) => {
         const learningModeId = learningMode === 'UAL' ? 1 : 2
-        return enrollments.filter((student) => student.learning_mode_id === learningModeId)
+        return enrollments.filter(
+          (student) => normalizeLearningModeId(student.learning_mode_id) === learningModeId
+        )
       })
 
-      const newMarks = {}
-      enrollments.forEach((student) => {
-        newMarks[student.student_id] = studentMarks[student.student_id] || {}
+      setStudentMarks((prev) => {
+        const newMarks = {}
+        enrollments.forEach((student) => {
+          const studentKey = normalizeKey(student.student_id)
+          newMarks[studentKey] = prev[studentKey] || {}
+        })
+        return newMarks
       })
-      setStudentMarks(newMarks)
       assignedCourseRef.current = selectedCourse.course_id
     }
-  }, [selectedCourse, username, teacherId])
+  }, [selectedCourse, username, teacherId, learningMode])
 
   const fetchUserAssignedStudents = async () => {
     if (!selectedCourse || !username) return
@@ -499,7 +553,7 @@ function MarkEntryPage() {
       }
 
       // Detect and set initial learning mode from assigned students
-      const modeSet = new Set(studentList.map((student) => student.learning_mode_id))
+      const modeSet = new Set(studentList.map((student) => normalizeLearningModeId(student.learning_mode_id)))
       if (modeSet.has(1) && !modeSet.has(2)) {
         setLearningMode('UAL')
       } else if (modeSet.has(2) && !modeSet.has(1)) {
@@ -511,17 +565,20 @@ function MarkEntryPage() {
       // Filter by learning mode - strict matching only
       const learningModeId = learningMode === 'UAL' ? 1 : 2
       const filteredStudents = studentList.filter(
-        (student) => student.learning_mode_id === learningModeId
+        (student) => normalizeLearningModeId(student.learning_mode_id) === learningModeId
       )
       
       setStudents(filteredStudents)
       
       // Initialize marks
-      const newMarks = {}
-      studentList.forEach((student) => {
-        newMarks[student.student_id] = studentMarks[student.student_id] || {}
+      setStudentMarks((prev) => {
+        const newMarks = {}
+        studentList.forEach((student) => {
+          const studentKey = normalizeKey(student.student_id)
+          newMarks[studentKey] = prev[studentKey] || {}
+        })
+        return newMarks
       })
-      setStudentMarks(newMarks)
     } catch (error) {
       console.error('Error fetching assigned students:', error)
       setHasActiveWindow(false)
@@ -609,13 +666,14 @@ function MarkEntryPage() {
     // Allow empty value
     if (value === '' || value === null || value === undefined) {
       setStudentMarks((prev) => {
-        const updatedStudent = { ...(prev[studentId] || {}) }
+        const studentKey = normalizeKey(studentId)
+        const updatedStudent = { ...(prev[studentKey] || {}) }
         componentIds.forEach((componentId) => {
-          updatedStudent[componentId] = ''
+          updatedStudent[normalizeKey(componentId)] = ''
         })
         return {
           ...prev,
-          [studentId]: updatedStudent,
+          [studentKey]: updatedStudent,
         }
       })
       setMarkErrors((prev) => { const n = { ...prev }; delete n[errorKey]; return n })
@@ -631,13 +689,14 @@ function MarkEntryPage() {
     if (isNaN(numValue) || numValue < 0) return
 
     setStudentMarks((prev) => {
-      const updatedStudent = { ...(prev[studentId] || {}) }
+      const studentKey = normalizeKey(studentId)
+      const updatedStudent = { ...(prev[studentKey] || {}) }
       componentIds.forEach((componentId) => {
-        updatedStudent[componentId] = numValue
+        updatedStudent[normalizeKey(componentId)] = numValue
       })
       return {
         ...prev,
-        [studentId]: updatedStudent,
+        [studentKey]: updatedStudent,
       }
     })
 
@@ -660,6 +719,13 @@ function MarkEntryPage() {
   })
 
   const displayMarkCategories = buildDisplayCategories(filteredMarkCategories)
+
+  const normalizedStudentRegisterFilter = studentRegisterFilter.trim().toLowerCase()
+  const visibleStudents = students.filter((student) => {
+    if (!normalizedStudentRegisterFilter) return true
+    const registerId = String(student.register_id || student.register_no || '').toLowerCase()
+    return registerId.includes(normalizedStudentRegisterFilter)
+  })
 
   // All marks are considered complete when every student×category cell is either
   // absent (blocked) or has a value entered.
@@ -952,20 +1018,53 @@ function MarkEntryPage() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Select Course
               </label>
-              <select
-                value={selectedCourse?.course_id || ''}
-                onChange={(e) => {
-                  const course = courses.find((c) => c.course_id === parseInt(e.target.value))
-                  setSelectedCourse(course)
-                }}
-                className="w-full max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              >
-                {courses.map((course) => (
-                  <option key={course.course_id} value={course.course_id}>
-                    {course.course_code} - {course.course_name}
-                  </option>
-                ))}
-              </select>
+              <div ref={courseDropdownRef} className="relative w-full max-w-md">
+                <input
+                  type="text"
+                  value={courseSearchQuery}
+                  onFocus={() => setIsCourseDropdownOpen(true)}
+                  onChange={(e) => {
+                    setCourseSearchQuery(e.target.value)
+                    setIsCourseDropdownOpen(true)
+                  }}
+                  placeholder="Search by course code or name"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsCourseDropdownOpen((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {isCourseDropdownOpen && (
+                  <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-auto">
+                    {filteredCourses.length === 0 ? (
+                      <div className="px-4 py-2 text-sm text-gray-500">No matching courses</div>
+                    ) : (
+                      filteredCourses.map((course) => (
+                        <button
+                          key={course.course_id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCourse(course)
+                            setCourseSearchQuery(getCourseDisplayLabel(course))
+                            setIsCourseDropdownOpen(false)
+                          }}
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-blue-50 transition-colors ${
+                            selectedCourse?.course_id === course.course_id ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+                          }`}
+                        >
+                          {getCourseDisplayLabel(course)}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
               {selectedCourse && (
                 <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
                   <div>
@@ -1161,7 +1260,7 @@ function MarkEntryPage() {
                 Showing: <span className="font-semibold text-gray-800">{learningMode === 'PBL' ? 'Problem-Based Learning' : 'University Aided Learning'}</span> students
               </span>
               <span className="text-gray-600">
-                Students: <span className="font-semibold text-gray-800">{students.length}</span> / <span className="text-gray-500">{allStudents.length} total</span>
+                Students: <span className="font-semibold text-gray-800">{visibleStudents.length}</span> / <span className="text-gray-500">{students.length} mode</span>
               </span>
             </div>
           </div>
@@ -1177,6 +1276,15 @@ function MarkEntryPage() {
                     Mark Entry - {selectedCourse.course_code}
                   </h3>
                   <p className="text-xs text-gray-500 mt-1">Enter marks for each assessment component</p>
+                  <div className="mt-3">
+                    <input
+                      type="text"
+                      value={studentRegisterFilter}
+                      onChange={(e) => setStudentRegisterFilter(e.target.value)}
+                      placeholder="Filter students by Register ID"
+                      className="w-72 max-w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   {autoSaveStatus && !isSubmitted && (
@@ -1212,10 +1320,18 @@ function MarkEntryPage() {
             </div>
 
             <div className="overflow-auto flex-1">
-              {students.length === 0 ? (
+              {visibleStudents.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">
-                  <p className="text-sm font-medium">No {learningMode} students found for this course</p>
-                  <p className="text-xs mt-1">Try switching to {learningMode === 'PBL' ? 'UAL' : 'PBL'} mode to see other students</p>
+                  <p className="text-sm font-medium">
+                    {studentRegisterFilter.trim()
+                      ? 'No students match this Register ID filter'
+                      : `No ${learningMode} students found for this course`}
+                  </p>
+                  <p className="text-xs mt-1">
+                    {studentRegisterFilter.trim()
+                      ? 'Try a different Register ID'
+                      : `Try switching to ${learningMode === 'PBL' ? 'UAL' : 'PBL'} mode to see other students`}
+                  </p>
                 </div>
               ) : (
                 <table className="w-full divide-y divide-gray-200 relative">
@@ -1271,7 +1387,7 @@ function MarkEntryPage() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {students.map((student, idx) => (
+                    {visibleStudents.map((student, idx) => (
                       <tr
                         key={student.student_id}
                         className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50 transition-colors`}
