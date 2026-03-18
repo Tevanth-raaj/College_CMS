@@ -59,17 +59,51 @@ function MarkEntryPage() {
       console.log('localStorage.teacherId:', localStorage.getItem('teacherId'))
       console.log('Using teacherId value:', teacherId)
 
+      // Prefer user-assigned mark entry window courses (e.g., user-semester-scoped windows)
+      if (username) {
+        try {
+          const userResponse = await fetch(`${API_BASE_URL}/users/${username}/courses`)
+          if (userResponse.ok) {
+            const userData = await userResponse.json()
+            const userWindowCourses = Array.isArray(userData)
+              ? userData.map((course) => ({
+                  course_id: course.course_id,
+                  course_code: course.course_code,
+                  course_name: course.course_name,
+                  category: course.category,
+                  semester: course.semester,
+                  window_id: course.window_id,
+                  enrollments: []
+                }))
+              : []
+
+            if (userWindowCourses.length > 0) {
+              setCourses(userWindowCourses)
+              setSelectedCourse(userWindowCourses[0])
+              setMessage({ type: '', text: '' })
+              return
+            }
+          }
+        } catch (userErr) {
+          console.warn('Error fetching user courses in teacher path:', userErr)
+        }
+      }
+
       // Fetch teacher-assigned courses first
       const response = await fetch(`${API_BASE_URL}/teachers/${teacherId}/courses`)
       if (!response.ok) throw new Error('Failed to fetch teacher courses')
       const data = await response.json()
       console.log('Received teacher courses data:', data)
 
-      // Keep courses with students for teachers
-      let mergedCourses = data.filter((course) => course.enrollments && course.enrollments.length > 0)
-      console.log('Teacher courses with students:', mergedCourses)
+      // Keep courses that are tied to an active or relevant mark entry window for this teacher
+      let mergedCourses = data.filter((course) => {
+        const hasWindow = course.has_window || course.has_missed_submission || course.has_submitted_expired_window
+        const hasValidEnrollment = course.enrollments && course.enrollments.length > 0
+        return hasWindow && hasValidEnrollment
+      })
+      console.log('Teacher courses with active/entered windows:', mergedCourses)
 
-      // If user account is available, include user-assigned courses (for user-student windows)
+      // If user account is available, include user-assigned courses from window permissions
       const userIdForFallback = username || teacherId
       if (userIdForFallback) {
         try {

@@ -1080,9 +1080,7 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 	log.Printf("GetUserCourses: Looking up courses for username='%s', user_id=%d", userIdentifier, numericUserID)
 
 	// Get courses from active windows assigned to this user
-	// This includes both:
-	// 1. Windows with specific course_id set
-	// 2. Courses inferred from student enrollments when window has no course_id
+	// This includes student-course mappings only when the window is not department/semester filtered
 	now := time.Now()
 	query := `
 		SELECT DISTINCT 
@@ -1101,7 +1099,14 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		  AND w.enabled = 1
 		AND w.start_at <= ?
 		AND w.end_at >= ?
-		  AND (w.course_id IS NULL OR w.course_id = c.id)
+		  AND (
+			(w.course_id IS NOT NULL AND w.course_id = c.id)
+			OR (
+				(w.course_id IS NULL OR w.course_id = 0)
+				AND (w.department_id IS NULL OR w.department_id = 0)
+				AND (w.semester IS NULL OR w.semester = 0)
+			)
+		)
 		ORDER BY c.course_code
 	`
 
@@ -1203,11 +1208,13 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 				INNER JOIN courses c ON cc.course_id = c.id
 				WHERE d.status = 1`
 				args := []interface{}{}
-				if deptID.Valid {
+				// When department_id=0 it means all departments, so omit department filter
+				if deptID.Valid && deptID.Int64 > 0 {
 					query += ` AND d.id = ?`
 					args = append(args, deptID.Int64)
 				}
-				if semID.Valid {
+				// When semester=0 it means all semesters, so omit semester filter
+				if semID.Valid && semID.Int64 > 0 {
 					query += ` AND nc.semester_number = ?`
 					args = append(args, semID.Int64)
 				}
