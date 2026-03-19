@@ -31,21 +31,24 @@ func GetPEOPOMapping(w http.ResponseWriter, r *http.Request) {
 		WHERE curriculum_id = ?
 	`, curriculumID)
 	if err != nil {
-		log.Println("Error fetching PEO-PO mappings:", err)
-		http.Error(w, "Failed to fetch mappings", http.StatusInternalServerError)
-		return
-	}
-	defer poRows.Close()
-
-	for poRows.Next() {
-		var peoIndex, poIndex, mappingValue int
-		if err := poRows.Scan(&peoIndex, &poIndex, &mappingValue); err != nil {
-			log.Println("Error scanning PEO-PO mapping:", err)
-			continue
+		log.Printf("Error fetching PEO-PO mappings for curriculum %d: %v", curriculumID, err)
+		// Don't return error, table might not exist yet or there might be a temporary query issue
+	} else {
+		defer poRows.Close()
+		rowCount := 0
+		for poRows.Next() {
+			var peoIndex, poIndex, mappingValue int
+			if err := poRows.Scan(&peoIndex, &poIndex, &mappingValue); err != nil {
+				log.Println("Error scanning PEO-PO mapping:", err)
+				continue
+			}
+			// Convert to 0-based indexing for frontend
+			key := fmt.Sprintf("%d-%d", peoIndex-1, poIndex-1)
+			poMatrix[key] = mappingValue
+			log.Printf("PEO-PO Mapping loaded: curriculum=%d, key=%s, value=%d", curriculumID, key, mappingValue)
+			rowCount++
 		}
-		// Convert to 0-based indexing for frontend
-		key := fmt.Sprintf("%d-%d", peoIndex-1, poIndex-1)
-		poMatrix[key] = mappingValue
+		log.Printf("Loaded %d PEO-PO mappings for curriculum %d", rowCount, curriculumID)
 	}
 
 	// Fetch PSO-PO mappings from pso_po_mapping table
@@ -73,8 +76,8 @@ func GetPEOPOMapping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := models.PEOPOMappingResponse{
-		POMatrix:    poMatrix,
-		PSOPOMatrix: psoPoMatrix,
+		PoMatrix:    poMatrix,
+		PsoPoMatrix: psoPoMatrix,
 	}
 
 	json.NewEncoder(w).Encode(response)
@@ -97,6 +100,9 @@ func SavePEOPOMapping(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("SavePEOPOMapping: curriculum_id=%d, mappings count=%d, psoPoMappings count=%d",
+		curriculumID, len(request.Mappings), len(request.PSOPOMappings))
 
 	// Start transaction
 	tx, err := db.DB.Begin()
@@ -124,6 +130,8 @@ func SavePEOPOMapping(w http.ResponseWriter, r *http.Request) {
 
 	// Insert new PEO-PO mappings
 	for _, mapping := range request.Mappings {
+		log.Printf("Inserting PEO-PO mapping: curriculum=%d, peo_index=%d, po_index=%d, value=%d",
+			curriculumID, mapping.PEOIndex, mapping.POIndex, mapping.MappingValue)
 		_, err = tx.Exec(`
 			INSERT INTO peo_po_mapping (curriculum_id, peo_index, po_index, mapping_value)
 			VALUES (?, ?, ?, ?)

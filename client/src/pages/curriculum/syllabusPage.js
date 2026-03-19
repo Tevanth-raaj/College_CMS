@@ -16,6 +16,7 @@ function SyllabusPage() {
     objectives: [],
     outcomes: [],
     reference_list: [],
+    textbook_reference_list: [],
     prerequisites: [],
     teamwork: { activities: [], hours: 0 },
     selflearning: { main_inputs: [], hours: 0 }
@@ -77,6 +78,7 @@ function SyllabusPage() {
         objectives: data.header?.objectives || [],
         outcomes: data.header?.outcomes || [],
         reference_list: data.header?.reference_list || [],
+        textbook_reference_list: data.header?.textbook_reference_list || [],
         prerequisites: data.header?.prerequisites || [],
         teamwork: data.header?.teamwork || { activities: [], hours: 0 },
         selflearning: data.header?.selflearning || { main_inputs: [], hours: 0 }
@@ -1227,7 +1229,7 @@ function SyllabusPage() {
             {[...(curriculumTemplate === '2022' ? ['objectives'] : []),
               'outcomes', curriculumTemplate === '2022' ? 'units' : 'modules',
               ...(curriculumTemplate === '2022' ? ['experiments'] : ['teamwork', 'selflearning', 'prerequisites']),
-              'references'].map((tab) => (
+              'references', 'textbook_references'].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -1240,6 +1242,7 @@ function SyllabusPage() {
                 {tab === 'objectives' ? 'Objectives' :
                  tab === 'teamwork' ? 'Team Work' : 
                  tab === 'selflearning' ? 'Self Learning' : 
+                 tab === 'textbook_references' ? 'Textbook References' :
                  tab === 'units' ? 'Units' :
                  tab === 'modules' ? 'Modules' :
                  tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -1310,6 +1313,18 @@ function SyllabusPage() {
                 className="btn-primary-custom"
               >
                 Save References
+              </button>
+            </form>
+          )}
+
+          {activeTab === 'textbook_references' && (
+            <form onSubmit={handleSaveHeader}>
+              {renderHeaderField('textbook_reference_list', 'Textbook References')}
+              <button
+                type="submit"
+                className="btn-primary-custom"
+              >
+                Save Textbook References
               </button>
             </form>
           )}

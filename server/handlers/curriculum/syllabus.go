@@ -31,6 +31,7 @@ func GetCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 	syllabus.Objectives, _ = fetchObjectives(courseID)
 	syllabus.Outcomes, _ = fetchOutcomes(courseID)
 	syllabus.ReferenceList, _ = fetchReferences(courseID)
+	syllabus.TextbookReferenceList, _ = fetchTextbookReferences(courseID)
 	syllabus.Prerequisites, _ = fetchPrerequisites(courseID)
 	syllabus.Teamwork, _ = fetchTeamwork(courseID)
 	syllabus.SelfLearning, _ = fetchSelfLearning(courseID)
@@ -53,12 +54,13 @@ func SaveCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request body - it could be just header fields or full syllabus
 	var requestData struct {
-		Objectives    []string             `json:"objectives"`
-		Outcomes      []string             `json:"outcomes"`
-		ReferenceList []string             `json:"reference_list"`
-		Prerequisites []string             `json:"prerequisites"`
-		Teamwork      *models.Teamwork     `json:"teamwork"`
-		SelfLearning  *models.SelfLearning `json:"selflearning"`
+		Objectives            []string             `json:"objectives"`
+		Outcomes              []string             `json:"outcomes"`
+		ReferenceList         []string             `json:"reference_list"`
+		TextbookReferenceList []string             `json:"textbook_reference_list"`
+		Prerequisites         []string             `json:"prerequisites"`
+		Teamwork              *models.Teamwork     `json:"teamwork"`
+		SelfLearning          *models.SelfLearning `json:"selflearning"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
@@ -71,6 +73,7 @@ func SaveCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 	log.Printf("  - Objectives: %d items", len(requestData.Objectives))
 	log.Printf("  - Outcomes: %d items", len(requestData.Outcomes))
 	log.Printf("  - References: %d items", len(requestData.ReferenceList))
+	log.Printf("  - Textbook References: %d items", len(requestData.TextbookReferenceList))
 	log.Printf("  - Prerequisites: %d items", len(requestData.Prerequisites))
 	if requestData.Teamwork != nil {
 		log.Printf("  - Teamwork: hours=%d, activities=%d items", requestData.Teamwork.Hours, len(requestData.Teamwork.Activities))
@@ -102,6 +105,12 @@ func SaveCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := saveTextbookReferences(courseID, requestData.TextbookReferenceList); err != nil {
+		log.Println("Error saving textbook references:", err)
+		http.Error(w, "Failed to save textbook references", http.StatusInternalServerError)
+		return
+	}
+
 	if err := savePrerequisites(courseID, requestData.Prerequisites); err != nil {
 		log.Println("Error saving prerequisites:", err)
 		http.Error(w, "Failed to save prerequisites", http.StatusInternalServerError)
@@ -122,12 +131,13 @@ func SaveCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 
 	// Return success response
 	response := models.Syllabus{
-		ID:            courseID, // Use course_id as identifier
-		Outcomes:      requestData.Outcomes,
-		ReferenceList: requestData.ReferenceList,
-		Prerequisites: requestData.Prerequisites,
-		Teamwork:      requestData.Teamwork,
-		SelfLearning:  requestData.SelfLearning,
+		ID:                    courseID, // Use course_id as identifier
+		Outcomes:              requestData.Outcomes,
+		ReferenceList:         requestData.ReferenceList,
+		TextbookReferenceList: requestData.TextbookReferenceList,
+		Prerequisites:         requestData.Prerequisites,
+		Teamwork:              requestData.Teamwork,
+		SelfLearning:          requestData.SelfLearning,
 	}
 
 	json.NewEncoder(w).Encode(response)

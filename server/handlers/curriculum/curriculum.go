@@ -45,6 +45,13 @@ func cascadeSoftDeleteCourse(courseID int, tx *sql.Tx) error {
 		return err
 	}
 
+	// Soft delete textbook references
+	_, err = execFunc("UPDATE course_textbook_reference SET status = 0 WHERE course_id = ? AND status = 1", courseID)
+	if err != nil {
+		log.Printf("Error soft-deleting textbook references for course %d: %v", courseID, err)
+		return err
+	}
+
 	// Soft delete syllabus topics (cascade from titles)
 	_, err = execFunc(`UPDATE syllabus_topics SET status = 0 
 		WHERE title_id IN (SELECT id FROM syllabus_titles WHERE model_id IN (SELECT id FROM syllabus WHERE course_id = ?)) 
@@ -196,7 +203,7 @@ func CreateSemester(w http.ResponseWriter, r *http.Request) {
 	// Build INSERT query based on card type
 	var query string
 	var result sql.Result
-	
+
 	if card.CardType == "vertical" || card.CardType == "open_elective" {
 		// For vertical/OE cards, include vertical_name
 		query = "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, vertical_name, status) VALUES (?, ?, ?, ?, 1)"
@@ -206,7 +213,7 @@ func CreateSemester(w http.ResponseWriter, r *http.Request) {
 		query = "INSERT INTO normal_cards (curriculum_id, semester_number, card_type, status) VALUES (?, ?, ?, 1)"
 		result, err = db.DB.Exec(query, card.CurriculumID, card.SemesterNumber, card.CardType)
 	}
-	
+
 	if err != nil {
 		log.Println("Error inserting semester:", err)
 		w.WriteHeader(http.StatusInternalServerError)

@@ -717,6 +717,48 @@ func CreateDepartmentOverviewTables() error {
 		return err
 	}
 
+	// PEO-PO Mapping table
+	peoPOQuery := `
+	CREATE TABLE IF NOT EXISTS peo_po_mapping (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		curriculum_id INT NOT NULL,
+		peo_index INT NOT NULL,
+		po_index INT NOT NULL,
+		mapping_value INT NOT NULL DEFAULT 0,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		UNIQUE KEY unique_peo_po (curriculum_id, peo_index, po_index),
+		FOREIGN KEY (curriculum_id) REFERENCES curriculum(id) ON DELETE CASCADE,
+		KEY idx_curriculum (curriculum_id)
+	)
+	`
+	_, err = DB.Exec(peoPOQuery)
+	if err != nil {
+		log.Fatal("Failed to create peo_po_mapping table:", err)
+		return err
+	}
+
+	// PSO-PO Mapping table
+	psoPOQuery := `
+	CREATE TABLE IF NOT EXISTS pso_po_mapping (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		curriculum_id INT NOT NULL,
+		pso_index INT NOT NULL,
+		po_index INT NOT NULL,
+		mapping_value INT NOT NULL DEFAULT 0,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		UNIQUE KEY unique_pso_po (curriculum_id, pso_index, po_index),
+		FOREIGN KEY (curriculum_id) REFERENCES curriculum(id) ON DELETE CASCADE,
+		KEY idx_curriculum (curriculum_id)
+	)
+	`
+	_, err = DB.Exec(psoPOQuery)
+	if err != nil {
+		log.Fatal("Failed to create pso_po_mapping table:", err)
+		return err
+	}
+
 	return nil
 }
 
@@ -771,6 +813,15 @@ func CreateNormalizedSyllabusTables() error {
 			UNIQUE KEY unique_course_position (course_id, position),
 			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS course_textbook_reference (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			course_id INT NOT NULL,
+			textbook TEXT NOT NULL,
+			position INT NOT NULL,
+			status TINYINT(1) DEFAULT 1,
+			KEY idx_course_id (course_id),
+			FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS course_prerequisites (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			course_id INT NOT NULL,
@@ -780,16 +831,21 @@ func CreateNormalizedSyllabusTables() error {
 			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_teamwork (
-			course_id INT NOT NULL PRIMARY KEY,
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			course_id INT NOT NULL,
 			total_hours INT NOT NULL DEFAULT 0,
+			UNIQUE KEY unique_course (course_id),
 			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_teamwork_activities (
 			id INT AUTO_INCREMENT PRIMARY KEY,
+			teamwork_id INT NOT NULL,
 			course_id INT NOT NULL,
 			activity TEXT NOT NULL,
 			position INT NOT NULL,
-			UNIQUE KEY unique_course_position (course_id, position),
+			status TINYINT(1) DEFAULT 1,
+			UNIQUE KEY unique_teamwork_position (teamwork_id, position),
+			FOREIGN KEY (teamwork_id) REFERENCES course_teamwork(id) ON DELETE CASCADE,
 			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_selflearning (
@@ -799,11 +855,11 @@ func CreateNormalizedSyllabusTables() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_selflearning_topics (
 			id INT AUTO_INCREMENT PRIMARY KEY,
-			course_id INT NOT NULL,
+			selflearning_id INT NOT NULL,
 			main_text TEXT NOT NULL,
 			position INT NOT NULL,
-			UNIQUE KEY unique_course_position (course_id, position),
-			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
+			UNIQUE KEY unique_selflearning_position (selflearning_id, position),
+			FOREIGN KEY (selflearning_id) REFERENCES course_selflearning(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_selflearning_resources (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -826,6 +882,24 @@ func CreateNormalizedSyllabusTables() error {
 	_ = ensureColumnExists("course_references", "status", "TINYINT(1) DEFAULT 1")
 	_ = ensureColumnExists("course_outcomes", "status", "TINYINT(1) DEFAULT 1")
 	_ = ensureColumnExists("course_objectives", "status", "TINYINT(1) DEFAULT 1")
+	_ = ensureColumnExists("course_prerequisites", "status", "TINYINT(1) DEFAULT 1")
+	_ = ensureColumnExists("course_textbook_reference", "status", "TINYINT(1) DEFAULT 1")
+	_ = ensureColumnExists("course_selflearning", "id", "INT NOT NULL")
+	_, _ = DB.Exec("ALTER TABLE course_selflearning MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT")
+	_ = ensureColumnExists("course_selflearning", "course_id", "INT NULL")
+	_ = ensureColumnExists("course_selflearning", "total_hours", "INT NOT NULL DEFAULT 0")
+	_, _ = DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS unique_selflearning_course ON course_selflearning(course_id)")
+	_, _ = DB.Exec(`ALTER TABLE course_selflearning
+		ADD CONSTRAINT fk_selflearning_course
+		FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE`)
+	_ = ensureColumnExists("course_selflearning_topics", "selflearning_id", "INT NULL")
+	_ = ensureColumnExists("course_selflearning_topics", "status", "TINYINT(1) DEFAULT 1")
+	_ = ensureColumnExists("course_selflearning_resources", "status", "TINYINT(1) DEFAULT 1")
+	_, _ = DB.Exec("CREATE INDEX IF NOT EXISTS idx_selflearning_topics_selflearning ON course_selflearning_topics(selflearning_id)")
+	_, _ = DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS unique_selflearning_position ON course_selflearning_topics(selflearning_id, position)")
+	_, _ = DB.Exec(`ALTER TABLE course_selflearning_topics
+		ADD CONSTRAINT fk_selflearning_topics_selflearning
+		FOREIGN KEY (selflearning_id) REFERENCES course_selflearning(id) ON DELETE CASCADE`)
 
 	fmt.Println("Normalized syllabus tables created/verified successfully!")
 	return nil

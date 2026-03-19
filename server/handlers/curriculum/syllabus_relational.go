@@ -31,6 +31,7 @@ func GetCourseSyllabusNested(w http.ResponseWriter, r *http.Request) {
 	resp.Header.Objectives, _ = fetchObjectives(courseID)
 	resp.Header.Outcomes, _ = fetchOutcomes(courseID)
 	resp.Header.ReferenceList, _ = fetchReferences(courseID)
+	resp.Header.TextbookReferenceList, _ = fetchTextbookReferences(courseID)
 	resp.Header.Prerequisites, _ = fetchPrerequisites(courseID)
 	resp.Header.Teamwork, _ = fetchTeamwork(courseID)
 	resp.Header.SelfLearning, _ = fetchSelfLearning(courseID)

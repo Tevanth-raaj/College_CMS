@@ -16,6 +16,22 @@ func isMySQLUnknownColumnError(err error) bool {
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1054
 }
 
+func isMySQLNoDefaultValueForField(err error, field string) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	if mysqlErr.Number != 1364 {
+		return false
+	}
+	return strings.Contains(strings.ToLower(mysqlErr.Message), strings.ToLower(field))
+}
+
+func isMySQLDuplicateEntryError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+}
+
 // Helper functions for normalized syllabus data access
 // All tables reference course_id directly (course-centric design)
 
@@ -85,12 +101,34 @@ func fetchReferences(courseID int) ([]string, error) {
 	return references, nil
 }
 
+// fetchTextbookReferences retrieves all textbook references for a course ordered by position
+func fetchTextbookReferences(courseID int) ([]string, error) {
+	rows, err := db.DB.Query(`
+		SELECT textbook
+		FROM course_textbook_reference
+		WHERE course_id = ? AND (status = 1 OR status IS NULL)
+		ORDER BY position`, courseID)
+	if err != nil {
+		return []string{}, err
+	}
+	defer rows.Close()
+
+	textbooks := []string{}
+	for rows.Next() {
+		var text string
+		if err := rows.Scan(&text); err == nil {
+			textbooks = append(textbooks, text)
+		}
+	}
+	return textbooks, nil
+}
+
 // fetchPrerequisites retrieves all prerequisites for a course ordered by position
 func fetchPrerequisites(courseID int) ([]string, error) {
 	rows, err := db.DB.Query(`
 		SELECT prerequisite 
 		FROM course_prerequisites 
-		WHERE course_id = ? 
+		WHERE course_id = ? AND (status = 1 OR status IS NULL)
 		ORDER BY position`, courseID)
 	if err != nil {
 		return []string{}, err
@@ -109,46 +147,31 @@ func fetchPrerequisites(courseID int) ([]string, error) {
 
 // fetchTeamwork retrieves teamwork data for a course
 func fetchTeamwork(courseID int) (*models.Teamwork, error) {
-	// Get total_hours from course_teamwork
+	// Get teamwork_id and total_hours from course_teamwork using course_id
+	var teamworkID int
 	var hours int
 	err := db.DB.QueryRow(`
-		SELECT total_hours
+		SELECT id, total_hours
 		FROM course_teamwork
-		WHERE id = ?`, courseID).Scan(&hours)
-	if isMySQLUnknownColumnError(err) {
-		err = db.DB.QueryRow(`
-			SELECT total_hours
-			FROM course_teamwork
-			WHERE course_id = ?`, courseID).Scan(&hours)
-	}
+		WHERE course_id = ?`, courseID).Scan(&teamworkID, &hours)
 
 	if err == sql.ErrNoRows {
 		return nil, nil // No teamwork data
 	}
 	if err != nil {
+		log.Printf("Error fetching teamwork for courseID %d: %v", courseID, err)
 		return nil, err
 	}
 
-	// Fetch activities from course_teamwork_activities
+	// Fetch activities from course_teamwork_activities using teamwork_id
 	rows, err := db.DB.Query(`
 		SELECT activity
 		FROM course_teamwork_activities
 		WHERE teamwork_id = ?
-		ORDER BY position`, courseID)
+		ORDER BY position`, teamworkID)
 	if err != nil {
-		if isMySQLUnknownColumnError(err) {
-			// Older schema used course_id instead of teamwork_id.
-			rows, err = db.DB.Query(`
-				SELECT activity
-				FROM course_teamwork_activities
-				WHERE course_id = ?
-				ORDER BY position`, courseID)
-			if err != nil {
-				return &models.Teamwork{Hours: hours, Activities: []string{}}, nil
-			}
-		} else {
-			return &models.Teamwork{Hours: hours, Activities: []string{}}, nil
-		}
+		log.Printf("Error fetching teamwork activities for teamwork_id %d: %v", teamworkID, err)
+		return &models.Teamwork{Hours: hours, Activities: []string{}}, nil
 	}
 	defer rows.Close()
 
@@ -168,11 +191,13 @@ func fetchTeamwork(courseID int) (*models.Teamwork, error) {
 
 // fetchSelfLearning retrieves self-learning data for a course
 func fetchSelfLearning(courseID int) (*models.SelfLearning, error) {
+	var selfLearningID int
 	var hours int
 	err := db.DB.QueryRow(`
-		SELECT total_hours 
+		SELECT id, total_hours 
 		FROM course_selflearning 
-		WHERE course_id = ?`, courseID).Scan(&hours)
+		WHERE course_id = ?
+		LIMIT 1`, courseID).Scan(&selfLearningID, &hours)
 
 	if err == sql.ErrNoRows {
 		return nil, nil // No self-learning data
@@ -185,8 +210,8 @@ func fetchSelfLearning(courseID int) (*models.SelfLearning, error) {
 	rows, err := db.DB.Query(`
 		SELECT id, main_text 
 		FROM course_selflearning_topics 
-		WHERE course_id = ? 
-		ORDER BY position`, courseID)
+		WHERE selflearning_id = ? 
+		ORDER BY position`, selfLearningID)
 	if err != nil {
 		return &models.SelfLearning{Hours: hours, MainInputs: []models.SelfLearningInternal{}}, nil
 	}
@@ -206,13 +231,13 @@ func fetchSelfLearning(courseID int) (*models.SelfLearning, error) {
 
 			internal := []string{}
 			if err == nil {
-				defer internalRows.Close()
 				for internalRows.Next() {
 					var text string
 					if err := internalRows.Scan(&text); err == nil {
 						internal = append(internal, text)
 					}
 				}
+				internalRows.Close()
 			}
 
 			mainInputs = append(mainInputs, models.SelfLearningInternal{
@@ -696,26 +721,308 @@ func saveReferences(courseID int, references []string) error {
 	return nil
 }
 
-// savePrerequisites saves prerequisites for a course, replacing existing ones
-func savePrerequisites(courseID int, prerequisites []string) error {
-	// Delete existing
-	_, err := db.DB.Exec("DELETE FROM course_prerequisites WHERE course_id = ?", courseID)
+// saveTextbookReferences saves textbook references for a course, replacing existing ones
+func saveTextbookReferences(courseID int, references []string) error {
+	log.Printf("DEBUG saveTextbookReferences: courseID=%d, count=%d", courseID, len(references))
+
+	incoming := make([]string, 0, len(references))
+	for _, r := range references {
+		norm := strings.TrimSpace(r)
+		if norm == "" {
+			continue
+		}
+		incoming = append(incoming, norm)
+	}
+
+	tx, err := db.DB.Begin()
 	if err != nil {
+		log.Printf("ERROR saveTextbookReferences begin tx: %v", err)
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	type existingRef struct {
+		ID       int
+		Text     string
+		Position int
+	}
+
+	existing := make([]existingRef, 0)
+	rows, err := tx.Query(`
+		SELECT id, textbook, position
+		FROM course_textbook_reference
+		WHERE course_id = ? AND (status = 1 OR status IS NULL)
+		ORDER BY position, id`, courseID)
+	if err != nil {
+		log.Printf("ERROR saveTextbookReferences load existing: %v", err)
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r existingRef
+		if err := rows.Scan(&r.ID, &r.Text, &r.Position); err == nil {
+			existing = append(existing, r)
+		}
+	}
+
+	if len(incoming) == len(existing) {
+		for i := range incoming {
+			if _, err := tx.Exec(
+				"UPDATE course_textbook_reference SET textbook = ?, position = ?, status = 1 WHERE id = ?",
+				incoming[i], i, existing[i].ID,
+			); err != nil {
+				log.Printf("ERROR saveTextbookReferences update id=%d: %v", existing[i].ID, err)
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			log.Printf("ERROR saveTextbookReferences commit: %v", err)
+			return err
+		}
+		log.Printf("DEBUG saveTextbookReferences: updated %d references (edit-only)", len(incoming))
+		return nil
+	}
+
+	existingTexts := make([]string, 0, len(existing))
+	for _, r := range existing {
+		existingTexts = append(existingTexts, strings.TrimSpace(r.Text))
+	}
+	n := len(existingTexts)
+	m := len(incoming)
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+	}
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			if existingTexts[i-1] == incoming[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else {
+				if dp[i-1][j] >= dp[i][j-1] {
+					dp[i][j] = dp[i-1][j]
+				} else {
+					dp[i][j] = dp[i][j-1]
+				}
+			}
+		}
+	}
+
+	matchedExisting := make(map[int]int)
+	matchedIncoming := make(map[int]bool)
+	i := n
+	j := m
+	for i > 0 && j > 0 {
+		if existingTexts[i-1] == incoming[j-1] {
+			matchedExisting[i-1] = j - 1
+			matchedIncoming[j-1] = true
+			i--
+			j--
+		} else if dp[i-1][j] >= dp[i][j-1] {
+			i--
+		} else {
+			j--
+		}
+	}
+
+	for idx, r := range existing {
+		if _, ok := matchedExisting[idx]; !ok {
+			if _, err := tx.Exec("UPDATE course_textbook_reference SET status = 0 WHERE id = ?", r.ID); err != nil {
+				log.Printf("ERROR saveTextbookReferences soft delete id=%d: %v", r.ID, err)
+				return err
+			}
+		}
+	}
+
+	if _, err := tx.Exec(
+		"UPDATE course_textbook_reference SET position = position + 10000 WHERE course_id = ? AND (status = 1 OR status IS NULL)",
+		courseID,
+	); err != nil {
+		log.Printf("ERROR saveTextbookReferences temp bump: %v", err)
 		return err
 	}
 
-	// Insert new ones with position
-	for i, text := range prerequisites {
-		if text == "" {
-			continue
-		}
-		_, err := db.DB.Exec(`
-			INSERT INTO course_prerequisites (course_id, prerequisite, position) 
-			VALUES (?, ?, ?)`, courseID, text, i)
-		if err != nil {
+	for oldIdx, newIdx := range matchedExisting {
+		id := existing[oldIdx].ID
+		if _, err := tx.Exec("UPDATE course_textbook_reference SET position = ?, status = 1 WHERE id = ?", newIdx, id); err != nil {
+			log.Printf("ERROR saveTextbookReferences shift id=%d: %v", id, err)
 			return err
 		}
 	}
+
+	for idx, text := range incoming {
+		if matchedIncoming[idx] {
+			continue
+		}
+		if _, err := tx.Exec(
+			"INSERT INTO course_textbook_reference (course_id, textbook, position, status) VALUES (?, ?, ?, 1)",
+			courseID, text, idx,
+		); err != nil {
+			log.Printf("ERROR saveTextbookReferences insert position=%d: %v", idx, err)
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("ERROR saveTextbookReferences commit: %v", err)
+		return err
+	}
+	log.Printf("DEBUG saveTextbookReferences: successfully saved %d references", len(incoming))
+	return nil
+}
+
+// savePrerequisites saves prerequisites for a course with soft-delete semantics
+func savePrerequisites(courseID int, prerequisites []string) error {
+	log.Printf("DEBUG savePrerequisites: courseID=%d, count=%d", courseID, len(prerequisites))
+
+	// Normalize input (keep order; skip empty)
+	incoming := make([]string, 0, len(prerequisites))
+	for _, p := range prerequisites {
+		norm := strings.TrimSpace(p)
+		if norm == "" {
+			continue
+		}
+		incoming = append(incoming, norm)
+	}
+
+	tx, err := db.DB.Begin()
+	if err != nil {
+		log.Printf("ERROR savePrerequisites begin tx: %v", err)
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	type existingPrereq struct {
+		ID       int
+		Text     string
+		Position int
+	}
+
+	existing := make([]existingPrereq, 0)
+	rows, err := tx.Query(`
+		SELECT id, prerequisite, position
+		FROM course_prerequisites
+		WHERE course_id = ? AND (status = 1 OR status IS NULL)
+		ORDER BY position, id`, courseID)
+	if err != nil {
+		log.Printf("ERROR savePrerequisites load existing: %v", err)
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p existingPrereq
+		if err := rows.Scan(&p.ID, &p.Text, &p.Position); err == nil {
+			existing = append(existing, p)
+		}
+	}
+
+	// Case 1: edit-only (same count) => update same records by index
+	if len(incoming) == len(existing) {
+		for i := range incoming {
+			if _, err := tx.Exec(
+				"UPDATE course_prerequisites SET prerequisite = ?, position = ?, status = 1 WHERE id = ?",
+				incoming[i], i, existing[i].ID,
+			); err != nil {
+				log.Printf("ERROR savePrerequisites update id=%d: %v", existing[i].ID, err)
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			log.Printf("ERROR savePrerequisites commit: %v", err)
+			return err
+		}
+		log.Printf("DEBUG savePrerequisites: updated %d prerequisites (edit-only)", len(incoming))
+		return nil
+	}
+
+	// Case 2: add/remove => diff by text, shift positions without overwriting texts
+	existingTexts := make([]string, 0, len(existing))
+	for _, p := range existing {
+		existingTexts = append(existingTexts, strings.TrimSpace(p.Text))
+	}
+	n := len(existingTexts)
+	m := len(incoming)
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+	}
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			if existingTexts[i-1] == incoming[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else {
+				if dp[i-1][j] >= dp[i][j-1] {
+					dp[i][j] = dp[i-1][j]
+				} else {
+					dp[i][j] = dp[i][j-1]
+				}
+			}
+		}
+	}
+
+	matchedExisting := make(map[int]int)
+	matchedIncoming := make(map[int]bool)
+	i := n
+	j := m
+	for i > 0 && j > 0 {
+		if existingTexts[i-1] == incoming[j-1] {
+			matchedExisting[i-1] = j - 1
+			matchedIncoming[j-1] = true
+			i--
+			j--
+		} else if dp[i-1][j] >= dp[i][j-1] {
+			i--
+		} else {
+			j--
+		}
+	}
+
+	// Soft delete removed
+	for idx, p := range existing {
+		if _, ok := matchedExisting[idx]; !ok {
+			if _, err := tx.Exec("UPDATE course_prerequisites SET status = 0 WHERE id = ?", p.ID); err != nil {
+				log.Printf("ERROR savePrerequisites soft delete id=%d: %v", p.ID, err)
+				return err
+			}
+		}
+	}
+
+	// Avoid unique(course_id,position) collisions while shifting positions
+	if _, err := tx.Exec(
+		"UPDATE course_prerequisites SET position = position + 10000 WHERE course_id = ? AND (status = 1 OR status IS NULL)",
+		courseID,
+	); err != nil {
+		log.Printf("ERROR savePrerequisites temp bump: %v", err)
+		return err
+	}
+
+	// Shift kept prerequisites (position only)
+	for oldIdx, newIdx := range matchedExisting {
+		id := existing[oldIdx].ID
+		if _, err := tx.Exec("UPDATE course_prerequisites SET position = ?, status = 1 WHERE id = ?", newIdx, id); err != nil {
+			log.Printf("ERROR savePrerequisites shift id=%d: %v", id, err)
+			return err
+		}
+	}
+
+	// Insert new prerequisites
+	for idx, text := range incoming {
+		if matchedIncoming[idx] {
+			continue
+		}
+		if _, err := tx.Exec(
+			"INSERT INTO course_prerequisites (course_id, prerequisite, position, status) VALUES (?, ?, ?, 1)",
+			courseID, text, idx,
+		); err != nil {
+			log.Printf("ERROR savePrerequisites insert position=%d: %v", idx, err)
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("ERROR savePrerequisites commit: %v", err)
+		return err
+	}
+	log.Printf("DEBUG savePrerequisites: successfully saved %d prerequisites", len(incoming))
 	return nil
 }
 
@@ -744,65 +1051,58 @@ func saveTeamwork(courseID int, teamwork *models.Teamwork) error {
 	log.Printf("DEBUG: saveTeamwork called for courseID %d with hours=%d, activities=%v", courseID, teamwork.Hours, teamwork.Activities)
 
 	// Upsert total_hours in course_teamwork
-	// Schema differs between environments:
-	// - Some DBs use (course_id, total_hours) with PRIMARY KEY (course_id)
-	// - Others use (id, course_id, total_hours, ...) with PRIMARY KEY (id) where id == courses.id
-	var (
-		result sql.Result
-		err    error
-	)
-	result, err = db.DB.Exec(`
-		INSERT INTO course_teamwork (id, course_id, total_hours)
-		VALUES (?, ?, ?)
-		ON DUPLICATE KEY UPDATE total_hours = ?`,
-		courseID, courseID, teamwork.Hours, teamwork.Hours)
-	if err != nil && isMySQLUnknownColumnError(err) {
+	// Schema: (id PRIMARY KEY, course_id, total_hours)
+	var teamworkID int64
+
+	// First, try to get existing teamwork_id for this course
+	err := db.DB.QueryRow("SELECT id FROM course_teamwork WHERE course_id = ?", courseID).Scan(&teamworkID)
+
+	var result sql.Result
+
+	if err == sql.ErrNoRows {
+		// No existing record, insert new one
 		result, err = db.DB.Exec(`
 			INSERT INTO course_teamwork (course_id, total_hours)
-			VALUES (?, ?)
-			ON DUPLICATE KEY UPDATE total_hours = ?`,
-			courseID, teamwork.Hours, teamwork.Hours)
-	}
-	if err != nil {
-		log.Printf("ERROR: Failed to upsert course_teamwork: %v", err)
-		return err
-	}
-	rowsAffected, _ := result.RowsAffected()
-	log.Printf("DEBUG: course_teamwork upsert affected %d rows", rowsAffected)
-
-	// Delete existing activities
-	if _, err := db.DB.Exec("DELETE FROM course_teamwork_activities WHERE teamwork_id = ?", courseID); err != nil {
-		if isMySQLUnknownColumnError(err) {
-			// Older schema used course_id instead of teamwork_id.
-			if _, err2 := db.DB.Exec("DELETE FROM course_teamwork_activities WHERE course_id = ?", courseID); err2 != nil {
-				return nil
-			}
-		} else {
-			log.Printf("ERROR: Failed to delete existing teamwork activities: %v", err)
+			VALUES (?, ?)`,
+			courseID, teamwork.Hours)
+		if err != nil {
+			log.Printf("ERROR: Failed to insert course_teamwork: %v", err)
 			return err
 		}
+		teamworkID, _ = result.LastInsertId()
+		log.Printf("DEBUG: Created new teamwork record with id=%d", teamworkID)
+	} else if err == nil {
+		// Existing record, update it
+		_, err = db.DB.Exec(`
+			UPDATE course_teamwork SET total_hours = ? WHERE id = ?`,
+			teamwork.Hours, teamworkID)
+		if err != nil {
+			log.Printf("ERROR: Failed to update course_teamwork: %v", err)
+			return err
+		}
+		log.Printf("DEBUG: Updated teamwork record id=%d with hours=%d", teamworkID, teamwork.Hours)
+	} else {
+		log.Printf("ERROR: Failed to query course_teamwork: %v", err)
+		return err
 	}
 
-	// Insert new activities
-	log.Printf("DEBUG: Inserting %d teamwork activities", len(teamwork.Activities))
+	// Delete existing activities using teamwork_id
+	if _, err := db.DB.Exec("DELETE FROM course_teamwork_activities WHERE teamwork_id = ?", teamworkID); err != nil {
+		log.Printf("ERROR: Failed to delete existing teamwork activities: %v", err)
+		return err
+	}
+
+	// Insert new activities using the correct teamwork_id
+	log.Printf("DEBUG: Inserting %d teamwork activities for teamwork_id=%d", len(teamwork.Activities), teamworkID)
 	for i, text := range teamwork.Activities {
 		if text == "" {
 			log.Printf("DEBUG: Skipping empty activity at position %d", i)
 			continue
 		}
 		result, err := db.DB.Exec(`
-			INSERT INTO course_teamwork_activities (teamwork_id, activity, position)
-			VALUES (?, ?, ?)`, courseID, text, i)
+			INSERT INTO course_teamwork_activities (teamwork_id, course_id, activity, position, status)
+			VALUES (?, ?, ?, ?, 1)`, teamworkID, courseID, text, i)
 		if err != nil {
-			if isMySQLUnknownColumnError(err) {
-				// Older schema used course_id instead of teamwork_id.
-				if _, err2 := db.DB.Exec(`
-					INSERT INTO course_teamwork_activities (course_id, activity, position)
-					VALUES (?, ?, ?)`, courseID, text, i); err2 == nil {
-					continue
-				}
-				return nil
-			}
 			log.Printf("ERROR: Failed to insert teamwork activity at position %d: %v", i, err)
 			return err
 		}
@@ -817,42 +1117,103 @@ func saveTeamwork(courseID int, teamwork *models.Teamwork) error {
 func saveSelfLearning(courseID int, selflearning *models.SelfLearning) error {
 	if selflearning == nil {
 		// Delete if nil
-		db.DB.Exec("DELETE FROM course_selflearning_resources WHERE main_id IN (SELECT id FROM course_selflearning_topics WHERE course_id = ?)", courseID)
-		db.DB.Exec("DELETE FROM course_selflearning_topics WHERE course_id = ?", courseID)
+		db.DB.Exec("DELETE FROM course_selflearning_resources WHERE main_id IN (SELECT id FROM course_selflearning_topics WHERE selflearning_id IN (SELECT id FROM course_selflearning WHERE course_id = ?))", courseID)
+		db.DB.Exec("DELETE FROM course_selflearning_topics WHERE selflearning_id IN (SELECT id FROM course_selflearning WHERE course_id = ?)", courseID)
 		db.DB.Exec("DELETE FROM course_selflearning WHERE course_id = ?", courseID)
 		return nil
 	}
 
-	// Upsert self-learning total_hours
-	_, err := db.DB.Exec(`
-		INSERT INTO course_selflearning (id, course_id, total_hours)
-		VALUES (?, ?, ?)
-		ON DUPLICATE KEY UPDATE total_hours = ?`,
-		courseID, courseID, selflearning.Hours, selflearning.Hours)
-	if err != nil && isMySQLUnknownColumnError(err) {
-		_, err = db.DB.Exec(`
+	var selfLearningID int
+	err := db.DB.QueryRow(`
+		SELECT id
+		FROM course_selflearning
+		WHERE course_id = ?
+		ORDER BY id ASC
+		LIMIT 1`, courseID).Scan(&selfLearningID)
+	if err == sql.ErrNoRows {
+		result, insertErr := db.DB.Exec(`
 			INSERT INTO course_selflearning (course_id, total_hours)
-			VALUES (?, ?)
-			ON DUPLICATE KEY UPDATE total_hours = ?`,
-			courseID, selflearning.Hours, selflearning.Hours)
-	}
-	if err != nil {
+			VALUES (?, ?)`,
+			courseID, selflearning.Hours)
+
+		if isMySQLNoDefaultValueForField(insertErr, "id") {
+			if _, alterErr := db.DB.Exec("ALTER TABLE course_selflearning MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT"); alterErr != nil {
+				log.Printf("WARN: failed to set AUTO_INCREMENT on course_selflearning.id: %v", alterErr)
+			}
+			result, insertErr = db.DB.Exec(`
+				INSERT INTO course_selflearning (course_id, total_hours)
+				VALUES (?, ?)`,
+				courseID, selflearning.Hours)
+
+			if isMySQLNoDefaultValueForField(insertErr, "id") {
+				for attempt := 0; attempt < 3; attempt++ {
+					_, insertErr = db.DB.Exec(`
+						INSERT INTO course_selflearning (id, course_id, total_hours)
+						SELECT COALESCE(MAX(id), 0) + 1, ?, ?
+						FROM course_selflearning`,
+						courseID, selflearning.Hours,
+					)
+					if insertErr == nil {
+						break
+					}
+					if !isMySQLDuplicateEntryError(insertErr) {
+						break
+					}
+				}
+			}
+		}
+
+		if insertErr != nil {
+			return insertErr
+		}
+
+		if id, idErr := result.LastInsertId(); idErr == nil && id > 0 {
+			selfLearningID = int(id)
+		} else {
+			err = db.DB.QueryRow(`
+				SELECT id
+				FROM course_selflearning
+				WHERE course_id = ?
+				ORDER BY id ASC
+				LIMIT 1`, courseID).Scan(&selfLearningID)
+			if err != nil {
+				return err
+			}
+		}
+	} else if err != nil {
 		return err
+	} else {
+		if _, err = db.DB.Exec(
+			"UPDATE course_selflearning SET total_hours = ?, status = 1 WHERE id = ?",
+			selflearning.Hours, selfLearningID,
+		); err != nil {
+			if _, err = db.DB.Exec(
+				"UPDATE course_selflearning SET total_hours = ? WHERE id = ?",
+				selflearning.Hours, selfLearningID,
+			); err != nil {
+				return err
+			}
+		}
 	}
 
+	// Keep exactly one self-learning header row per course.
+	db.DB.Exec("DELETE FROM course_selflearning_resources WHERE main_id IN (SELECT id FROM course_selflearning_topics WHERE selflearning_id IN (SELECT id FROM course_selflearning WHERE course_id = ? AND id <> ?))", courseID, selfLearningID)
+	db.DB.Exec("DELETE FROM course_selflearning_topics WHERE selflearning_id IN (SELECT id FROM course_selflearning WHERE course_id = ? AND id <> ?)", courseID, selfLearningID)
+	db.DB.Exec("DELETE FROM course_selflearning WHERE course_id = ? AND id <> ?", courseID, selfLearningID)
+
 	// Delete existing main topics and their internals
-	db.DB.Exec("DELETE FROM course_selflearning_resources WHERE main_id IN (SELECT id FROM course_selflearning_topics WHERE course_id = ?)", courseID)
-	db.DB.Exec("DELETE FROM course_selflearning_topics WHERE course_id = ?", courseID)
+	db.DB.Exec("DELETE FROM course_selflearning_resources WHERE main_id IN (SELECT id FROM course_selflearning_topics WHERE selflearning_id = ?)", selfLearningID)
+	db.DB.Exec("DELETE FROM course_selflearning_topics WHERE selflearning_id = ?", selfLearningID)
 
 	// Insert new main topics
 	for i, mainInput := range selflearning.MainInputs {
-		if mainInput.Main == "" {
+		if strings.TrimSpace(mainInput.Main) == "" {
 			continue
 		}
 
 		result, err := db.DB.Exec(`
-			INSERT INTO course_selflearning_topics (course_id, main_text, position) 
-			VALUES (?, ?, ?)`, courseID, mainInput.Main, i)
+			INSERT INTO course_selflearning_topics (selflearning_id, main_text, position, status) 
+			VALUES (?, ?, ?, 1)`, selfLearningID, strings.TrimSpace(mainInput.Main), i)
 		if err != nil {
 			return err
 		}
@@ -861,12 +1222,12 @@ func saveSelfLearning(courseID int, selflearning *models.SelfLearning) error {
 
 		// Insert internal resources for this main topic
 		for j, text := range mainInput.Internal {
-			if text == "" {
+			if strings.TrimSpace(text) == "" {
 				continue
 			}
 			_, err := db.DB.Exec(`
-				INSERT INTO course_selflearning_resources (main_id, internal_text, position) 
-				VALUES (?, ?, ?)`, mainID, text, j)
+				INSERT INTO course_selflearning_resources (main_id, internal_text, position, status) 
+				VALUES (?, ?, ?, 1)`, mainID, strings.TrimSpace(text), j)
 			if err != nil {
 				return err
 			}

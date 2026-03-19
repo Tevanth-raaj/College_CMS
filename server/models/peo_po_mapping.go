@@ -9,8 +9,8 @@ type PEOPOMapping struct {
 }
 
 type PEOPOMappingResponse struct {
-	POMatrix    map[string]int `json:"po_matrix"`   // key: "peo_index-po_index"
-	PSOPOMatrix map[string]int `json:"psoPoMatrix"` // key: "pso_index-po_index"
+	PoMatrix    map[string]int `json:"poMatrix"`    // key: "peo_index-po_index"
+	PsoPoMatrix map[string]int `json:"psoPoMatrix"` // key: "pso_index-po_index"
 }
 
 type PEOPOMappingRequest struct {

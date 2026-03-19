@@ -39,6 +39,16 @@ func main() {
 		log.Fatal("Failed to create cluster tables:", err)
 	}
 
+	// Create syllabus relational tables
+	if err := db.CreateSyllabusRelationalTables(); err != nil {
+		log.Fatal("Failed to create syllabus relational tables:", err)
+	}
+
+	// Create normalized syllabus child tables
+	if err := db.CreateNormalizedSyllabusTables(); err != nil {
+		log.Fatal("Failed to create normalized syllabus tables:", err)
+	}
+
 	// Add visibility columns to department data tables
 	if err := db.AddVisibilityColumns(); err != nil {
 		log.Fatal("Failed to add visibility columns:", err)

@@ -189,10 +189,18 @@ function SemesterDetailPage() {
     }
 
     try {
-      const lectureHrs = parseInt(newCourse.lecture_hrs) || 0;
-      const tutorialHrs = parseInt(newCourse.tutorial_hrs) || 0;
+      const isLabCourseIn2026 =
+        curriculumTemplate === "2026" && newCourse.course_type === 2;
+      const lectureHrs = isLabCourseIn2026
+        ? 0
+        : parseInt(newCourse.lecture_hrs) || 0;
+      const tutorialHrs = isLabCourseIn2026
+        ? 0
+        : parseInt(newCourse.tutorial_hrs) || 0;
       const practicalHrs = parseInt(newCourse.practical_hrs) || 0;
-      const activityHrs = parseInt(newCourse.activity_hrs) || 0;
+      const activityHrs = isLabCourseIn2026
+        ? 0
+        : parseInt(newCourse.activity_hrs) || 0;
 
       const courseData = {
         ...newCourse,
@@ -759,7 +767,9 @@ function SemesterDetailPage() {
 
               {/* Common Fields - Hours per week */}
               {!(
-                curriculumTemplate === "2022" && newCourse.course_type === 2
+                (curriculumTemplate === "2022" ||
+                  curriculumTemplate === "2026") &&
+                newCourse.course_type === 2
               ) && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -783,7 +793,9 @@ function SemesterDetailPage() {
               )}
 
               {!(
-                curriculumTemplate === "2022" && newCourse.course_type === 2
+                (curriculumTemplate === "2022" ||
+                  curriculumTemplate === "2026") &&
+                newCourse.course_type === 2
               ) && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -843,7 +855,7 @@ function SemesterDetailPage() {
                 />
               </div>
 
-              {curriculumTemplate !== "2022" && (
+              {curriculumTemplate !== "2022" && newCourse.course_type !== 2 && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
                     Activity (hrs per week)
