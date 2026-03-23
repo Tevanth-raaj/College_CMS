@@ -241,7 +241,7 @@ const HRFacultyPage = () => {
         // Save these limits
         try {
           const response = await fetch(
-            `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000/api'}/hr/faculty/subject-counts`,
+            `${API_BASE_URL}/hr/faculty/subject-counts`,
             {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },

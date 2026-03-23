@@ -3,16 +3,13 @@ version: '3.9'
 services:
   # Frontend Service
   frontend:
+    image: pcdpbit/academics-frontend:v1.0.2
     build:
       context: ./client
       dockerfile: Dockerfile
-      args:
-        REACT_APP_API_URL: ${REACT_APP_API_URL}
     container_name: cms-frontend
     ports:
-      - "8085:80"
-    env_file:
-      - /envs/cms-frontend.env
+      - "8081:80"
     depends_on:
       - backend
     restart: unless-stopped
@@ -22,14 +19,21 @@ services:
 
   # Backend Service
   backend:
+    image: pcdpbit/academics-backend:v1.0.2
     build:
       context: ./server
       dockerfile: Dockerfile
     container_name: cms-backend
     ports:
-      - "5005:5000"
-    env_file:
-      - /envs/cms-backend.env
+      - "5001:5000"
+    environment:
+      PORT: 5000
+      CORS_ALLOWED_ORIGINS: "https://academics.bitsathy.ac.in,http://localhost:3000"
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
     volumes:
       - ./server/uploads:/app/uploads
     depends_on:
@@ -45,13 +49,16 @@ services:
     container_name: cms-mysql
     ports:
       - "3309:3306"
-    env_file:
-      - /envs/cms-mysql.env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-cms}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     command:
       --bind-address=0.0.0.0
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./server/database:/docker-entrypoint-initdb.d
+      - ./server/db:/docker-entrypoint-initdb.d
     restart: unless-stopped
     networks:
       - cms-network
