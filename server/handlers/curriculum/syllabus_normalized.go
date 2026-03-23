@@ -1030,18 +1030,14 @@ func savePrerequisites(courseID int, prerequisites []string) error {
 func saveTeamwork(courseID int, teamwork *models.Teamwork) error {
 	if teamwork == nil {
 		log.Printf("DEBUG: saveTeamwork called with nil teamwork for courseID %d", courseID)
-		// Delete if nil
-		if _, err := db.DB.Exec("DELETE FROM course_teamwork_activities WHERE teamwork_id = ?", courseID); err != nil {
-			if isMySQLUnknownColumnError(err) {
-				_, _ = db.DB.Exec("DELETE FROM course_teamwork_activities WHERE course_id = ?", courseID)
-			} else {
+		// Delete if nil - get teamwork_id first
+		var teamworkID int64
+		err := db.DB.QueryRow("SELECT id FROM course_teamwork WHERE course_id = ?", courseID).Scan(&teamworkID)
+		if err == nil {
+			if _, err := db.DB.Exec("DELETE FROM course_teamwork_activities WHERE teamwork_id = ?", teamworkID); err != nil {
 				return err
 			}
-		}
-		if _, err := db.DB.Exec("DELETE FROM course_teamwork WHERE id = ?", courseID); err != nil {
-			if isMySQLUnknownColumnError(err) {
-				_, _ = db.DB.Exec("DELETE FROM course_teamwork WHERE course_id = ?", courseID)
-			} else {
+			if _, err := db.DB.Exec("DELETE FROM course_teamwork WHERE id = ?", teamworkID); err != nil {
 				return err
 			}
 		}
@@ -1100,8 +1096,8 @@ func saveTeamwork(courseID int, teamwork *models.Teamwork) error {
 			continue
 		}
 		result, err := db.DB.Exec(`
-			INSERT INTO course_teamwork_activities (teamwork_id, course_id, activity, position, status)
-			VALUES (?, ?, ?, ?, 1)`, teamworkID, courseID, text, i)
+			INSERT INTO course_teamwork_activities (teamwork_id, activity, position, status)
+			VALUES (?, ?, ?, 1)`, teamworkID, text, i)
 		if err != nil {
 			log.Printf("ERROR: Failed to insert teamwork activity at position %d: %v", i, err)
 			return err

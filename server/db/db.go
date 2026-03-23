@@ -840,13 +840,11 @@ func CreateNormalizedSyllabusTables() error {
 		`CREATE TABLE IF NOT EXISTS course_teamwork_activities (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			teamwork_id INT NOT NULL,
-			course_id INT NOT NULL,
 			activity TEXT NOT NULL,
 			position INT NOT NULL,
 			status TINYINT(1) DEFAULT 1,
 			UNIQUE KEY unique_teamwork_position (teamwork_id, position),
-			FOREIGN KEY (teamwork_id) REFERENCES course_teamwork(id) ON DELETE CASCADE,
-			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
+			FOREIGN KEY (teamwork_id) REFERENCES course_teamwork(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_selflearning (
 			course_id INT NOT NULL PRIMARY KEY,

@@ -31,7 +31,11 @@ func GetCourseSyllabusNested(w http.ResponseWriter, r *http.Request) {
 	resp.Header.Objectives, _ = fetchObjectives(courseID)
 	resp.Header.Outcomes, _ = fetchOutcomes(courseID)
 	resp.Header.ReferenceList, _ = fetchReferences(courseID)
-	resp.Header.TextbookReferenceList, _ = fetchTextbookReferences(courseID)
+	if curriculumTemplate == "2026" {
+		resp.Header.TextbookReferenceList, _ = fetchTextbookReferences(courseID)
+	} else {
+		resp.Header.TextbookReferenceList = []string{}
+	}
 	resp.Header.Prerequisites, _ = fetchPrerequisites(courseID)
 	resp.Header.Teamwork, _ = fetchTeamwork(courseID)
 	resp.Header.SelfLearning, _ = fetchSelfLearning(courseID)
@@ -464,8 +468,8 @@ func CreateTopic(w http.ResponseWriter, r *http.Request) {
 	log.Printf("DEBUG CreateTopic: titleID=%d, Topic=%s, Position=%d", titleID, body.Topic, body.Position)
 
 	result, err := db.DB.Exec(`
-		INSERT INTO syllabus_topics (title_id, topic, position, status)
-		VALUES (?, ?, ?, 1)`, titleID, body.Topic, body.Position)
+		INSERT INTO syllabus_topics (title_id, topic, content, position, status)
+		VALUES (?, ?, '', ?, 1)`, titleID, body.Topic, body.Position)
 
 	if err != nil {
 		log.Println("CreateTopic error:", err)

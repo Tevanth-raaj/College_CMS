@@ -31,7 +31,11 @@ func GetCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 	syllabus.Objectives, _ = fetchObjectives(courseID)
 	syllabus.Outcomes, _ = fetchOutcomes(courseID)
 	syllabus.ReferenceList, _ = fetchReferences(courseID)
-	syllabus.TextbookReferenceList, _ = fetchTextbookReferences(courseID)
+	if getCurriculumTemplateForCourse(courseID) == "2026" {
+		syllabus.TextbookReferenceList, _ = fetchTextbookReferences(courseID)
+	} else {
+		syllabus.TextbookReferenceList = []string{}
+	}
 	syllabus.Prerequisites, _ = fetchPrerequisites(courseID)
 	syllabus.Teamwork, _ = fetchTeamwork(courseID)
 	syllabus.SelfLearning, _ = fetchSelfLearning(courseID)
@@ -105,10 +109,15 @@ func SaveCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := saveTextbookReferences(courseID, requestData.TextbookReferenceList); err != nil {
-		log.Println("Error saving textbook references:", err)
-		http.Error(w, "Failed to save textbook references", http.StatusInternalServerError)
-		return
+	if getCurriculumTemplateForCourse(courseID) == "2026" {
+		if err := saveTextbookReferences(courseID, requestData.TextbookReferenceList); err != nil {
+			log.Println("Error saving textbook references:", err)
+			http.Error(w, "Failed to save textbook references", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// For older template children, textbook references remain empty
+		_ = saveTextbookReferences(courseID, []string{})
 	}
 
 	if err := savePrerequisites(courseID, requestData.Prerequisites); err != nil {
@@ -131,13 +140,17 @@ func SaveCourseSyllabus(w http.ResponseWriter, r *http.Request) {
 
 	// Return success response
 	response := models.Syllabus{
-		ID:                    courseID, // Use course_id as identifier
-		Outcomes:              requestData.Outcomes,
-		ReferenceList:         requestData.ReferenceList,
-		TextbookReferenceList: requestData.TextbookReferenceList,
-		Prerequisites:         requestData.Prerequisites,
-		Teamwork:              requestData.Teamwork,
-		SelfLearning:          requestData.SelfLearning,
+		ID:            courseID, // Use course_id as identifier
+		Outcomes:      requestData.Outcomes,
+		ReferenceList: requestData.ReferenceList,
+		Prerequisites: requestData.Prerequisites,
+		Teamwork:      requestData.Teamwork,
+		SelfLearning:  requestData.SelfLearning,
+	}
+	if getCurriculumTemplateForCourse(courseID) == "2026" {
+		response.TextbookReferenceList = requestData.TextbookReferenceList
+	} else {
+		response.TextbookReferenceList = []string{}
 	}
 
 	json.NewEncoder(w).Encode(response)
