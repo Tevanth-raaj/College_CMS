@@ -3,73 +3,59 @@ version: '3.9'
 services:
   # Frontend Service
   frontend:
-    image: pcdpbit/academics-frontend:v1.0.2
-    build:
-      context: ./client
-      dockerfile: Dockerfile
+    image: pcdpbit/academics-frontend:v1.0.0
     container_name: cms-frontend
     ports:
-      - "8081:80"
+      - "8083:80"
     depends_on:
       - backend
     restart: unless-stopped
     networks:
       - cms-network
-      - reverse-proxy
+      # - reverse-proxy
 
   # Backend Service
   backend:
-    image: pcdpbit/academics-backend:v1.0.2
-    build:
-      context: ./server
-      dockerfile: Dockerfile
+    image: pcdpbit/academics-backend:v1.0.0
     container_name: cms-backend
     ports:
-      - "5001:5000"
-    environment:
-      PORT: 5000
-      CORS_ALLOWED_ORIGINS: "https://academics.bitsathy.ac.in,http://localhost:3000"
-      DB_HOST: ${DB_HOST}
-      DB_PORT: ${DB_PORT:-3306}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME}
+      - "5003:5000"
+    env_file:
+      # - /envs/cms-backend.env
+      - ./server/.env
     volumes:
       - ./server/uploads:/app/uploads
-    depends_on:
-      - mysql
+    # depends_on:
+    #   - mysql
     restart: unless-stopped
     networks:
       - cms-network
-      - reverse-proxy
+      # - reverse-proxy
 
   # MySQL Database Service (Optional - if you're using MySQL)
-  mysql:
-    image: mysql:8.0
-    container_name: cms-mysql
-    ports:
-      - "3309:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-cms}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    command:
-      --bind-address=0.0.0.0
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./server/db:/docker-entrypoint-initdb.d
-    restart: unless-stopped
-    networks:
-      - cms-network
-      - reverse-proxy
+  # mysql:
+  #   image: mysql:8.0
+  #   container_name: cms-mysql
+  #   ports:
+  #     - "3309:3306"
+  #   env_file:
+  #     - ./server/.env
+  #   command:
+  #     --bind-address=0.0.0.0
+  #   volumes:
+  #     - mysql_data:/var/lib/mysql
+  #     - ./server/database:/docker-entrypoint-initdb.d
+  #   restart: unless-stopped
+  #   networks:
+  #     - cms-network
+  #     - reverse-proxy
 
 networks:
   cms-network:
     driver: bridge
-  reverse-proxy:
-    external: true
+  # reverse-proxy:
+  #   external: true
 
-volumes:
-  mysql_data:
-    driver: local
+# volumes:
+#   mysql_data:
+#     driver: local

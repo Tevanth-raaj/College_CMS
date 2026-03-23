@@ -1229,7 +1229,7 @@ function SyllabusPage() {
             {[...(curriculumTemplate === '2022' ? ['objectives'] : []),
               'outcomes', curriculumTemplate === '2022' ? 'units' : 'modules',
               ...(curriculumTemplate === '2022' ? ['experiments'] : ['teamwork', 'selflearning', 'prerequisites']),
-              'references', 'textbook_references'].map((tab) => (
+              'references', ...(curriculumTemplate === '2026' ? ['textbook_references'] : [])].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -1317,7 +1317,7 @@ function SyllabusPage() {
             </form>
           )}
 
-          {activeTab === 'textbook_references' && (
+          {activeTab === 'textbook_references' && curriculumTemplate === '2026' && (
             <form onSubmit={handleSaveHeader}>
               {renderHeaderField('textbook_reference_list', 'Textbook References')}
               <button
