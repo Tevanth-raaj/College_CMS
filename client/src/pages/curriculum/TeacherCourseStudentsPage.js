@@ -282,6 +282,14 @@ function TeacherCourseStudentsPage() {
     return now >= startDate && now <= endDate
   }
 
+  const markEntryAvailable = Boolean(
+    (course?.has_window &&
+      course?.window &&
+      isWindowActive(course.window) &&
+      submissionInfo?.submitted !== true) ||
+      appealInfo?.status === 'resolved'
+  )
+
   if (loading) {
     return (
       <MainLayout title="Course Students" subtitle="Loading...">
@@ -345,13 +353,29 @@ function TeacherCourseStudentsPage() {
             </button>
             <button
               onClick={() => setActiveTab('mark-entry')}
-              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors relative flex items-center justify-center ${
                 activeTab === 'mark-entry'
                   ? 'bg-primary text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              Mark Entry
+              <span>Mark Entry</span>
+              {markEntryAvailable ? (
+                <span
+                  className={`absolute right-4 inline-flex items-center justify-center w-5 h-5 rounded-full ring-2 ${
+                    activeTab === 'mark-entry'
+                      ? 'bg-white/20 text-white ring-white/50'
+                      : 'bg-yellow-100 text-yellow-600 ring-yellow-300'
+                  }`}
+                  aria-label="Mark entry available"
+                >
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 2a6 6 0 00-6 6v3.382l-.724 1.447A1 1 0 004.17 14h11.66a1 1 0 00.894-1.447L16 11.382V8a6 6 0 00-6-6zM7 15a3 3 0 006 0H7z" />
+                  </svg>
+                </span>
+              ) : (
+                <span className="absolute right-4 w-5 h-5" aria-hidden="true" />
+              )}
             </button>
             <button
               onClick={() => setActiveTab('co-po-attainment')}

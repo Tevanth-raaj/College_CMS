@@ -1362,7 +1362,35 @@ function MarkEntryPermissionsPage() {
   }
 
   return (
-    <MainLayout title="Mark Permissions" subtitle="Manage mark entry windows and permissions">
+    <MainLayout
+      title="Mark Permissions"
+      subtitle="Manage mark entry windows and permissions"
+      actions={
+        <div className="bg-gray-50 rounded-xl shadow-md border border-gray-200 p-1 inline-flex gap-1 overflow-x-auto">
+          {[
+            { key: 'create', label: 'Mark Entry Window' },
+            { key: 'existing', label: 'Existing Windows' },
+            { key: 'extension', label: 'Window Extension' },
+          ].map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => !tab.disabled && setMainTab(tab.key)}
+              disabled={tab.disabled}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all whitespace-nowrap ${
+                mainTab === tab.key
+                  ? 'bg-primary text-white shadow-sm'
+                  : tab.disabled
+                    ? 'text-gray-300 cursor-not-allowed'
+                    : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              {tab.label}
+              {tab.disabled && <span className="ml-1.5 text-[10px] font-normal opacity-70">Soon</span>}
+            </button>
+          ))}
+        </div>
+      }
+    >
       <div className="space-y-6">
 
         {/* Message Alert */}
@@ -1378,31 +1406,6 @@ function MarkEntryPermissionsPage() {
             {message.text}
           </div>
         )}
-
-        {/* ── Main Tab Toggle ── */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-1 inline-flex gap-1">
-          {[
-            { key: 'create', label: 'Mark Entry Window' },
-            { key: 'existing', label: 'Existing Windows' },
-            { key: 'extension', label: 'Window Extension' },
-          ].map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => !tab.disabled && setMainTab(tab.key)}
-              disabled={tab.disabled}
-              className={`px-5 py-2.5 text-sm font-semibold rounded-lg transition-all whitespace-nowrap ${
-                mainTab === tab.key
-                  ? 'bg-primary text-white shadow-sm'
-                  : tab.disabled
-                  ? 'text-gray-300 cursor-not-allowed'
-                  : 'text-gray-500 hover:text-gray-800'
-              }`}
-            >
-              {tab.label}
-              {tab.disabled && <span className="ml-1.5 text-[10px] font-normal opacity-70">Soon</span>}
-            </button>
-          ))}
-        </div>
 
         {/* ── Create Tab ── */}
         {mainTab === 'create' && (
