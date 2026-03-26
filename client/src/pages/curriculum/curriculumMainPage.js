@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
 import CurriculumCard from '../../components/CurriculumCard'
-import SearchFilterBar from '../../components/SearchFilterBar'
 
 function CurriculumMainPage() {
-  const navigate = useNavigate()
   const [curriculum, setCurriculum] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -241,15 +238,31 @@ function CurriculumMainPage() {
       subtitle="Manage academic curriculum and syllabi structures"
       actions={
         <div className="flex items-center space-x-3">
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="btn-secondary-custom flex items-center space-x-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            <span>Back to Dashboard</span>
-          </button>
+          <div className="relative w-72">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            <input
+              type="text"
+              placeholder="Search curriculum..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-10 py-2 border-2 border-gray-200 outline-none focus:border-primary bg-background rounded-lg transition-all duration-200 text-sm"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
+                aria-label="Clear search"
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
           <button
             onClick={() => setShowForm(!showForm)}
             className="btn-primary-custom flex items-center space-x-2"
@@ -369,17 +382,6 @@ function CurriculumMainPage() {
           </div>
         ) : (
           <div>
-            {/* Search Bar - Same as UsersPage */}
-            <div className='card-custom mb-4'>
-              <SearchFilterBar
-                searchQuery={searchQuery}
-                onSearchChange={setSearchQuery}
-                resultCount={filteredCurriculum.length}
-                resultLabel="curriculum"
-                searchWidth="w-full sm:w-80"
-              />
-            </div>
-
             {/* Curriculum Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
               {filteredCurriculum.map(reg => (

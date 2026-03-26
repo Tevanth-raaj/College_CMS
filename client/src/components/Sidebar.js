@@ -287,7 +287,7 @@ function Sidebar({ onExpandedChange }) {
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth={2}
-              d="M17 20h5v-1a4 4 0 00-5-3.87M9 20H4v-1a4 4 0 015-3.87m8-8a4 4 0 11-8 0 4 4 0 018 0zM7 12a4 4 0 11-8 0 4 4 0 018 0z"
+              d="M17 20h5v-1a4 4 0 00-5-3.87M9 20H4v-1a4 4 0 015-3.87m8-8a4 4 0 11-8 0 4 4 0 018 0z"
             />
           </svg>
         ),
@@ -338,7 +338,7 @@ function Sidebar({ onExpandedChange }) {
         path: "/teacher/course-selection",
         icon: (
           <svg
-            className="w-5 h-5"
+            className="w-7 h-7"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -378,7 +378,7 @@ function Sidebar({ onExpandedChange }) {
         path: "/admin/teacher-course-assignment",
         icon: (
           <svg
-            className="w-5 h-5"
+            className="w-7 h-7"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -387,7 +387,7 @@ function Sidebar({ onExpandedChange }) {
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth={2}
-              d="M8 7a4 4 0 118 0v2h1a2 2 0 012 2v8a2 2 0 01-2 2H7a2 2 0 01-2-2v-8a2 2 0 012-2h1V7zm2 0v2h4V7a2 2 0 10-4 0zm2 6v4m-2-2h4"
+              d="M9 7a3 3 0 116 0 3 3 0 01-6 0M4 19a6 6 0 0112 0M16 8h4m-4 4h4m-4 4h4"
             />
           </svg>
         ),
@@ -733,7 +733,7 @@ function Sidebar({ onExpandedChange }) {
   return (
     <aside
       onPointerDownCapture={() => setIsPointerDownInSidebar(true)}
-      className={`fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 transition-all duration-300 flex flex-col ${
+      className={`group fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 transition-all duration-300 flex flex-col ${
         isSidebarExpanded ? "w-64" : "w-20"
       }`}
     >
@@ -750,7 +750,7 @@ function Sidebar({ onExpandedChange }) {
         >
           <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0 bg-primary">
             <svg
-              className="w-6 h-6"
+              className="w-6 h-6 text-white"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -776,7 +776,7 @@ function Sidebar({ onExpandedChange }) {
                 ACADEMICS
               </span>
               <span className="text-xs text-gray-500 font-medium whitespace-nowrap">
-                Curriculum Portal
+                Portal
               </span>
             </div>
           )}
@@ -810,7 +810,7 @@ function Sidebar({ onExpandedChange }) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
+      <nav className="flex-1 overflow-y-hidden group-hover:overflow-y-auto px-3 py-3 pr-4 -mr-1 space-y-2">
         {menuItems.map((item) => (
           <button
             key={item.path}

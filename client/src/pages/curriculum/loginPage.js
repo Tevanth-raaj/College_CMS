@@ -199,7 +199,7 @@ function LoginPage() {
               color: "#7D53F6",
             }}
           >
-            Curriculum Management System
+            Academics portal
           </h1>
           <p className="text-gray-600 text-base font-medium">
             Sign in to continue to your dashboard
@@ -314,11 +314,6 @@ function LoginPage() {
             </button>
           </form>
         </div>
-
-        {/* Footer */}
-        <p className="text-center text-sm text-gray-500 mt-6">
-          © 2025 Curriculum Management System. All rights reserved.
-        </p>
       </div>
     </div>
   )

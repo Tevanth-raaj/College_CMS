@@ -47,6 +47,7 @@ function TeacherCourseStudentsPage() {
   const [appealReason, setAppealReason] = useState('')
   const [submittingAppeal, setSubmittingAppeal] = useState(false)
   const [appealError, setAppealError] = useState('')
+  const [activeTab, setActiveTab] = useState('course-details')
 
   useEffect(() => {
     if (courseId) {
@@ -330,6 +331,43 @@ function TeacherCourseStudentsPage() {
       }
     >
       <div className="space-y-6">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <button
+              onClick={() => setActiveTab('course-details')}
+              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                activeTab === 'course-details'
+                  ? 'bg-primary text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              Course Details
+            </button>
+            <button
+              onClick={() => setActiveTab('mark-entry')}
+              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                activeTab === 'mark-entry'
+                  ? 'bg-primary text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              Mark Entry
+            </button>
+            <button
+              onClick={() => setActiveTab('co-po-attainment')}
+              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                activeTab === 'co-po-attainment'
+                  ? 'bg-primary text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              CO-PO-Attainment
+            </button>
+          </div>
+        </div>
+
+        {activeTab === 'mark-entry' && (
+          <>
         {/* Mark Entry Window Section */}
         {course?.has_window && course?.window && (() => {
           const active = isWindowActive(course.window)
@@ -836,87 +874,99 @@ function TeacherCourseStudentsPage() {
             </div>
           </div>
         )}
+          </>
+        )}
 
-        {/* Students List */}
-        {/* Course Info Card */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Course Code</p>
-              <p className="text-lg font-semibold">{course?.course_code}</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Course Type</p>
-              <span className={`px-3 py-1 tracking-tighter uppercase rounded-full text-xs font-semibold ${course.course_type === 'theory'
-                ? 'bg-blue-100 text-blue-700 border border-blue-200'
-                : course.course_type === 'lab'
-                  ? 'bg-green-100 text-green-700 border border-green-200'
-                  : course.course_type === 'theory_with_lab'
-                    ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                    : 'bg-gray-100 text-gray-700 border border-gray-200'
-                }`}>
-                {course.course_type === 'theory_with_lab' ? 'Theory+Lab' : course.course_type}
-              </span>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Credits</p>
-              <p className="text-lg font-semibold text-gray-900">{course?.credit}</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Category</p>
-              <p className="text-lg font-semibold text-gray-900">{course?.category}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Students List */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900">
-              Allocated Students ({students.length})
-            </h3>
-          </div>
-
-          {students.length > 0 ? (
-            <div className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {students.map((student) => (
-                  <div
-                    key={student.student_id}
-                    className="flex items-center space-x-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors border border-gray-200"
-                  >
-                    <div
-                      className="w-16 h-16 rounded-full bg-background flex items-center justify-center text-primary font-semibold text-2xl shadow-md flex-shrink-0 border-2 border-primary"
-                    >
-                      {student.student_name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">
-                        {student.student_name}
-                      </p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        ID: {student.student_id}
-                      </p>
-                      {student.enrollment_no && (
-                        <p className="text-xs text-gray-500 mt-1">
-                          Enrollment: {student.enrollment_no}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
+        {activeTab === 'course-details' && (
+          <>
+            {/* Course Info Card */}
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Course Code</p>
+                  <p className="text-lg font-semibold">{course?.course_code}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Course Type</p>
+                  <span className={`px-3 py-1 tracking-tighter uppercase rounded-full text-xs font-semibold ${course.course_type === 'theory'
+                    ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                    : course.course_type === 'lab'
+                      ? 'bg-green-100 text-green-700 border border-green-200'
+                      : course.course_type === 'theory_with_lab'
+                        ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                        : 'bg-gray-100 text-gray-700 border border-gray-200'
+                    }`}>
+                    {course.course_type === 'theory_with_lab' ? 'Theory+Lab' : course.course_type}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Credits</p>
+                  <p className="text-lg font-semibold text-gray-900">{course?.credit}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Category</p>
+                  <p className="text-lg font-semibold text-gray-900">{course?.category}</p>
+                </div>
               </div>
             </div>
-          ) : (
-            <div className="p-12 text-center">
-              <svg className="w-16 h-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-              </svg>
-              <p className="text-gray-500 text-lg font-medium">No students allocated yet</p>
-              <p className="text-gray-400 text-sm mt-2">Students will appear here once they are allocated to this course</p>
+
+            {/* Students List */}
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Allocated Students ({students.length})
+                </h3>
+              </div>
+
+              {students.length > 0 ? (
+                <div className="p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {students.map((student) => (
+                      <div
+                        key={student.student_id}
+                        className="flex items-center space-x-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors border border-gray-200"
+                      >
+                        <div
+                          className="w-16 h-16 rounded-full bg-background flex items-center justify-center text-primary font-semibold text-2xl shadow-md flex-shrink-0 border-2 border-primary"
+                        >
+                          {student.student_name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">
+                            {student.student_name}
+                          </p>
+                          <p className="text-xs text-gray-600 mt-1">
+                            ID: {student.student_id}
+                          </p>
+                          {student.enrollment_no && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              Enrollment: {student.enrollment_no}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-12 text-center">
+                  <svg className="w-16 h-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                  <p className="text-gray-500 text-lg font-medium">No students allocated yet</p>
+                  <p className="text-gray-400 text-sm mt-2">Students will appear here once they are allocated to this course</p>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
+
+        {activeTab === 'co-po-attainment' && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900">CO-PO-Attainment</h3>
+            <p className="text-sm text-gray-600 mt-2">This section is reserved for CO-PO-Attainment. Share the exact fields and flow, and I’ll wire it in here.</p>
+          </div>
+        )}
       </div>
     </MainLayout>
   )

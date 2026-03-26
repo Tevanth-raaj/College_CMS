@@ -232,9 +232,9 @@ function Dashboard() {
         <div className="card-custom p-8 text-white" style={{background: 'linear-gradient(to bottom right, rgb(67, 113, 229), rgb(47, 93, 209))'}}>
           <div className="flex items-start justify-between">
             <div className="flex-1">
-              <h2 className="text-2xl font-bold mb-3">Welcome to Curriculum Management System</h2>
+              <h2 className="text-2xl font-bold mb-3">Welcome to Academics Portal</h2>
               <p className="mb-6 max-w-2xl" style={{color: 'rgba(255, 255, 255, 0.9)'}}>
-                Streamline your academic planning with our comprehensive curriculum management platform. 
+                Streamline your academic planning with our comprehensive Academics management platform. 
                 Create, manage, and track curriculum structures, courses, and mappings all in one place.
               </p>
               <button
