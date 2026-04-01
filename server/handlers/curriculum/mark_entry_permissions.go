@@ -1101,11 +1101,7 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		AND w.end_at >= ?
 		  AND (
 			(w.course_id IS NOT NULL AND w.course_id = c.id)
-			OR (
-				(w.course_id IS NULL OR w.course_id = 0)
-				AND (w.department_id IS NULL OR w.department_id = 0)
-				AND (w.semester IS NULL OR w.semester = 0)
-			)
+			OR (w.course_id IS NULL OR w.course_id = 0)
 		)
 		ORDER BY c.course_code
 	`

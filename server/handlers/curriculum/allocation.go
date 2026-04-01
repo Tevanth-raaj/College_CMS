@@ -231,84 +231,54 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			semesterRows.Close()
-
-			if len(currentSemesters) > 0 {
-				oddCount := 0
-				evenCount := 0
-				for _, sem := range currentSemesters {
-					if sem%2 == 0 {
-						evenCount++
-					} else {
-						oddCount++
-					}
-				}
-				if oddCount > 0 && evenCount == 0 {
-					derivedCalendarSemesterType = "odd"
-				} else if evenCount > 0 && oddCount == 0 {
-					derivedCalendarSemesterType = "even"
-				}
-
-				placeholders := strings.TrimRight(strings.Repeat("?,", len(currentSemesters)), ",")
-				semWiseBaseQuery := `
-					SELECT DISTINCT
-						c.id, tch.course_id, c.course_code, c.course_name, COALESCE(ct.course_type, ''),
-						c.credit, COALESCE(c.category, 'General'),
-						COALESCE(tch.academic_year, ''), COALESCE(LOWER(TRIM(tch.semester_type)), '')
-					FROM teacher_course_history tch
-					JOIN courses c ON tch.course_id = c.id
-					LEFT JOIN course_type ct ON c.course_type = ct.id
-					WHERE tch.teacher_id = ?
-					  AND tch.record_type = 'course'
-					  AND tch.academic_year = ?
-					  AND EXISTS (
-						SELECT 1
-						FROM curriculum_courses cc
-						JOIN normal_cards nc ON cc.semester_id = nc.id
-						WHERE cc.course_id = tch.course_id
-						  AND nc.card_type = 'semester'
-						  AND nc.status = 1
-						  AND nc.semester_number IN (` + placeholders + `)
-					  )
-				`
-				if derivedCalendarSemesterType != "" {
-					semWiseBaseQuery += ` AND COALESCE(LOWER(TRIM(tch.semester_type)), '') = ?`
-				}
-
-				semWiseArgs := []interface{}{facultyID, currentAcademicYear}
-				for _, sem := range currentSemesters {
-					semWiseArgs = append(semWiseArgs, sem)
-				}
-				if derivedCalendarSemesterType != "" {
-					semWiseArgs = append(semWiseArgs, derivedCalendarSemesterType)
-				}
-
-				var semWiseCount int
-				countQuery := `SELECT COUNT(*) FROM (` + semWiseBaseQuery + `) q`
-				countErr := db.DB.QueryRow(countQuery, semWiseArgs...).Scan(&semWiseCount)
-				if countErr != nil {
-					log.Printf("Teacher dashboard sem-wise count failed for faculty_id=%s, academic_year=%s: %v", facultyID, currentAcademicYear, countErr)
-				} else if semWiseCount > 0 {
-					finalQuery := semWiseBaseQuery + ` ORDER BY c.course_code`
-					candidateRows, queryErr := db.DB.Query(finalQuery, semWiseArgs...)
-					if queryErr != nil {
-						log.Printf("Teacher dashboard sem-wise query failed for faculty_id=%s, academic_year=%s: %v", facultyID, currentAcademicYear, queryErr)
-					} else {
-						rows = candidateRows
-						log.Printf("Teacher dashboard sem-wise mapping applied for faculty_id=%s, academic_year=%s, semesters=%v", facultyID, currentAcademicYear, currentSemesters)
-					}
-				}
-			}
 		}
-	} else {
-		log.Printf("Teacher dashboard academic_calendar year lookup unavailable: %v", calendarYearErr)
 	}
 
-	if rows == nil {
-		log.Printf("No teacher history courses matched academic_calendar mapping for faculty_id='%s'", facultyID)
+	if len(currentSemesters) == 0 {
+		log.Printf("Teacher dashboard semester mapping unavailable for faculty_id='%s', academic_year='%s'", facultyID, currentAcademicYear)
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode([]interface{}{})
 		return
 	}
+
+	oddCount := 0
+	evenCount := 0
+	for _, sem := range currentSemesters {
+		if sem%2 == 0 {
+			evenCount++
+		} else {
+			oddCount++
+		}
+	}
+	if oddCount > 0 && evenCount == 0 {
+		derivedCalendarSemesterType = "odd"
+	} else if evenCount > 0 && oddCount == 0 {
+		derivedCalendarSemesterType = "even"
+	}
+
+	semWiseBaseQuery := `
+		SELECT DISTINCT
+			c.id, tca.course_id, c.course_code, c.course_name, COALESCE(ct.course_type, ''),
+			c.credit, COALESCE(c.category, 'General'),
+			? AS academic_year, ? AS semester_type
+		FROM teacher_course_allocation tca
+		JOIN courses c ON tca.course_id = c.id
+		LEFT JOIN course_type ct ON c.course_type = ct.id
+		WHERE tca.teacher_id = ?
+		  AND tca.is_active = 1
+	`
+
+	semWiseArgs := []interface{}{currentAcademicYear, derivedCalendarSemesterType, facultyID}
+
+	finalQuery := semWiseBaseQuery + ` ORDER BY c.course_code`
+	candidateRows, queryErr := db.DB.Query(finalQuery, semWiseArgs...)
+	if queryErr != nil {
+		log.Printf("Teacher dashboard sem-wise query failed for faculty_id=%s, academic_year=%s: %v", facultyID, currentAcademicYear, queryErr)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+	rows = candidateRows
 	defer rows.Close()
 
 	type StudentEnrollment struct {
@@ -338,7 +308,6 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		Category                  string              `json:"category"`
 		AcademicYear              string              `json:"academic_year"`
 		SemesterType              string              `json:"semester_type"`
-		MappedSemesters           []int               `json:"mapped_semesters"`
 		CurriculumID              *int                `json:"curriculum_id"`
 		Semester                  *int                `json:"semester"`
 		CurriculumName            string              `json:"curriculum_name"`
@@ -353,6 +322,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		MissedWindow              *MarkEntryWindow    `json:"missed_window"`
 		HasSubmittedExpiredWindow bool                `json:"has_submitted_expired_window"`
 		SubmittedExpiredWindow    *MarkEntryWindow    `json:"submitted_expired_window"`
+		MappedSemesters           []int               `json:"mapped_semesters"`
 	}
 
 	var courses []TeacherCourse
@@ -895,6 +865,24 @@ func GetDepartmentSemesterCourses(w http.ResponseWriter, r *http.Request) {
 	departmentID := vars["departmentId"]
 	semester := vars["semester"]
 
+	var err error
+	academicYear := strings.TrimSpace(r.URL.Query().Get("academic_year"))
+	if academicYear == "" {
+		err = db.DB.QueryRow(`
+			SELECT academic_year
+			FROM academic_calendar
+			WHERE is_current = 1
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1
+		`).Scan(&academicYear)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				log.Printf("Warning: could not resolve current academic year: %v", err)
+			}
+			academicYear = ""
+		}
+	}
+
 	query := `
 		SELECT DISTINCT c.id, c.course_code, c.course_name
 		FROM teacher_course_history tch
@@ -907,10 +895,20 @@ func GetDepartmentSemesterCourses(w http.ResponseWriter, r *http.Request) {
 			AND nc.semester_number = ?
 			AND tch.record_type = 'course'
 			AND tch.archived_at IS NULL
+		UNION
+		SELECT DISTINCT c.id, c.course_code, c.course_name
+		FROM courses c
+		JOIN hod_elective_selections hes ON c.id = hes.course_id
+		JOIN student_elective_choices sec ON sec.hod_selection_id = hes.id
+		WHERE hes.department_id = ?
+			AND sec.semester = ?
+			AND sec.academic_year = ?
+			AND hes.status = 'ACTIVE'
+			AND (c.status = 1 OR c.status IS NULL)
 		ORDER BY c.course_code
 	`
 
-	rows, err := db.DB.Query(query, departmentID, semester)
+	rows, err := db.DB.Query(query, departmentID, semester, departmentID, semester, academicYear)
 	if err != nil {
 		log.Printf("Error fetching department courses: %v", err)
 		http.Error(w, "Failed to fetch courses", http.StatusInternalServerError)
