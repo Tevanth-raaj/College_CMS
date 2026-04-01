@@ -704,13 +704,75 @@ func getExistingAllocations(courseID int) ([]ExistingAllocation, error) {
 
 // getUnallocatedStudents fetches students not yet allocated for a specific learning mode
 func getUnallocatedStudents(courseID int, learningModeID int) ([]int, error) {
+	isElective, err := isElectiveCourse(courseID)
+	if err != nil {
+		return nil, err
+	}
+
+	if isElective {
+		return getUnallocatedElectiveStudents(courseID, learningModeID)
+	}
+
+	return getUnallocatedCoreStudents(courseID, learningModeID)
+}
+
+func isElectiveCourse(courseID int) (bool, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM hod_elective_selections
+		WHERE course_id = ?
+		AND status = 'ACTIVE'
+	`
+
+	var count int
+	if err := db.DB.QueryRow(query, courseID).Scan(&count); err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
+}
+
+func getUnallocatedCoreStudents(courseID int, learningModeID int) ([]int, error) {
 	query := `
 		SELECT DISTINCT s.id
 		FROM students s
 		INNER JOIN student_courses sc ON s.id = sc.student_id
-		LEFT JOIN course_student_teacher_allocation csta 
+		LEFT JOIN course_student_teacher_allocation csta
 			ON csta.student_id = s.id AND csta.course_id = sc.course_id AND csta.status = 1
 		WHERE sc.course_id = ?
+			AND s.learning_mode_id = ?
+			AND s.status = 1
+			AND csta.id IS NULL
+		ORDER BY s.id
+	`
+
+	rows, err := db.DB.Query(query, courseID, learningModeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	students := []int{}
+	for rows.Next() {
+		var studentID int
+		if err := rows.Scan(&studentID); err != nil {
+			continue
+		}
+		students = append(students, studentID)
+	}
+
+	return students, nil
+}
+
+func getUnallocatedElectiveStudents(courseID int, learningModeID int) ([]int, error) {
+	query := `
+		SELECT DISTINCT s.id
+		FROM students s
+		INNER JOIN student_elective_choices sec ON s.id = sec.student_id
+		INNER JOIN hod_elective_selections hes ON sec.hod_selection_id = hes.id
+		LEFT JOIN course_student_teacher_allocation csta
+			ON csta.student_id = s.id AND csta.course_id = hes.course_id AND csta.status = 1
+		WHERE hes.course_id = ?
 			AND s.learning_mode_id = ?
 			AND s.status = 1
 			AND csta.id IS NULL
