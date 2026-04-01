@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
-import SearchFilterBar from '../../components/SearchFilterBar'
 
 function UsersPage() {
   const navigate = useNavigate()
@@ -204,18 +203,45 @@ function UsersPage() {
       title="User Management"
       subtitle="Manage system users and permissions"
       actions={
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="btn-primary-custom flex items-center space-x-2"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          <span>Add User</span>
-        </button>
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="relative w-48 sm:w-64">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            <input
+              type="text"
+              placeholder="Search users..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-8 py-2 border border-gray-300 outline-none focus:border-primary bg-white rounded-lg text-sm"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute inset-y-0 right-0 pr-2 flex items-center text-gray-400 hover:text-gray-600"
+                aria-label="Clear search"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="btn-primary-custom flex items-center space-x-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            <span>Add User</span>
+          </button>
+        </div>
       }
     >
-      <div className="card-custom">
+      <div className="card-custom w-full max-w-full overflow-hidden">
         {/* Messages */}
         {error && (
           <div className="flex items-start space-x-3 p-4 bg-red-50 border border-red-200 rounded-lg">
@@ -235,18 +261,18 @@ function UsersPage() {
           </div>
         )}
 
-        <SearchFilterBar
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          resultCount={filteredUsers.length}
-          resultLabel="users"
-          searchWidth="w-full sm:w-80"
-        />
-
         {/* Users Table */}
-        <div className="card-custom overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+        <div className="card-custom overflow-hidden max-w-full">
+          <div className="px-4 sm:px-6 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-800">Users</h3>
+            <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs sm:text-sm text-gray-700">
+              <span>
+                Showing <span className="font-semibold text-gray-900">{filteredUsers.length}</span> of <span className="font-semibold text-gray-900">{users.length}</span>
+              </span>
+            </div>
+          </div>
+          <div className="overflow-x-auto max-w-full">
+            <table className="w-full min-w-[980px] divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-center text-sm text-black font-bold tracking-wider">S. No</th>
@@ -261,14 +287,14 @@ function UsersPage() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredUsers.map((user, index) => (
                   <tr key={user.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 align-top">
                       <div className="text-sm font-medium text-center text-gray-900">{index + 1}</div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{user.username}</div>
+                    <td className="px-6 py-4 align-top">
+                      <div className="text-sm font-medium text-gray-900 break-words max-w-[180px] sm:max-w-[220px]">{user.username}</div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">{user.email}</div>
+                    <td className="px-6 py-4 align-top">
+                      <div className="text-sm text-gray-500 break-all max-w-[220px] sm:max-w-[320px]">{user.email}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex text-xs uppercase leading-5 font-semibold rounded-full ${user.role === 'admin' ? 'bg-purple-100 text-primary p-1' : ' text-gray-800'}`}>
