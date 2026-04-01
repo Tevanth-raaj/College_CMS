@@ -2,7 +2,7 @@ import React from "react";
 
 const MainLayout = ({ children, title, subtitle, actions }) => {
   return (
-    <div className="flex-1">
+    <div className="flex-1 min-w-0 max-w-full overflow-x-hidden">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="px-4 h-[79px] flex items-center justify-between">
           <div className="flex flex-col">
@@ -13,7 +13,7 @@ const MainLayout = ({ children, title, subtitle, actions }) => {
         </div>
       </header>
 
-      <main className="p-4">{children}</main>
+      <main className="p-4 min-w-0">{children}</main>
     </div>
   );
 };

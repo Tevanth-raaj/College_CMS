@@ -992,7 +992,7 @@ function MarkEntryPage() {
 
   return (
     <MainLayout title="Mark Entry" subtitle="Enter and manage student marks">
-      <div className="space-y-6">
+      <div className="space-y-6 min-w-0 max-w-full overflow-x-hidden">
         {/* Message Display */}
         {message.text && (
           <div
@@ -1018,7 +1018,7 @@ function MarkEntryPage() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Select Course
               </label>
-              <div ref={courseDropdownRef} className="relative w-full max-w-md">
+              <div ref={courseDropdownRef} className="relative w-full max-w-[600px]">
                 <input
                   type="text"
                   value={courseSearchQuery}
@@ -1268,7 +1268,7 @@ function MarkEntryPage() {
 
         {/* Mark Entry Table */}
         {selectedCourse && displayMarkCategories.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col" style={{ height: 'calc(100vh - 400px)', minHeight: '500px' }}>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col min-w-0 max-w-full" style={{ height: 'calc(100vh - 400px)', minHeight: '500px' }}>
             <div className="border-b border-gray-200 px-6 py-4 flex-shrink-0">
               <div className="flex justify-between items-center">
                 <div>
@@ -1319,7 +1319,7 @@ function MarkEntryPage() {
               </div>
             </div>
 
-            <div className="overflow-auto flex-1">
+            <div className="flex-1 min-h-0 min-w-0 max-w-full overflow-x-auto overflow-y-auto">
               {visibleStudents.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">
                   <p className="text-sm font-medium">
@@ -1334,7 +1334,7 @@ function MarkEntryPage() {
                   </p>
                 </div>
               ) : (
-                <table className="w-full divide-y divide-gray-200 relative">
+                <table className="min-w-full w-max divide-y divide-gray-200 relative">
                   <thead className="bg-gray-50 sticky top-0 z-20">
                     {/* Row 1 — group names */}
                     <tr className="border-b border-gray-300">
@@ -1349,7 +1349,7 @@ function MarkEntryPage() {
                         <React.Fragment key={group.groupName}>
                           <th
                             colSpan={group.categories.length}
-                            className="px-3 py-2 text-center text-xs font-bold text-violet-700 bg-violet-50 border-r border-violet-200 border-l border-violet-200"
+                            className="px-3 py-2 text-center text-xs font-bold text-violet-700 bg-violet-50 border-r border-l border-violet-200"
                           >
                             {group.groupName}
                           </th>

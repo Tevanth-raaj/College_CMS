@@ -10,10 +10,10 @@ const AppShell = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="min-h-screen bg-background flex overflow-x-hidden">
       <Sidebar onExpandedChange={handleSidebarExpandedChange} />
       <div
-        className={`flex-1 transition-all duration-300 ${
+        className={`flex-1 min-w-0 transition-all duration-300 ${
           isSidebarExpanded ? "ml-64" : "ml-20"
         }`}
       >
