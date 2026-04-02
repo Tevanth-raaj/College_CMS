@@ -42,12 +42,20 @@ type StudentMarkEntry struct {
 	ObtainedMarks         float64 `json:"obtained_marks"`
 }
 
+// StudentMarkDeleteEntry is used for bulk delete requests when marks are cleared.
+type StudentMarkDeleteEntry struct {
+	StudentID             int `json:"student_id"`
+	CourseID              int `json:"course_id"`
+	AssessmentComponentID int `json:"assessment_component_id"`
+}
+
 // MarkEntrySaveRequest contains batch mark entries to save
 type MarkEntrySaveRequest struct {
-	CourseID    int                `json:"course_id"`
-	FacultyID   string             `json:"faculty_id"`
-	WindowID    int                `json:"window_id,omitempty"`
-	MarkEntries []StudentMarkEntry `json:"mark_entries"`
+	CourseID      int                      `json:"course_id"`
+	FacultyID     string                   `json:"faculty_id"`
+	WindowID      int                      `json:"window_id,omitempty"`
+	MarkEntries   []StudentMarkEntry       `json:"mark_entries"`
+	DeleteEntries []StudentMarkDeleteEntry `json:"delete_entries,omitempty"`
 }
 
 // MarkEntrySaveResponse is returned after saving marks

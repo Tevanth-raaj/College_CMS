@@ -385,8 +385,8 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if saveRequest.CourseID == 0 || len(saveRequest.MarkEntries) == 0 {
-		http.Error(w, "Course ID and mark entries are required", http.StatusBadRequest)
+	if saveRequest.CourseID == 0 || (len(saveRequest.MarkEntries) == 0 && len(saveRequest.DeleteEntries) == 0) {
+		http.Error(w, "Course ID and mark entries/delete entries are required", http.StatusBadRequest)
 		return
 	}
 
@@ -443,7 +443,51 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	savedCount := 0
+	deletedCount := 0
 	var errors []string
+
+	for _, entry := range saveRequest.DeleteEntries {
+		// Check student-specific permissions if restrictions exist
+		if hasStudentRestrictions && !assignedStudentMap[entry.StudentID] {
+			errors = append(errors, fmt.Sprintf("Student %d: not assigned to this user for mark deletion", entry.StudentID))
+			continue
+		}
+
+		// Check window component permissions
+		if len(allowedByWindow) > 0 && !allowedByWindow[entry.AssessmentComponentID] {
+			errors = append(errors, fmt.Sprintf("Student %d: component %d not allowed by window", entry.StudentID, entry.AssessmentComponentID))
+			continue
+		}
+
+		// Validate student enrollment in course
+		var studentEnrolled bool
+		err := database.QueryRow(`
+			SELECT COUNT(*) > 0 FROM student_courses
+			WHERE student_id = ? AND course_id = ?
+		`, entry.StudentID, entry.CourseID).Scan(&studentEnrolled)
+		if err != nil {
+			log.Printf("Error validating student enrollment for delete: %v", err)
+			errors = append(errors, fmt.Sprintf("Student %d: enrollment validation failed", entry.StudentID))
+			continue
+		}
+
+		if !studentEnrolled {
+			errors = append(errors, fmt.Sprintf("Student %d is not enrolled in this course", entry.StudentID))
+			continue
+		}
+
+		_, err = database.Exec(`
+			DELETE FROM student_marks
+			WHERE student_id = ? AND course_id = ? AND assessment_component_id = ?
+		`, entry.StudentID, entry.CourseID, entry.AssessmentComponentID)
+		if err != nil {
+			log.Printf("Error deleting student mark: %v", err)
+			errors = append(errors, fmt.Sprintf("Student %d: database error during delete", entry.StudentID))
+			continue
+		}
+
+		deletedCount++
+	}
 
 	// Process each mark entry
 	for _, entry := range saveRequest.MarkEntries {
@@ -553,14 +597,15 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 
 	response := models.MarkEntrySaveResponse{
 		Success:    len(errors) == 0,
-		SavedCount: savedCount,
+		SavedCount: savedCount + deletedCount,
 	}
 
 	if len(errors) > 0 {
-		response.Message = fmt.Sprintf("Saved %d/%d marks. Errors: %s",
-			savedCount, len(saveRequest.MarkEntries), strings.Join(errors, "; "))
+		requestedCount := len(saveRequest.MarkEntries) + len(saveRequest.DeleteEntries)
+		response.Message = fmt.Sprintf("Processed %d/%d mark updates (saved: %d, deleted: %d). Errors: %s",
+			savedCount+deletedCount, requestedCount, savedCount, deletedCount, strings.Join(errors, "; "))
 	} else {
-		response.Message = fmt.Sprintf("Successfully saved %d mark entries", savedCount)
+		response.Message = fmt.Sprintf("Successfully processed mark entries (saved: %d, deleted: %d)", savedCount, deletedCount)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

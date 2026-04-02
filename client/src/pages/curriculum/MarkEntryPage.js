@@ -615,20 +615,36 @@ function MarkEntryPage() {
 
       try {
         const markEntries = []
+        const deleteEntries = []
         for (const key in pendingMarks) {
           const [studentId, categoryId] = key.split('_')
+          const parsedStudentId = parseInt(studentId, 10)
+          const parsedCategoryId = parseInt(categoryId, 10)
+          if (!Number.isFinite(parsedStudentId) || !Number.isFinite(parsedCategoryId)) {
+            continue
+          }
           const obtainedMarks = pendingMarks[key]
-          if (obtainedMarks !== '' && obtainedMarks !== null && obtainedMarks !== undefined) {
-            markEntries.push({
-              student_id: parseInt(studentId),
+          if (obtainedMarks === '' || obtainedMarks === null || obtainedMarks === undefined) {
+            deleteEntries.push({
+              student_id: parsedStudentId,
               course_id: selectedCourse.course_id,
-              assessment_component_id: parseInt(categoryId),
-              obtained_marks: parseFloat(obtainedMarks),
+              assessment_component_id: parsedCategoryId,
+            })
+          } else {
+            const parsedMarks = parseFloat(obtainedMarks)
+            if (!Number.isFinite(parsedMarks)) {
+              continue
+            }
+            markEntries.push({
+              student_id: parsedStudentId,
+              course_id: selectedCourse.course_id,
+              assessment_component_id: parsedCategoryId,
+              obtained_marks: parsedMarks,
             })
           }
         }
 
-        if (markEntries.length > 0) {
+        if (markEntries.length > 0 || deleteEntries.length > 0) {
           const response = await fetch(`${API_BASE_URL}/student-marks/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -636,14 +652,26 @@ function MarkEntryPage() {
               course_id: selectedCourse.course_id,
               faculty_id: facultyId,
               mark_entries: markEntries,
+              delete_entries: deleteEntries,
             }),
           })
 
-          const result = await response.json()
+          const responseText = await response.text()
+          let result = null
+          if (responseText) {
+            try {
+              result = JSON.parse(responseText)
+            } catch (e) {
+              result = null
+            }
+          }
           if (response.ok && result.success) {
             setAutoSaveStatus('saved')
             setTimeout(() => setAutoSaveStatus(''), 2000)
           } else {
+            if (responseText) {
+              setMessage({ type: 'error', text: result?.message || responseText })
+            }
             setAutoSaveStatus('error')
             setTimeout(() => setAutoSaveStatus(''), 3000)
           }
@@ -866,23 +894,30 @@ function MarkEntryPage() {
 
     // Collect all mark entries
     const markEntries = []
+    const deleteEntries = []
     students.forEach((student) => {
       displayMarkCategories.forEach((category) => {
         const obtainedMarks = getDisplayMarkValue(student.student_id, category)
-        if (obtainedMarks !== undefined && obtainedMarks !== null && obtainedMarks !== '') {
-          ;(category.component_ids || [category.id]).forEach((componentId) => {
+        ;(category.component_ids || [category.id]).forEach((componentId) => {
+          if (obtainedMarks !== undefined && obtainedMarks !== null && obtainedMarks !== '') {
             markEntries.push({
               student_id: student.student_id,
               course_id: selectedCourse.course_id,
               assessment_component_id: componentId,
               obtained_marks: parseFloat(obtainedMarks),
             })
-          })
-        }
+          } else {
+            deleteEntries.push({
+              student_id: student.student_id,
+              course_id: selectedCourse.course_id,
+              assessment_component_id: componentId,
+            })
+          }
+        })
       })
     })
 
-    if (markEntries.length === 0) {
+    if (markEntries.length === 0 && deleteEntries.length === 0) {
       setMessage({ type: 'warning', text: 'No marks to save. Please enter some marks first.' })
       return false
     }
@@ -896,16 +931,25 @@ function MarkEntryPage() {
           course_id: selectedCourse.course_id,
           faculty_id: facultyId,
           mark_entries: markEntries,
+          delete_entries: deleteEntries,
         }),
       })
 
-      const result = await response.json()
+      const responseText = await response.text()
+      let result = null
+      if (responseText) {
+        try {
+          result = JSON.parse(responseText)
+        } catch (e) {
+          result = null
+        }
+      }
       if (response.ok && result.success) {
         setMessage({ type: 'success', text: result.message })
         setTimeout(() => loadExistingMarks(), 1000)
         return true
       } else {
-        setMessage({ type: 'error', text: result.message || 'Failed to save marks' })
+        setMessage({ type: 'error', text: result?.message || responseText || 'Failed to save marks' })
         return false
       }
     } catch (error) {
