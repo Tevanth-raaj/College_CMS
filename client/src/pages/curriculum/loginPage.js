@@ -11,9 +11,9 @@ function LoginPage() {
   const googleButtonRef = useRef(null)
   const navigate = useNavigate()
 
-  useEffect(() => {
-    console.log('GOOGLE_CLIENT_ID:', GOOGLE_CLIENT_ID)
-  }, [])
+  // useEffect(() => {
+  //   console.log('GOOGLE_CLIENT_ID:', GOOGLE_CLIENT_ID)
+  // }, [])
 
   const persistLoginAndNavigate = useCallback((data) => {
     // Clear all previous auth data first to avoid stale data
