@@ -238,7 +238,8 @@ function SharingManagementPage() {
     if (sharingInfo?.cluster_departments) {
       // Filter departments based on sharing mode before selecting all
       const filteredDepts = sharingInfo.cluster_departments.filter((dept) => {
-        const isSharedWith = sharedWithDepartments.includes(dept.department_id);
+        const deptId = dept.curriculum_id ?? dept.department_id;
+        const isSharedWith = sharedWithDepartments.includes(deptId);
 
         if (sharingMode === "add") {
           return !isSharedWith;
@@ -248,7 +249,9 @@ function SharingManagementPage() {
         return true;
       });
 
-      setSelectedDepartments(filteredDepts.map((d) => d.department_id));
+      setSelectedDepartments(
+        filteredDepts.map((d) => d.curriculum_id ?? d.department_id),
+      );
     }
   };
 
@@ -354,8 +357,9 @@ function SharingManagementPage() {
 
                 // Then filter based on sharing mode
                 const filteredDepts = compatibleDepts.filter((dept) => {
+                  const deptId = dept.curriculum_id ?? dept.department_id;
                   const isSharedWith = sharedWithDepartments.includes(
-                    dept.department_id,
+                    deptId,
                   );
 
                   if (sharingMode === "add") {
@@ -418,17 +422,19 @@ function SharingManagementPage() {
 
                 return filteredDepts.map((dept) => (
                   <label
-                    key={dept.department_id}
+                    key={dept.curriculum_id ?? dept.department_id}
                     className="flex items-center justify-between p-2 hover:bg-gray-50 rounded cursor-pointer"
                   >
                     <div className="flex items-center flex-1">
                       <input
                         type="checkbox"
                         checked={selectedDepartments.includes(
-                          dept.department_id,
+                          dept.curriculum_id ?? dept.department_id,
                         )}
                         onChange={() =>
-                          toggleDepartmentSelection(dept.department_id)
+                          toggleDepartmentSelection(
+                            dept.curriculum_id ?? dept.department_id,
+                          )
                         }
                         className="mr-3 h-4 w-4 text-blue-600"
                       />
@@ -1075,7 +1081,7 @@ function SharingManagementPage() {
 
           return (
             <div
-              key={dept.department_id}
+              key={dept.curriculum_id ?? dept.department_id}
               className="mb-6 p-4 bg-green-50 rounded-lg border border-green-200"
             >
               <h3 className="font-semibold text-gray-900 mb-3">{dept.name}</h3>
@@ -1395,10 +1401,10 @@ function SharingManagementPage() {
               <div className="space-y-2">
                 {clusterDepartments.map((dept) => (
                   <button
-                    key={dept.department_id}
+                    key={dept.curriculum_id ?? dept.department_id}
                     onClick={() => handleSelectCurriculum(dept)}
                     className={`w-full text-left p-3 rounded-lg border-2 transition-all ${
-                      selectedCurriculum?.department_id === dept.department_id
+                      selectedCurriculum?.curriculum_id === dept.curriculum_id
                         ? "border-blue-500 bg-blue-50"
                         : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
                     }`}

@@ -313,47 +313,75 @@ function MarkEntryPermissionsPage() {
     }
   }
 
+  const fetchCourseTypes = async () => {
+    const res = await fetch(`${API_BASE_URL}/course-types`)
+    if (!res.ok) throw new Error('Failed to fetch course types')
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  }
+
+  const fetchMarkCategoriesAcrossCourseTypes = async (learningModes = [1, 2]) => {
+    const modeQuery = Array.isArray(learningModes) ? learningModes.join(',') : String(learningModes)
+    const courseTypes = await fetchCourseTypes()
+    const ids = courseTypes
+      .map((type) => Number(type.id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+
+    if (ids.length === 0) return []
+
+    const responses = await Promise.all(
+      ids.map((id) =>
+        fetch(`${API_BASE_URL}/mark-categories-by-type/${id}?learning_modes=${modeQuery}`).then((r) =>
+          r.ok ? r.json() : []
+        )
+      )
+    )
+
+    const allCategories = []
+    const seen = new Set()
+
+    responses.forEach((categories) => {
+      if (!Array.isArray(categories)) return
+      categories.forEach((cat) => {
+        if (!seen.has(cat.id)) {
+          seen.add(cat.id)
+          allCategories.push(cat)
+        }
+      })
+    })
+
+    allCategories.sort((a, b) => (a.position || 0) - (b.position || 0))
+    return allCategories
+  }
+
+  const resolveCourseTypeIDForCourse = async (course) => {
+    const direct = Number(course?.course_type_id ?? course?.course_type)
+    if (Number.isInteger(direct) && direct > 0) return direct
+
+    const typeName = String(course?.course_type || '').trim().toLowerCase()
+    if (typeName) {
+      const courseTypes = await fetchCourseTypes()
+      const matched = courseTypes.find((type) => String(type.name || '').trim().toLowerCase() === typeName)
+      if (matched?.id) return Number(matched.id)
+    }
+
+    const categoryLower = String(course?.category || '').toLowerCase().trim()
+    if (!categoryLower) return 0
+    if (categoryLower.includes('theory') && categoryLower.includes('lab')) return 3
+    if (categoryLower.includes('lab')) return 2
+    return 1
+  }
+
   const fetchAllMarkCategories = async () => {
     try {
       // Convert learning mode to ID (UAL=1, PBL=2)
       const learningModeId = learningMode === 'UAL' ? 1 : 2
 
-      // Fetch all mark category types (Theory=1, Lab=2, Theory+Lab=3)
-      const results = await Promise.all([
-        fetch(`${API_BASE_URL}/mark-categories-by-type/1?learning_modes=${learningModeId}`).then(r => r.json()),
-        fetch(`${API_BASE_URL}/mark-categories-by-type/2?learning_modes=${learningModeId}`).then(r => r.json()),
-        fetch(`${API_BASE_URL}/mark-categories-by-type/3?learning_modes=${learningModeId}`).then(r => r.json())
-      ])
-
-      // Combine and deduplicate
-      const allCategories = []
-      const seen = new Set()
-
-      results.forEach(categories => {
-        if (Array.isArray(categories)) {
-          categories.forEach(cat => {
-            if (!seen.has(cat.id)) {
-              seen.add(cat.id)
-              allCategories.push(cat)
-            }
-          })
-        }
-      })
-
-      // Sort by position
-      allCategories.sort((a, b) => (a.position || 0) - (b.position || 0))
+      const allCategories = await fetchMarkCategoriesAcrossCourseTypes([learningModeId])
       setWindowComponents(allCategories)
     } catch (error) {
       console.error('Error fetching mark categories:', error)
     }
-  }
-
-  const mapCourseCategoryToTypeID = (category) => {
-    const categoryLower = (category || '').toLowerCase().trim()
-    if (!categoryLower) return 0
-    if (categoryLower.includes('theory') && categoryLower.includes('lab')) return 3
-    if (categoryLower.includes('lab')) return 2
-    return 1
   }
 
   const fetchMarkCategoriesForCourseType = async (courseId) => {
@@ -366,7 +394,7 @@ function MarkEntryPermissionsPage() {
       if (!courseRes.ok) throw new Error('Failed to fetch course')
       const course = await courseRes.json()
 
-      const courseTypeID = mapCourseCategoryToTypeID(course.category)
+      const courseTypeID = await resolveCourseTypeIDForCourse(course)
       if (courseTypeID === 0) {
         setWindowComponents([])
         return
@@ -518,16 +546,7 @@ function MarkEntryPermissionsPage() {
       // Separate components by learning mode
       if (data.component_ids && data.component_ids.length > 0) {
         // Fetch all components to check their learning modes
-        const allComponentsRes = await Promise.all([
-          fetch(`${API_BASE_URL}/mark-categories-by-type/1?learning_modes=1,2`).then(r => r.json()),
-          fetch(`${API_BASE_URL}/mark-categories-by-type/2?learning_modes=1,2`).then(r => r.json()),
-          fetch(`${API_BASE_URL}/mark-categories-by-type/3?learning_modes=1,2`).then(r => r.json())
-        ])
-
-        const allComponents = []
-        allComponentsRes.forEach(cats => {
-          if (Array.isArray(cats)) allComponents.push(...cats)
-        })
+        const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
 
         const pblIds = []
         const ualIds = []
@@ -842,16 +861,7 @@ function MarkEntryPermissionsPage() {
     if (win.course_id && win.component_ids) {
       try {
         // Fetch all components to check their learning modes
-        const allComponentsRes = await Promise.all([
-          fetch(`${API_BASE_URL}/mark-categories-by-type/1?learning_modes=1,2`).then(r => r.json()),
-          fetch(`${API_BASE_URL}/mark-categories-by-type/2?learning_modes=1,2`).then(r => r.json()),
-          fetch(`${API_BASE_URL}/mark-categories-by-type/3?learning_modes=1,2`).then(r => r.json())
-        ])
-
-        const allComponents = []
-        allComponentsRes.forEach(cats => {
-          if (Array.isArray(cats)) allComponents.push(...cats)
-        })
+        const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
 
         const allPBL = []
         const allUAL = []
@@ -907,15 +917,7 @@ function MarkEntryPermissionsPage() {
     // Directly separate window's component_ids into PBL and UAL
     if (win.component_ids && win.component_ids.length > 0) {
       try {
-        const allComponentsRes = await Promise.all([
-          fetch(`${API_BASE_URL}/mark-categories-by-type/1?learning_modes=1,2`).then(r => r.json()),
-          fetch(`${API_BASE_URL}/mark-categories-by-type/2?learning_modes=1,2`).then(r => r.json()),
-          fetch(`${API_BASE_URL}/mark-categories-by-type/3?learning_modes=1,2`).then(r => r.json())
-        ])
-        const allComponents = []
-        allComponentsRes.forEach(cats => {
-          if (Array.isArray(cats)) allComponents.push(...cats)
-        })
+        const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
 
         const pblIds = []
         const ualIds = []

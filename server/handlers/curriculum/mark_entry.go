@@ -249,15 +249,38 @@ func GetMarkCategoriesForCourse(w http.ResponseWriter, r *http.Request) {
 
 	_ = allowedComponents // used for component filtering downstream
 
-	var courseCategory string
-	err = database.QueryRow(`SELECT COALESCE(category, '') FROM courses WHERE id = ?`, courseID).Scan(&courseCategory)
+	var rawCourseType sql.NullString
+	var courseCategory sql.NullString
+	err = database.QueryRow(`
+		SELECT COALESCE(CAST(course_type AS CHAR), ''), COALESCE(category, '')
+		FROM courses
+		WHERE id = ?
+	`, courseID).Scan(&rawCourseType, &courseCategory)
 	if err != nil {
-		log.Printf("Error fetching course category: %v", err)
-		http.Error(w, "Failed to resolve course category", http.StatusInternalServerError)
+		log.Printf("Error fetching course type/category: %v", err)
+		http.Error(w, "Failed to resolve course type", http.StatusInternalServerError)
 		return
 	}
 
-	courseTypeID := mapCourseCategoryToTypeID(courseCategory)
+	courseTypeID := 0
+	if rawCourseType.Valid {
+		raw := strings.TrimSpace(rawCourseType.String)
+		if raw != "" {
+			if parsedID, convErr := strconv.Atoi(raw); convErr == nil && parsedID > 0 {
+				courseTypeID = parsedID
+			} else {
+				resolvedID, resolveErr := resolveCourseTypeID(raw)
+				if resolveErr == nil {
+					courseTypeID = resolvedID
+				}
+			}
+		}
+	}
+
+	if courseTypeID == 0 {
+		courseTypeID = mapCourseCategoryToTypeID(courseCategory.String)
+	}
+
 	if courseTypeID == 0 {
 		http.Error(w, "Could not determine course type", http.StatusBadRequest)
 		return
