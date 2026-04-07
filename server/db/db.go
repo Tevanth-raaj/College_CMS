@@ -476,6 +476,7 @@ func CreateCoursesTable() error {
 			_ = ensureColumnExists("courses", "course_code", "VARCHAR(50) NOT NULL")
 			_ = ensureColumnExists("courses", "course_name", "VARCHAR(255) NOT NULL")
 			_ = ensureColumnExists("courses", "course_type", "VARCHAR(50)")
+			_ = ensureColumnExists("courses", "experiment_count_theorywithlab", "INT DEFAULT 0")
 			_ = ensureColumnExists("courses", "category", "VARCHAR(50)")
 			_ = ensureColumnExists("courses", "credit", "INT")
 			_ = ensureColumnExists("courses", "theory_hours", "INT")
@@ -501,6 +502,7 @@ func CreateCoursesTable() error {
 		course_code VARCHAR(50) NOT NULL,
 		course_name VARCHAR(255) NOT NULL,
 		course_type VARCHAR(50),
+		experiment_count_theorywithlab INT DEFAULT 0,
 		category VARCHAR(50),
 		credit INT,
 		theory_hours INT,

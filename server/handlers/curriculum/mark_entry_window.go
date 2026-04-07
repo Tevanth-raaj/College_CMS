@@ -265,6 +265,22 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		departmentValue = sql.NullInt64{Int64: int64(*req.DepartmentID), Valid: true}
 	}
 
+	departmentValues := []sql.NullInt64{departmentValue}
+	if len(req.DepartmentIDs) > 0 {
+		departmentValues = []sql.NullInt64{}
+		seenDepartmentIDs := make(map[int]bool)
+		for _, departmentID := range req.DepartmentIDs {
+			if departmentID <= 0 || seenDepartmentIDs[departmentID] {
+				continue
+			}
+			seenDepartmentIDs[departmentID] = true
+			departmentValues = append(departmentValues, sql.NullInt64{Int64: int64(departmentID), Valid: true})
+		}
+		if len(departmentValues) == 0 {
+			departmentValues = []sql.NullInt64{{}}
+		}
+	}
+
 	semesterValue := sql.NullInt64{}
 	if req.Semester != nil {
 		semesterValue = sql.NullInt64{Int64: int64(*req.Semester), Valid: true}
@@ -280,39 +296,65 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		enabledValue = 1
 	}
 
-	result, err := database.Exec(`
-		INSERT INTO mark_entry_windows
-		(teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, teacherValue, departmentValue, semesterValue, courseValue, startAt, endAt, enabledValue, req.WindowName)
+	tx, err := database.Begin()
 	if err != nil {
-		log.Printf("Error saving mark entry window: %v", err)
+		log.Printf("Error starting transaction for mark entry windows: %v", err)
 		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
 		return
 	}
 
-	// Save component associations if specified
-	if len(req.ComponentIDs) > 0 {
-		windowID, err := result.LastInsertId()
-		if err != nil {
-			log.Printf("Error getting window ID: %v", err)
-			http.Error(w, "Failed to save window components", http.StatusInternalServerError)
+	createdWindowIDs := make([]int, 0, len(departmentValues))
+	for _, deptValue := range departmentValues {
+		result, execErr := tx.Exec(`
+			INSERT INTO mark_entry_windows
+			(teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, teacherValue, deptValue, semesterValue, courseValue, startAt, endAt, enabledValue, req.WindowName)
+		if execErr != nil {
+			_ = tx.Rollback()
+			log.Printf("Error saving mark entry window: %v", execErr)
+			http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
 			return
 		}
 
-		for _, componentID := range req.ComponentIDs {
-			_, err := database.Exec(`
-				INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
-				VALUES (?, ?)
-			`, windowID, componentID)
-			if err != nil {
-				log.Printf("Error saving window component: %v", err)
-				// Continue saving other components even if one fails
+		windowID, idErr := result.LastInsertId()
+		if idErr != nil {
+			_ = tx.Rollback()
+			log.Printf("Error getting inserted window ID: %v", idErr)
+			http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
+			return
+		}
+
+		createdWindowIDs = append(createdWindowIDs, int(windowID))
+
+		if len(req.ComponentIDs) > 0 {
+			for _, componentID := range req.ComponentIDs {
+				_, componentErr := tx.Exec(`
+					INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
+					VALUES (?, ?)
+				`, windowID, componentID)
+				if componentErr != nil {
+					_ = tx.Rollback()
+					log.Printf("Error saving window component for window %d: %v", windowID, componentErr)
+					http.Error(w, "Failed to save window components", http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"message": "Mark entry window saved"})
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error committing mark entry windows transaction: %v", err)
+		http.Error(w, "Failed to save mark entry windows", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"message":         "Mark entry window saved",
+		"window_ids":      createdWindowIDs,
+		"windows_created": len(createdWindowIDs),
+	}
+	json.NewEncoder(w).Encode(response)
 }
 func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int, error) {
 	database := db.DB
@@ -443,6 +485,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 	// A shared course (e.g. 22MA401) may be in sem 4 of AIDS and sem 3 of Math.
 	// We need to match a window scoped to ANY of these semesters.
 	var courseSemesters []int64
+	studentSemesterSet := make(map[int64]bool)
 	var hasNonSemesterCard bool
 	semRows, err := database.Query(`
 		SELECT nc.semester_number, COALESCE(nc.card_type, 'semester')
@@ -477,6 +520,42 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 
 	if hasNonSemesterCard {
 		log.Printf("Course %d is on a non-semester card — will skip semester check for window matching", courseID)
+	}
+
+	// Also include semester footprint from allocated students for this teacher+course.
+	// This is important for dept+semester windows where curriculum mapping can be incomplete.
+	studentSemRows, studentSemErr := database.Query(`
+		SELECT DISTINCT COALESCE(ac.current_semester, 0)
+		FROM course_student_teacher_allocation csta
+		JOIN students s ON csta.student_id = s.id
+		LEFT JOIN academic_calendar ac ON ac.id = s.year
+		WHERE csta.course_id = ?
+		  AND csta.teacher_id = ?
+		  AND s.status = 1
+	`, courseID, facultyID)
+	if studentSemErr == nil {
+		for studentSemRows.Next() {
+			var currentSem int64
+			if studentSemRows.Scan(&currentSem) == nil {
+				if currentSem > 0 {
+					studentSemesterSet[currentSem] = true
+				}
+			}
+		}
+		studentSemRows.Close()
+	}
+
+	for sem := range studentSemesterSet {
+		found := false
+		for _, existing := range courseSemesters {
+			if existing == sem {
+				found = true
+				break
+			}
+		}
+		if !found {
+			courseSemesters = append(courseSemesters, sem)
+		}
 	}
 
 	log.Printf("Course %d semesters across curricula: %v (nonSemCard=%v)", courseID, courseSemesters, hasNonSemesterCard)
@@ -955,7 +1034,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 				w.start_at DESC
 		`
 	} else {
-		// Get all windows with teacher_id set (teacher windows)
+		// Get all windows used in mark entry cards, including teacher, global, and user-assigned windows.
 		query = `
 			SELECT 
 				w.id,
@@ -975,7 +1054,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN teachers t ON w.teacher_id = t.faculty_id
 			LEFT JOIN departments d ON w.department_id = d.id
 			LEFT JOIN courses c ON w.course_id = c.id
-			WHERE w.teacher_id IS NOT NULL OR w.user_id IS NULL
+			WHERE 1=1
 			ORDER BY 
 				CASE WHEN w.end_at > NOW() THEN 0 ELSE 1 END,
 				w.start_at DESC
@@ -1312,6 +1391,50 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		courseIDValue,
 	)
 
+	// Capture existing components to detect whether new components were added.
+	oldComponentSet := make(map[int]struct{})
+	oldCompRows, oldCompErr := database.Query(`
+		SELECT assessment_component_id
+		FROM mark_entry_window_components
+		WHERE window_id = ?
+	`, windowID)
+	if oldCompErr != nil {
+		log.Printf("Error reading existing components for window %d: %v", windowID, oldCompErr)
+		http.Error(w, "Failed to update components", http.StatusInternalServerError)
+		return
+	}
+	for oldCompRows.Next() {
+		var componentID int
+		if scanErr := oldCompRows.Scan(&componentID); scanErr != nil {
+			oldCompRows.Close()
+			log.Printf("Error scanning existing component for window %d: %v", windowID, scanErr)
+			http.Error(w, "Failed to update components", http.StatusInternalServerError)
+			return
+		}
+		oldComponentSet[componentID] = struct{}{}
+	}
+	if rowsErr := oldCompRows.Err(); rowsErr != nil {
+		oldCompRows.Close()
+		log.Printf("Error iterating existing components for window %d: %v", windowID, rowsErr)
+		http.Error(w, "Failed to update components", http.StatusInternalServerError)
+		return
+	}
+	oldCompRows.Close()
+
+	newComponentSet := make(map[int]struct{})
+	for _, componentID := range request.ComponentIDs {
+		if componentID > 0 {
+			newComponentSet[componentID] = struct{}{}
+		}
+	}
+
+	addedComponentIDs := make([]int, 0)
+	for componentID := range newComponentSet {
+		if _, exists := oldComponentSet[componentID]; !exists {
+			addedComponentIDs = append(addedComponentIDs, componentID)
+		}
+	}
+
 	// Update components: delete existing and insert new
 	_, err = database.Exec(`DELETE FROM mark_entry_window_components WHERE window_id = ?`, windowID)
 	if err != nil {
@@ -1327,6 +1450,16 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Printf("Error inserting component %d: %v", componentID, err)
 			}
+		}
+	}
+
+	if len(addedComponentIDs) > 0 {
+		deleteResult, deleteErr := database.Exec(`DELETE FROM mark_submissions WHERE window_id = ?`, windowID)
+		if deleteErr != nil {
+			log.Printf("Warning: failed to clear stale submissions for window %d after component additions %v: %v", windowID, addedComponentIDs, deleteErr)
+		} else {
+			removed, _ := deleteResult.RowsAffected()
+			log.Printf("[UpdateMarkEntryWindow] window %d added components %v; cleared %d stale mark_submissions rows", windowID, addedComponentIDs, removed)
 		}
 	}
 

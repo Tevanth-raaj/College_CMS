@@ -8,15 +8,15 @@ const LEARNING_MODES = [
 ]
 
 export default function AbsenteesPage() {
-  const userRole = localStorage.getItem('userRole')
+  const userRole = (localStorage.getItem('userRole') || '').toLowerCase()
 
-  if (userRole !== 'coe') {
+  if (!['coe', 'admin'].includes(userRole)) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="text-center">
           <div className="text-5xl mb-4">🔒</div>
           <h2 className="text-xl font-semibold text-gray-700">Access Restricted</h2>
-          <p className="text-gray-500 mt-1">This page is only available to COE users.</p>
+          <p className="text-gray-500 mt-1">This page is only available to COE and Admin users.</p>
         </div>
       </div>
     )

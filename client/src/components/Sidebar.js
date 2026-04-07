@@ -526,7 +526,7 @@ function Sidebar({ onExpandedChange }) {
             />
           </svg>
         ),
-        roles: ["coe"],
+        roles: ["coe", "admin"],
       },
       {
         name: "Academic Calendar",

@@ -406,12 +406,35 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 
 	args := []interface{}{}
 
-	// Filter by department_id (from students table - FK to departments)
+	// Filter by department_id (from students table - FK to departments).
+	// Supports a single ID ("3") or comma-separated IDs ("3,5,7").
 	if departmentIDStr != "" {
-		departmentID, err := strconv.Atoi(departmentIDStr)
-		if err == nil {
+		departmentParts := strings.Split(departmentIDStr, ",")
+		departmentIDs := make([]int, 0, len(departmentParts))
+		seenDepartmentIDs := make(map[int]bool)
+		for _, part := range departmentParts {
+			value := strings.TrimSpace(part)
+			if value == "" {
+				continue
+			}
+			departmentID, err := strconv.Atoi(value)
+			if err != nil || departmentID <= 0 || seenDepartmentIDs[departmentID] {
+				continue
+			}
+			seenDepartmentIDs[departmentID] = true
+			departmentIDs = append(departmentIDs, departmentID)
+		}
+
+		if len(departmentIDs) == 1 {
 			query += " AND s.department_id = ?"
-			args = append(args, departmentID)
+			args = append(args, departmentIDs[0])
+		} else if len(departmentIDs) > 1 {
+			placeholders := make([]string, len(departmentIDs))
+			for i, departmentID := range departmentIDs {
+				placeholders[i] = "?"
+				args = append(args, departmentID)
+			}
+			query += " AND s.department_id IN (" + strings.Join(placeholders, ",") + ")"
 		}
 	}
 
@@ -678,71 +701,120 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create the mark entry window with user_id
-	result, err := tx.Exec(`
-		INSERT INTO mark_entry_windows 
-		(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-	`, numericUserID, req.DepartmentID, req.Semester, req.CourseID, req.StartAt, req.EndAt, req.WindowName)
-
-	if err != nil {
-		_ = tx.Rollback()
-		log.Printf("Error creating window: %v", err)
-		http.Error(w, "Failed to create window", http.StatusInternalServerError)
-		return
+	departmentScopes := []sql.NullInt64{{}}
+	if len(req.DepartmentIDs) > 0 {
+		departmentScopes = []sql.NullInt64{}
+		seenDepartmentIDs := make(map[int]bool)
+		for _, departmentID := range req.DepartmentIDs {
+			if departmentID <= 0 || seenDepartmentIDs[departmentID] {
+				continue
+			}
+			seenDepartmentIDs[departmentID] = true
+			departmentScopes = append(departmentScopes, sql.NullInt64{Int64: int64(departmentID), Valid: true})
+		}
+		if len(departmentScopes) == 0 {
+			departmentScopes = []sql.NullInt64{{}}
+		}
+	} else if req.DepartmentID != nil && *req.DepartmentID > 0 {
+		departmentScopes = []sql.NullInt64{{Int64: int64(*req.DepartmentID), Valid: true}}
 	}
 
-	windowID, err := result.LastInsertId()
-	if err != nil {
-		_ = tx.Rollback()
-		log.Printf("Error getting window ID: %v", err)
-		http.Error(w, "Failed to get window ID", http.StatusInternalServerError)
-		return
-	}
+	studentDepartmentMap := make(map[int]int)
+	if len(req.StudentIDs) > 0 {
+		placeholders := make([]string, len(req.StudentIDs))
+		studentArgs := make([]interface{}, len(req.StudentIDs))
+		for i, studentID := range req.StudentIDs {
+			placeholders[i] = "?"
+			studentArgs[i] = studentID
+		}
 
-	log.Printf("Created mark entry window: id=%d, user_id=%d, course_id=%v, students=%d",
-		windowID, numericUserID, req.CourseID, len(req.StudentIDs))
+		studentDeptQuery := fmt.Sprintf(`
+			SELECT id, COALESCE(department_id, 0)
+			FROM students
+			WHERE id IN (%s)
+		`, strings.Join(placeholders, ","))
 
-	// Add component permissions if specified
-	if len(req.ComponentIDs) > 0 {
-		for _, componentID := range req.ComponentIDs {
-			_, err := tx.Exec(`
-				INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
-				VALUES (?, ?)
-			`, windowID, componentID)
-
-			if err != nil {
-				_ = tx.Rollback()
-				log.Printf("Error adding component %d to window: %v", componentID, err)
-				http.Error(w, "Failed to add components to window", http.StatusInternalServerError)
-				return
+		studentRows, studentErr := tx.Query(studentDeptQuery, studentArgs...)
+		if studentErr != nil {
+			_ = tx.Rollback()
+			log.Printf("Error fetching student department mapping: %v", studentErr)
+			http.Error(w, "Failed to validate student departments", http.StatusInternalServerError)
+			return
+		}
+		for studentRows.Next() {
+			var studentID int
+			var departmentID int
+			if scanErr := studentRows.Scan(&studentID, &departmentID); scanErr == nil {
+				studentDepartmentMap[studentID] = departmentID
 			}
 		}
-		log.Printf("Added %d components to window %d", len(req.ComponentIDs), windowID)
+		studentRows.Close()
 	}
 
-	// Create student assignments for this window
+	windowIDs := make([]int, 0, len(departmentScopes))
 	assignmentsCreated := 0
-	for _, studentID := range req.StudentIDs {
-		log.Printf("Inserting student assignment: window_id=%d, user_id=%d, student_id=%d, created_by=%s",
-			windowID, numericUserID, studentID, req.CreatedBy)
 
-		result, err := tx.Exec(`
-			INSERT INTO mark_entry_student_permissions
-			(window_id, user_id, student_id, created_by)
-			VALUES (?, ?, ?, ?)
-		`, windowID, numericUserID, studentID, req.CreatedBy)
-
-		if err != nil {
+	for _, departmentScope := range departmentScopes {
+		result, execErr := tx.Exec(`
+			INSERT INTO mark_entry_windows 
+			(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+		`, numericUserID, departmentScope, req.Semester, req.CourseID, req.StartAt, req.EndAt, req.WindowName)
+		if execErr != nil {
 			_ = tx.Rollback()
-			log.Printf("ERROR assigning student %d to window %d: %v", studentID, windowID, err)
-			http.Error(w, fmt.Sprintf("Failed to assign student %d: %v", studentID, err), http.StatusInternalServerError)
+			log.Printf("Error creating window: %v", execErr)
+			http.Error(w, "Failed to create window", http.StatusInternalServerError)
 			return
 		}
 
-		rowsAffected, _ := result.RowsAffected()
-		log.Printf("Student assignment successful: student_id=%d, rows_affected=%d", studentID, rowsAffected)
-		assignmentsCreated++
+		windowID, idErr := result.LastInsertId()
+		if idErr != nil {
+			_ = tx.Rollback()
+			log.Printf("Error getting window ID: %v", idErr)
+			http.Error(w, "Failed to get window ID", http.StatusInternalServerError)
+			return
+		}
+		windowIDs = append(windowIDs, int(windowID))
+
+		if len(req.ComponentIDs) > 0 {
+			for _, componentID := range req.ComponentIDs {
+				_, componentErr := tx.Exec(`
+					INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
+					VALUES (?, ?)
+				`, windowID, componentID)
+				if componentErr != nil {
+					_ = tx.Rollback()
+					log.Printf("Error adding component %d to window: %v", componentID, componentErr)
+					http.Error(w, "Failed to add components to window", http.StatusInternalServerError)
+					return
+				}
+			}
+		}
+
+		for _, studentID := range req.StudentIDs {
+			if departmentScope.Valid {
+				if studentDepartmentMap[studentID] != int(departmentScope.Int64) {
+					continue
+				}
+			}
+
+			assignResult, assignErr := tx.Exec(`
+				INSERT INTO mark_entry_student_permissions
+				(window_id, user_id, student_id, created_by)
+				VALUES (?, ?, ?, ?)
+			`, windowID, numericUserID, studentID, req.CreatedBy)
+			if assignErr != nil {
+				_ = tx.Rollback()
+				log.Printf("ERROR assigning student %d to window %d: %v", studentID, windowID, assignErr)
+				http.Error(w, fmt.Sprintf("Failed to assign student %d: %v", studentID, assignErr), http.StatusInternalServerError)
+				return
+			}
+
+			rowsAffected, _ := assignResult.RowsAffected()
+			if rowsAffected > 0 {
+				assignmentsCreated++
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -751,17 +823,26 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Transaction committed successfully! Window %d created with %d student assignments", windowID, assignmentsCreated)
+	log.Printf("Transaction committed successfully! Windows %v created with %d student assignments", windowIDs, assignmentsCreated)
 
-	// Verify the data was actually inserted
-	var verifyCount int
-	database.QueryRow(`SELECT COUNT(*) FROM mark_entry_student_permissions WHERE window_id = ?`, windowID).Scan(&verifyCount)
-	log.Printf("Verification: Found %d student assignments in DB for window %d", verifyCount, windowID)
+	// Verify assignments for the first created window for debugging parity.
+	if len(windowIDs) > 0 {
+		var verifyCount int
+		database.QueryRow(`SELECT COUNT(*) FROM mark_entry_student_permissions WHERE window_id = ?`, windowIDs[0]).Scan(&verifyCount)
+		log.Printf("Verification: Found %d student assignments in DB for window %d", verifyCount, windowIDs[0])
+	}
 
 	response := models.CreateUserStudentWindowResponse{
-		Success:            true,
-		Message:            fmt.Sprintf("Successfully created window and assigned %d students", assignmentsCreated),
-		WindowID:           int(windowID),
+		Success: true,
+		Message: fmt.Sprintf("Successfully created %d window(s) and assigned %d students", len(windowIDs), assignmentsCreated),
+		WindowID: func() int {
+			if len(windowIDs) > 0 {
+				return windowIDs[0]
+			}
+			return 0
+		}(),
+		WindowIDs:          windowIDs,
+		WindowsCreated:     len(windowIDs),
 		AssignmentsCreated: assignmentsCreated,
 	}
 
@@ -840,12 +921,14 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		INNER JOIN mark_entry_windows mew ON mesp.window_id = mew.id
 		INNER JOIN students s ON mesp.student_id = s.id
 		LEFT JOIN academic_details ad ON s.id = ad.student_id
+		LEFT JOIN academic_calendar ac ON ac.id = s.year
 		LEFT JOIN courses c ON mew.course_id = c.id
 		WHERE mesp.user_id = ?
 			AND mew.enabled = 1
 			AND mew.start_at <= ?
 			AND mew.end_at > ?
-			AND s.status = 1`
+			AND s.status = 1
+			AND (COALESCE(mew.semester, 0) = 0 OR ac.current_semester = mew.semester)`
 
 	args := []interface{}{numericUserID, now, now}
 
@@ -1092,6 +1175,8 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 			w.id as window_id
 		FROM mark_entry_windows w
 		INNER JOIN mark_entry_student_permissions mesp ON w.id = mesp.window_id
+		INNER JOIN students s ON mesp.student_id = s.id
+		LEFT JOIN academic_calendar ac ON ac.id = s.year
 		INNER JOIN student_courses sce ON mesp.student_id = sce.student_id
 		INNER JOIN courses c ON sce.course_id = c.id
 		WHERE w.user_id = ?
@@ -1099,6 +1184,8 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		  AND w.enabled = 1
 		AND w.start_at <= ?
 		AND w.end_at >= ?
+		  AND s.status = 1
+		  AND (COALESCE(w.semester, 0) = 0 OR ac.current_semester = w.semester)
 		  AND (
 			(w.course_id IS NOT NULL AND w.course_id = c.id)
 			OR (w.course_id IS NULL OR w.course_id = 0)
@@ -1214,6 +1301,17 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 					query += ` AND nc.semester_number = ?`
 					args = append(args, semID.Int64)
 				}
+				query += `
+				AND EXISTS (
+					SELECT 1
+					FROM mark_entry_student_permissions mesp
+					INNER JOIN students s ON s.id = mesp.student_id AND s.status = 1
+					LEFT JOIN academic_calendar ac ON ac.id = s.year
+					INNER JOIN student_courses sc ON sc.student_id = s.id AND sc.course_id = c.id
+					WHERE mesp.window_id = ? AND mesp.user_id = ?
+					  AND (COALESCE(?, 0) = 0 OR ac.current_semester = ?)
+				)`
+				args = append(args, windowID.Int64, numericUserID, semID.Int64, semID.Int64)
 				query += ` ORDER BY c.course_code`
 
 				deptRows, deptErr := database.Query(query, args...)

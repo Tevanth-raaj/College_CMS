@@ -14,6 +14,7 @@ type coursePayload struct {
 	CourseCode         string          `json:"course_code"`
 	CourseName         string          `json:"course_name"`
 	CourseType         json.RawMessage `json:"course_type"`
+	ExperimentCountTWL int             `json:"experiment_count_theorywithlab"`
 	Category           string          `json:"category"`
 	Credit             int             `json:"credit"`
 	LectureHrs         int             `json:"lecture_hrs"`
@@ -49,6 +50,7 @@ func decodeCourseRequest(r *http.Request) (models.Course, error) {
 		CourseCode:         payload.CourseCode,
 		CourseName:         payload.CourseName,
 		CourseType:         courseType,
+		ExperimentCountTWL: payload.ExperimentCountTWL,
 		Category:           payload.Category,
 		Credit:             payload.Credit,
 		LectureHrs:         payload.LectureHrs,

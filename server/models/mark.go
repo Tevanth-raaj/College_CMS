@@ -2,17 +2,21 @@ package models
 
 // MarkCategoryType represents a mark assessment component/category for courses
 type MarkCategoryType struct {
-	ID              int     `json:"id"`
-	Name            string  `json:"name"`
-	MaxMarks        int     `json:"max_marks"`
-	ConversionMarks float64 `json:"conversion_marks"`
-	Position        int     `json:"position"`
-	CourseTypeID    int     `json:"course_type_id"`
-	CourseTypeName  string  `json:"course_type_name"`
-	CategoryNameID  int     `json:"category_name_id"`
-	CategoryName    string  `json:"category_name"`
-	LearningModeID  int     `json:"learning_mode_id"`
-	Status          int     `json:"status"`
+	ID                 int     `json:"id"`
+	Name               string  `json:"name"`
+	MaxMarks           int     `json:"max_marks"`
+	PerEntryMaxMarks   int     `json:"per_entry_max_marks,omitempty"`
+	EntryRepeatCount   int     `json:"entry_repeat_count,omitempty"`
+	EffectiveMaxMarks  int     `json:"effective_max_marks,omitempty"`
+	ExperimentCountTWL int     `json:"experiment_count_theorywithlab,omitempty"`
+	ConversionMarks    float64 `json:"conversion_marks"`
+	Position           int     `json:"position"`
+	CourseTypeID       int     `json:"course_type_id"`
+	CourseTypeName     string  `json:"course_type_name"`
+	CategoryNameID     int     `json:"category_name_id"`
+	CategoryName       string  `json:"category_name"`
+	LearningModeID     int     `json:"learning_mode_id"`
+	Status             int     `json:"status"`
 }
 
 // MarkCategoryName represents the name/label of a mark category
@@ -108,16 +112,17 @@ type MarkEntryWindow struct {
 
 // MarkEntryWindowRequest represents a create/update window request.
 type MarkEntryWindowRequest struct {
-	TeacherID    *string `json:"teacher_id,omitempty"`
-	UserID       *string `json:"user_id,omitempty"` // For user-based windows
-	DepartmentID *int    `json:"department_id,omitempty"`
-	Semester     *int    `json:"semester,omitempty"`
-	CourseID     *int    `json:"course_id,omitempty"`
-	StartAt      string  `json:"start_at"`
-	EndAt        string  `json:"end_at"`
-	Enabled      bool    `json:"enabled"`
-	ComponentIDs []int   `json:"component_ids,omitempty"` // Empty = all components allowed
-	WindowName   string  `json:"window_name,omitempty"`
+	TeacherID     *string `json:"teacher_id,omitempty"`
+	UserID        *string `json:"user_id,omitempty"` // For user-based windows
+	DepartmentID  *int    `json:"department_id,omitempty"`
+	DepartmentIDs []int   `json:"department_ids,omitempty"`
+	Semester      *int    `json:"semester,omitempty"`
+	CourseID      *int    `json:"course_id,omitempty"`
+	StartAt       string  `json:"start_at"`
+	EndAt         string  `json:"end_at"`
+	Enabled       bool    `json:"enabled"`
+	ComponentIDs  []int   `json:"component_ids,omitempty"` // Empty = all components allowed
+	WindowName    string  `json:"window_name,omitempty"`
 }
 
 // StudentMarkPermission represents student-specific mark entry permission
@@ -133,16 +138,17 @@ type StudentMarkPermission struct {
 
 // CreateUserStudentWindowRequest represents a request to create a user-student mark entry window
 type CreateUserStudentWindowRequest struct {
-	UserID       string `json:"user_id"`
-	DepartmentID *int   `json:"department_id,omitempty"`
-	Semester     *int   `json:"semester,omitempty"`
-	CourseID     *int   `json:"course_id,omitempty"`
-	StudentIDs   []int  `json:"student_ids"` // Specific students for this window
-	StartAt      string `json:"start_at"`
-	EndAt        string `json:"end_at"`
-	ComponentIDs []int  `json:"component_ids,omitempty"` // PBL/UAL components
-	CreatedBy    string `json:"created_by,omitempty"`
-	WindowName   string `json:"window_name,omitempty"`
+	UserID        string `json:"user_id"`
+	DepartmentID  *int   `json:"department_id,omitempty"`
+	DepartmentIDs []int  `json:"department_ids,omitempty"`
+	Semester      *int   `json:"semester,omitempty"`
+	CourseID      *int   `json:"course_id,omitempty"`
+	StudentIDs    []int  `json:"student_ids"` // Specific students for this window
+	StartAt       string `json:"start_at"`
+	EndAt         string `json:"end_at"`
+	ComponentIDs  []int  `json:"component_ids,omitempty"` // PBL/UAL components
+	CreatedBy     string `json:"created_by,omitempty"`
+	WindowName    string `json:"window_name,omitempty"`
 }
 
 // CreateUserStudentWindowResponse represents the response after creating user-student window
@@ -150,6 +156,8 @@ type CreateUserStudentWindowResponse struct {
 	Success            bool   `json:"success"`
 	Message            string `json:"message"`
 	WindowID           int    `json:"window_id"`
+	WindowIDs          []int  `json:"window_ids,omitempty"`
+	WindowsCreated     int    `json:"windows_created,omitempty"`
 	AssignmentsCreated int    `json:"assignments_created"`
 }
 

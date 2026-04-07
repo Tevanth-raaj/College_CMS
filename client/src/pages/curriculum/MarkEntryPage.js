@@ -22,6 +22,7 @@ function MarkEntryPage() {
   const [showSubmitDialog, setShowSubmitDialog] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [markErrors, setMarkErrors] = useState({}) // key: `${studentId}_${categoryId}`
+  const [experimentMarks, setExperimentMarks] = useState({}) // key: `${studentId}_${componentId}` => [mark1, mark2, ...]
   const [absentees, setAbsentees] = useState([]) // [{student_id, mark_category_id}]
   const [studentRegisterFilter, setStudentRegisterFilter] = useState('')
   const [autoSaveStatus, setAutoSaveStatus] = useState('') // '', 'saving', 'saved', 'error'
@@ -406,6 +407,36 @@ function MarkEntryPage() {
     return componentIds.every((componentId) => isCellAbsent(studentId, componentId))
   }
 
+  const getCategoryEntryRepeatCount = (category) => {
+    const count = Number(category?.entry_repeat_count)
+    return Number.isFinite(count) && count > 1 ? count : 1
+  }
+
+  const getCategoryPerEntryMaxMarks = (category) => {
+    const perEntry = Number(category?.per_entry_max_marks)
+    if (Number.isFinite(perEntry) && perEntry > 0) return perEntry
+    return Number(category?.max_marks || 0)
+  }
+
+  const getCategoryEffectiveMaxMarks = (category) => {
+    const effective = Number(category?.effective_max_marks)
+    if (Number.isFinite(effective) && effective > 0) return effective
+    return getCategoryPerEntryMaxMarks(category) * getCategoryEntryRepeatCount(category)
+  }
+
+  const isMultiExperimentEntryCategory = (category) => {
+    const componentIds = category.component_ids || [category.id]
+    return componentIds.length === 1 && getCategoryEntryRepeatCount(category) > 1
+  }
+
+  const getExperimentMarksKey = (studentId, category) => {
+    const componentId = (category.component_ids || [category.id])[0]
+    return `${studentId}_${componentId}`
+  }
+
+  const getExperimentMarksTotal = (marks = []) =>
+    marks.reduce((sum, mark) => sum + (Number.isFinite(Number(mark)) ? Number(mark) : 0), 0)
+
   const loadExistingMarks = async () => {
     if (!selectedCourse || !learningMode || !facultyIdentifier) return
 
@@ -688,7 +719,7 @@ function MarkEntryPage() {
 
   const handleMarkChange = (studentId, category, value) => {
     const componentIds = category.component_ids || [category.id]
-    const maxMarks = category?.max_marks || 0
+    const maxMarks = getCategoryEffectiveMaxMarks(category)
     const errorKey = `${studentId}_${category.id}`
 
     // Allow empty value
@@ -740,6 +771,49 @@ function MarkEntryPage() {
     }
   }
 
+  const handleExperimentMarkChange = (studentId, category, index, value) => {
+    const repeatCount = getCategoryEntryRepeatCount(category)
+    const perEntryMax = getCategoryPerEntryMaxMarks(category)
+    const effectiveMax = getCategoryEffectiveMaxMarks(category)
+    const errorKey = `${studentId}_${category.id}`
+    const key = getExperimentMarksKey(studentId, category)
+
+    setExperimentMarks((prev) => {
+      const current = Array.isArray(prev[key]) ? [...prev[key]] : Array(repeatCount).fill('')
+
+      if (value === '' || value === null || value === undefined) {
+        current[index] = ''
+      } else {
+        const parsed = parseFloat(value)
+        if (Number.isNaN(parsed) || parsed < 0) {
+          return prev
+        }
+        current[index] = parsed
+      }
+
+      const hasPerEntryOverflow = current.some((mark) => Number.isFinite(Number(mark)) && Number(mark) > perEntryMax)
+      if (hasPerEntryOverflow) {
+        setMarkErrors((existingErrors) => ({ ...existingErrors, [errorKey]: `Each experiment max is ${perEntryMax}` }))
+      } else {
+        const total = getExperimentMarksTotal(current)
+        if (total > effectiveMax) {
+          setMarkErrors((existingErrors) => ({ ...existingErrors, [errorKey]: `Total max is ${effectiveMax}` }))
+        } else {
+          setMarkErrors((existingErrors) => {
+            const nextErrors = { ...existingErrors }
+            delete nextErrors[errorKey]
+            return nextErrors
+          })
+
+          const hasAnyValue = current.some((mark) => mark !== '' && mark !== null && mark !== undefined)
+          handleMarkChange(studentId, category, hasAnyValue ? total : '')
+        }
+      }
+
+      return { ...prev, [key]: current }
+    })
+  }
+
   // Filter mark categories by selected learning mode (UAL=1, PBL=2)
   const filteredMarkCategories = markCategories.filter((category) => {
     const learningModeId = learningMode === 'UAL' ? 1 : 2
@@ -747,6 +821,43 @@ function MarkEntryPage() {
   })
 
   const displayMarkCategories = buildDisplayCategories(filteredMarkCategories)
+
+  useEffect(() => {
+    if (students.length === 0 || displayMarkCategories.length === 0) {
+      setExperimentMarks({})
+      return
+    }
+
+    setExperimentMarks((prev) => {
+      let didChange = false
+      const next = { ...prev }
+
+      students.forEach((student) => {
+        displayMarkCategories.forEach((category) => {
+          if (!isMultiExperimentEntryCategory(category)) return
+
+          const repeatCount = getCategoryEntryRepeatCount(category)
+          const key = getExperimentMarksKey(student.student_id, category)
+          const existing = next[key]
+          if (Array.isArray(existing) && existing.length === repeatCount) return
+
+          const total = getDisplayMarkValue(student.student_id, category)
+          const initial = Array.from({ length: repeatCount }, (_, idx) => {
+            if (idx === 0 && total !== '' && total !== null && total !== undefined) {
+              return Number(total)
+            }
+            return ''
+          })
+
+          next[key] = initial
+          didChange = true
+        })
+      })
+
+      return didChange ? next : prev
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [students, displayMarkCategories, studentMarks])
 
   const normalizedStudentRegisterFilter = studentRegisterFilter.trim().toLowerCase()
   const visibleStudents = students.filter((student) => {
@@ -1404,7 +1515,7 @@ function MarkEntryPage() {
                           >
                             <div>Total</div>
                             <div className="text-violet-500 font-normal text-xs mt-0.5">
-                              / {group.categories.reduce((s, c) => s + (c.max_marks || 0), 0)}
+                              / {group.categories.reduce((s, c) => s + getCategoryEffectiveMaxMarks(c), 0)}
                             </div>
                           </th>
                         </React.Fragment>
@@ -1424,7 +1535,11 @@ function MarkEntryPage() {
                                 ? category.name.split(/\s*->\s*/)[1]
                                 : category.name}
                             </div>
-                            <div className="text-gray-500 font-normal mt-0.5">Max: {category.max_marks}</div>
+                            <div className="text-gray-500 font-normal mt-0.5">
+                              {isMultiExperimentEntryCategory(category)
+                                ? `Max: ${getCategoryPerEntryMaxMarks(category)} x ${getCategoryEntryRepeatCount(category)} = ${getCategoryEffectiveMaxMarks(category)}`
+                                : `Max: ${getCategoryEffectiveMaxMarks(category)}`}
+                            </div>
                           </th>
                         ))
                       )}
@@ -1479,20 +1594,48 @@ function MarkEntryPage() {
                                     </span>
                                   ) : (
                                     <div className="flex flex-col items-center gap-0.5">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max={category.max_marks}
-                                        step="0.01"
-                                        value={earned ?? ''}
-                                        onChange={(e) => handleMarkChange(student.student_id, category, e.target.value)}
-                                        placeholder="0"
-                                        className={`w-20 px-2 py-1 border rounded text-center text-sm font-medium focus:outline-none focus:ring-2 ${
-                                          hasError
-                                            ? 'border-red-500 text-red-600 bg-red-50 focus:ring-red-400'
-                                            : 'border-gray-300 text-gray-700 focus:ring-blue-500 focus:border-blue-500'
-                                        }`}
-                                      />
+                                      {isMultiExperimentEntryCategory(category) ? (
+                                        <div className="space-y-1.5">
+                                          {(experimentMarks[getExperimentMarksKey(student.student_id, category)] ||
+                                            Array(getCategoryEntryRepeatCount(category)).fill('')).map((mark, markIdx) => (
+                                            <input
+                                              key={`${student.student_id}_${category.id}_${markIdx}`}
+                                              type="number"
+                                              min="0"
+                                              max={getCategoryPerEntryMaxMarks(category)}
+                                              step="0.01"
+                                              value={mark}
+                                              onChange={(e) =>
+                                                handleExperimentMarkChange(student.student_id, category, markIdx, e.target.value)
+                                              }
+                                              placeholder={`E${markIdx + 1}`}
+                                              className={`w-20 px-2 py-1 border rounded text-center text-sm font-medium focus:outline-none focus:ring-2 ${
+                                                hasError
+                                                  ? 'border-red-500 text-red-600 bg-red-50 focus:ring-red-400'
+                                                  : 'border-gray-300 text-gray-700 focus:ring-blue-500 focus:border-blue-500'
+                                              }`}
+                                            />
+                                          ))}
+                                          <div className="text-[10px] text-gray-500 font-medium text-center">
+                                            Total: {Number(earned || 0).toFixed(2)} / {getCategoryEffectiveMaxMarks(category)}
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max={getCategoryEffectiveMaxMarks(category)}
+                                          step="0.01"
+                                          value={earned ?? ''}
+                                          onChange={(e) => handleMarkChange(student.student_id, category, e.target.value)}
+                                          placeholder="0"
+                                          className={`w-20 px-2 py-1 border rounded text-center text-sm font-medium focus:outline-none focus:ring-2 ${
+                                            hasError
+                                              ? 'border-red-500 text-red-600 bg-red-50 focus:ring-red-400'
+                                              : 'border-gray-300 text-gray-700 focus:ring-blue-500 focus:border-blue-500'
+                                          }`}
+                                        />
+                                      )}
                                       {hasError && (
                                         <span className="text-xs text-red-600 font-semibold">{markErrors[errorKey]}</span>
                                       )}

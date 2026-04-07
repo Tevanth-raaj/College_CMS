@@ -22,6 +22,7 @@ function SemesterDetailPage() {
     course_code: "",
     course_name: "",
     course_type: 0,
+    experiment_count_theorywithlab: 0,
     category: "",
     credit: "",
     lecture_hrs: 0,
@@ -39,6 +40,7 @@ function SemesterDetailPage() {
     course_code: "",
     course_name: "",
     course_type: 0,
+    experiment_count_theorywithlab: 0,
     category: "",
     credit: "",
     lecture_hrs: 0,
@@ -205,6 +207,10 @@ function SemesterDetailPage() {
       const courseData = {
         ...newCourse,
         credit: parseInt(newCourse.credit),
+        experiment_count_theorywithlab:
+          newCourse.course_type === 3
+            ? parseInt(newCourse.experiment_count_theorywithlab) || 0
+            : 0,
         lecture_hrs: lectureHrs,
         tutorial_hrs: tutorialHrs,
         practical_hrs: practicalHrs,
@@ -283,6 +289,7 @@ function SemesterDetailPage() {
         course_code: "",
         course_name: "",
         course_type: "",
+        experiment_count_theorywithlab: 0,
         category: "",
         credit: "",
         lecture_hrs: 0,
@@ -311,6 +318,8 @@ function SemesterDetailPage() {
       course_code: course.course_code,
       course_name: course.course_name,
       course_type: course.course_type,
+      experiment_count_theorywithlab:
+        course.experiment_count_theorywithlab || 0,
       category: course.category,
       credit: course.credit,
       lecture_hrs: course.lecture_hrs || 0,
@@ -361,6 +370,10 @@ function SemesterDetailPage() {
       const courseData = {
         ...editCourseData,
         credit: parseInt(editCourseData.credit),
+        experiment_count_theorywithlab:
+          editCourseData.course_type === 3
+            ? parseInt(editCourseData.experiment_count_theorywithlab) || 0
+            : 0,
         lecture_hrs: lectureHrs,
         tutorial_hrs: tutorialHrs,
         practical_hrs: practicalHrs,
@@ -717,6 +730,10 @@ function SemesterDetailPage() {
                     setNewCourse({
                       ...newCourse,
                       course_type: parseInt(e.target.value) || 0,
+                      experiment_count_theorywithlab:
+                        (parseInt(e.target.value) || 0) === 3
+                          ? newCourse.experiment_count_theorywithlab
+                          : 0,
                     })
                   }
                   required
@@ -728,6 +745,27 @@ function SemesterDetailPage() {
                   <option value="3">Theory with Lab</option>
                 </select>
               </div>
+
+              {newCourse.course_type === 3 && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    No. of Experiments
+                  </label>
+                  <input
+                    type="number"
+                    value={newCourse.experiment_count_theorywithlab}
+                    onChange={(e) =>
+                      setNewCourse({
+                        ...newCourse,
+                        experiment_count_theorywithlab: e.target.value,
+                      })
+                    }
+                    placeholder="0"
+                    min="0"
+                    className="input-custom"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -1547,6 +1585,10 @@ function SemesterDetailPage() {
                         setEditCourseData({
                           ...editCourseData,
                           course_type: parseInt(e.target.value) || 0,
+                          experiment_count_theorywithlab:
+                            (parseInt(e.target.value) || 0) === 3
+                              ? editCourseData.experiment_count_theorywithlab
+                              : 0,
                         })
                       }
                       required
@@ -1558,6 +1600,27 @@ function SemesterDetailPage() {
                       <option value="3">Theory with Lab</option>
                     </select>
                   </div>
+
+                  {editCourseData.course_type === 3 && (
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        No. of Experiments
+                      </label>
+                      <input
+                        type="number"
+                        value={editCourseData.experiment_count_theorywithlab}
+                        onChange={(e) =>
+                          setEditCourseData({
+                            ...editCourseData,
+                            experiment_count_theorywithlab: e.target.value,
+                          })
+                        }
+                        placeholder="0"
+                        min="0"
+                        className="input-custom"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">

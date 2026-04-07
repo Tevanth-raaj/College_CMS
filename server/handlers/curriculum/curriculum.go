@@ -367,6 +367,7 @@ func GetSemesterCourses(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		SELECT c.id, c.course_code, c.course_name, ct.course_type, c.category, c.credit, 
+		       COALESCE(c.experiment_count_theorywithlab, 0) as experiment_count_theorywithlab,
 		       c.lecture_hrs, c.tutorial_hrs, c.practical_hrs, c.activity_hrs, COALESCE(c.` + "`tw/sl`" + `, 0) as tw_sl,
 		       COALESCE(c.theory_total_hrs, 0), COALESCE(c.tutorial_total_hrs, 0), COALESCE(c.practical_total_hrs, 0), COALESCE(c.activity_total_hrs, 0), COALESCE(c.total_hrs, 0),
 		       c.cia_marks, c.see_marks, c.total_marks,
@@ -393,6 +394,7 @@ func GetSemesterCourses(w http.ResponseWriter, r *http.Request) {
 		var course models.CourseWithDetails
 		var countTowardsLimitInt int
 		err := rows.Scan(&course.CourseID, &course.CourseCode, &course.CourseName, &course.CourseType, &course.Category, &course.Credit,
+			&course.ExperimentCountTWL,
 			&course.LectureHrs, &course.TutorialHrs, &course.PracticalHrs, &course.ActivityHrs, &course.TwSlHrs,
 			&course.TheoryTotalHrs, &course.TutorialTotalHrs, &course.PracticalTotalHrs, &course.ActivityTotalHrs, &course.TotalHrs,
 			&course.CIAMarks, &course.SEEMarks, &course.TotalMarks,
@@ -555,11 +557,13 @@ func AddCourseToSemester(w http.ResponseWriter, r *http.Request) {
 	if course.CourseCode == "NA" {
 		// For NA courses, always create a new course entry
 		insertCourseQuery := `INSERT INTO courses (course_code, course_name, course_type, category, credit, 
+		                      experiment_count_theorywithlab,
 		                      lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, ` + "`tw/sl`" + `,
 		                      theory_total_hrs, tutorial_total_hrs, practical_total_hrs, activity_total_hrs,
 	                      cia_marks, see_marks, status) 
-	                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+	                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
 		result, err := db.DB.Exec(insertCourseQuery, course.CourseCode, course.CourseName, courseTypeID, course.Category, course.Credit,
+			course.ExperimentCountTWL,
 			course.LectureHrs, course.TutorialHrs, course.PracticalHrs, course.ActivityHrs, course.TwSlHrs,
 			theoryTotal, tutorialTotal, practicalTotal, activityTotal,
 			course.CIAMarks, course.SEEMarks)
@@ -588,11 +592,13 @@ func AddCourseToSemester(w http.ResponseWriter, r *http.Request) {
 			if globalErr == sql.ErrNoRows {
 				// Course doesn't exist globally - create new course
 				insertCourseQuery := `INSERT INTO courses (course_code, course_name, course_type, category, credit, 
+				                      experiment_count_theorywithlab,
 				                      lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, ` + "`tw/sl`" + `,
 				                      theory_total_hrs, tutorial_total_hrs, practical_total_hrs, activity_total_hrs,
 			                      cia_marks, see_marks, status) 
-			                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+			                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
 				result, err := db.DB.Exec(insertCourseQuery, course.CourseCode, course.CourseName, courseTypeID, course.Category, course.Credit,
+					course.ExperimentCountTWL,
 					course.LectureHrs, course.TutorialHrs, course.PracticalHrs, course.ActivityHrs, course.TwSlHrs,
 					theoryTotal, tutorialTotal, practicalTotal, activityTotal,
 					course.CIAMarks, course.SEEMarks)
@@ -648,12 +654,13 @@ func AddCourseToSemester(w http.ResponseWriter, r *http.Request) {
 	// Fetch the complete course details including computed fields
 	var fullCourse models.CourseWithDetails
 	fetchQuery := `SELECT id, course_code, course_name, course_type, category, credit, 
+	               COALESCE(experiment_count_theorywithlab, 0) as experiment_count_theorywithlab,
 	               lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, COALESCE(` + "`tw/sl`" + `, 0) as tw_sl,
 	               COALESCE(theory_total_hrs, 0), COALESCE(tutorial_total_hrs, 0), COALESCE(practical_total_hrs, 0), COALESCE(activity_total_hrs, 0), COALESCE(total_hrs, 0),
 	               cia_marks, see_marks, COALESCE(total_marks, 0) 
 	               FROM courses WHERE id = ?`
 	err = db.DB.QueryRow(fetchQuery, courseID).Scan(&fullCourse.CourseID, &fullCourse.CourseCode, &fullCourse.CourseName,
-		&fullCourse.CourseType, &fullCourse.Category, &fullCourse.Credit,
+		&fullCourse.CourseType, &fullCourse.Category, &fullCourse.Credit, &fullCourse.ExperimentCountTWL,
 		&fullCourse.LectureHrs, &fullCourse.TutorialHrs, &fullCourse.PracticalHrs, &fullCourse.ActivityHrs, &fullCourse.TwSlHrs,
 		&fullCourse.TheoryTotalHrs, &fullCourse.TutorialTotalHrs, &fullCourse.PracticalTotalHrs, &fullCourse.ActivityTotalHrs, &fullCourse.TotalHrs,
 		&fullCourse.CIAMarks, &fullCourse.SEEMarks, &fullCourse.TotalMarks)
@@ -661,19 +668,20 @@ func AddCourseToSemester(w http.ResponseWriter, r *http.Request) {
 		log.Println("Error fetching full course details:", err)
 		// Fallback to sent values
 		fullCourse = models.CourseWithDetails{
-			CourseID:     courseID,
-			CourseCode:   course.CourseCode,
-			CourseName:   course.CourseName,
-			CourseType:   course.CourseType,
-			Category:     course.Category,
-			Credit:       course.Credit,
-			LectureHrs:   course.LectureHrs,
-			TutorialHrs:  course.TutorialHrs,
-			PracticalHrs: course.PracticalHrs,
-			ActivityHrs:  course.ActivityHrs,
-			CIAMarks:     course.CIAMarks,
-			SEEMarks:     course.SEEMarks,
-			TotalMarks:   course.CIAMarks + course.SEEMarks,
+			CourseID:           courseID,
+			CourseCode:         course.CourseCode,
+			CourseName:         course.CourseName,
+			CourseType:         course.CourseType,
+			ExperimentCountTWL: course.ExperimentCountTWL,
+			Category:           course.Category,
+			Credit:             course.Credit,
+			LectureHrs:         course.LectureHrs,
+			TutorialHrs:        course.TutorialHrs,
+			PracticalHrs:       course.PracticalHrs,
+			ActivityHrs:        course.ActivityHrs,
+			CIAMarks:           course.CIAMarks,
+			SEEMarks:           course.SEEMarks,
+			TotalMarks:         course.CIAMarks + course.SEEMarks,
 		}
 	}
 	fullCourse.RegCourseID = int(regCourseID)

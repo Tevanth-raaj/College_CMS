@@ -90,6 +90,7 @@ function MarkEntryPermissionsPage() {
   const [departments, setDepartments] = useState([])
   const [windowScope, setWindowScope] = useState('teacher_course')
   const [windowDepartmentId, setWindowDepartmentId] = useState('')
+  const [windowDepartmentIds, setWindowDepartmentIds] = useState([])
   const [windowSemester, setWindowSemester] = useState('')
   const [windowCourseId, setWindowCourseId] = useState('')
   const [windowCourses, setWindowCourses] = useState([])
@@ -214,18 +215,23 @@ function MarkEntryPermissionsPage() {
       fetchStudentsForAssignment()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowDepartmentId])
+  }, [windowDepartmentId, windowDepartmentIds])
 
   // Fetch courses when department and semester change in student-assignment tab
   useEffect(() => {
     if (activeTab === 'student-assignment' && windowSemester) {
-      // Fetch courses (all departments if windowDepartmentId is empty)
-      fetchDepartmentCurriculumCourses(windowDepartmentId, windowSemester)
+      const selectedDepartmentIds = getSelectedDepartmentIds()
+      const departmentForCourseFetch = selectedDepartmentIds.length === 1
+        ? String(selectedDepartmentIds[0])
+        : ''
+      // Fetch one-department courses when a single department is selected,
+      // otherwise fetch all-department courses.
+      fetchDepartmentCurriculumCourses(departmentForCourseFetch, windowSemester)
     } else if (activeTab === 'student-assignment') {
       setWindowCourses([])
       setWindowCourseId('')
     }
-  }, [activeTab, windowDepartmentId, windowSemester])
+  }, [activeTab, windowDepartmentId, windowDepartmentIds, windowSemester])
 
   // Load components when course changes in student-assignment tab
   useEffect(() => {
@@ -284,15 +290,16 @@ function MarkEntryPermissionsPage() {
 
 
   useEffect(() => {
-    if (windowScope === 'department_semester_course' && windowDepartmentId && windowDepartmentId !== '0' && windowSemester) {
-      fetchDepartmentCourses(windowDepartmentId, windowSemester)
+    const selectedDepartmentIds = getSelectedDepartmentIds()
+    if (windowScope === 'department_semester_course' && selectedDepartmentIds.length === 1 && windowSemester) {
+      fetchDepartmentCourses(String(selectedDepartmentIds[0]), windowSemester)
     } else {
       setWindowCourses([])
       if (windowScope === 'department_semester_course') {
         setWindowCourseId('')
       }
     }
-  }, [windowScope, windowDepartmentId, windowSemester])
+  }, [windowScope, windowDepartmentId, windowDepartmentIds, windowSemester])
 
   useEffect(() => {
     // Skip loadWindowRule when editing - editWindow directly populates selections
@@ -428,6 +435,59 @@ function MarkEntryPermissionsPage() {
     }
   }
 
+  const getSelectedDepartmentIds = () => {
+    const selected = (windowDepartmentIds || [])
+      .filter((id) => id !== '0')
+      .map((id) => parseInt(id, 10))
+      .filter((id) => Number.isInteger(id) && id > 0)
+
+    if (selected.length > 0) return selected
+
+    if (windowDepartmentId && windowDepartmentId !== '0') {
+      const parsed = parseInt(windowDepartmentId, 10)
+      if (Number.isInteger(parsed) && parsed > 0) return [parsed]
+    }
+
+    return []
+  }
+
+  const toggleDepartmentSelection = (departmentId) => {
+    const departmentKey = String(departmentId)
+    setWindowDepartmentIds((prev) => {
+      const exists = prev.includes(departmentKey)
+      const next = exists ? prev.filter((id) => id !== departmentKey) : [...prev, departmentKey]
+      setWindowDepartmentId(next.length > 0 ? next[0] : '')
+      return next
+    })
+  }
+
+  const isDepartmentSelected = (departmentId) => {
+    const departmentKey = String(departmentId)
+    return (windowDepartmentIds || []).includes(departmentKey)
+  }
+
+  const getSelectedDepartmentLabels = () => {
+    const selectedIds = getSelectedDepartmentIds()
+    if (!selectedIds.length) return []
+
+    const nameById = new Map(
+      departments.map((department) => [
+        Number(department.id),
+        department.department_name || department.name || `Department ${department.id}`,
+      ])
+    )
+
+    return selectedIds.map((id) => ({
+      id,
+      label: nameById.get(id) || `Department ${id}`,
+    }))
+  }
+
+  const clearSelectedDepartments = () => {
+    setWindowDepartmentIds([])
+    setWindowDepartmentId('')
+  }
+
   const fetchDepartmentCurriculumCourses = async (departmentId, semester) => {
     if (!semester) {
       setWindowCourses([])
@@ -494,6 +554,7 @@ function MarkEntryPermissionsPage() {
 
   const buildWindowQuery = () => {
     const params = new URLSearchParams()
+    const selectedDepartmentIds = getSelectedDepartmentIds()
 
     if (windowScope === 'teacher_course') {
       if (!selectedTeacherId || !selectedCourseId) return ''
@@ -502,18 +563,14 @@ function MarkEntryPermissionsPage() {
     }
 
     if (windowScope === 'department_semester') {
-      if (windowDepartmentId === '' || !windowSemester) return ''
-      if (windowDepartmentId !== '0') {
-        params.append('department_id', windowDepartmentId)
-      }
+      if (selectedDepartmentIds.length !== 1 || !windowSemester) return ''
+      params.append('department_id', String(selectedDepartmentIds[0]))
       params.append('semester', windowSemester)
     }
 
     if (windowScope === 'department_semester_course') {
-      if (windowDepartmentId === '' || !windowSemester || !windowCourseId || windowCourseId === 'all') return ''
-      if (windowDepartmentId !== '0') {
-        params.append('department_id', windowDepartmentId)
-      }
+      if (selectedDepartmentIds.length !== 1 || !windowSemester || !windowCourseId || windowCourseId === 'all') return ''
+      params.append('department_id', String(selectedDepartmentIds[0]))
       params.append('semester', windowSemester)
       params.append('course_id', windowCourseId)
     }
@@ -612,24 +669,22 @@ function MarkEntryPermissionsPage() {
     }
 
     if (windowScope === 'department_semester') {
-      if (windowDepartmentId === '' || !windowSemester) {
+      const selectedDepartmentIds = getSelectedDepartmentIds()
+      if (selectedDepartmentIds.length === 0 || !windowSemester) {
         setMessage({ type: 'error', text: 'Select a department and semester.' })
         return
       }
-      if (windowDepartmentId !== '0') {
-        payload.department_id = parseInt(windowDepartmentId, 10)
-      }
+      payload.department_ids = selectedDepartmentIds
       payload.semester = parseInt(windowSemester, 10)
     }
 
     if (windowScope === 'department_semester_course') {
-      if (windowDepartmentId === '' || !windowSemester || !windowCourseId) {
+      const selectedDepartmentIds = getSelectedDepartmentIds()
+      if (selectedDepartmentIds.length === 0 || !windowSemester || !windowCourseId) {
         setMessage({ type: 'error', text: 'Select department, semester, and course.' })
         return
       }
-      if (windowDepartmentId !== '0') {
-        payload.department_id = parseInt(windowDepartmentId, 10)
-      }
+      payload.department_ids = selectedDepartmentIds
       payload.semester = parseInt(windowSemester, 10)
       payload.course_id = parseInt(windowCourseId, 10)
     }
@@ -854,6 +909,7 @@ function MarkEntryPermissionsPage() {
 
     // Set scope fields
     setWindowDepartmentId(win.department_id ? String(win.department_id) : '')
+    setWindowDepartmentIds(win.department_id ? [String(win.department_id)] : [])
     setWindowSemester(win.semester || '')
     setWindowCourseId(win.course_id || '')
 
@@ -950,11 +1006,13 @@ function MarkEntryPermissionsPage() {
     } else if (latestWindow.semester && latestWindow.course_id) {
       setWindowScope('department_semester_course')
       setWindowDepartmentId(latestWindow.department_id ? latestWindow.department_id.toString() : '0')
+      setWindowDepartmentIds(latestWindow.department_id ? [latestWindow.department_id.toString()] : ['0'])
       setWindowSemester(latestWindow.semester.toString())
       setWindowCourseId(latestWindow.course_id.toString())
     } else if (latestWindow.semester) {
       setWindowScope('department_semester')
       setWindowDepartmentId(latestWindow.department_id ? latestWindow.department_id.toString() : '0')
+      setWindowDepartmentIds(latestWindow.department_id ? [latestWindow.department_id.toString()] : ['0'])
       setWindowSemester(latestWindow.semester.toString())
     }
 
@@ -1077,6 +1135,7 @@ function MarkEntryPermissionsPage() {
     setWindowEnabled(true)
     setSelectedPBLComponents([])
     setSelectedUALComponents([])
+    setWindowDepartmentIds([])
   }
 
   const getScopeDescription = (window) => {
@@ -1211,8 +1270,9 @@ function MarkEntryPermissionsPage() {
     try {
       const params = new URLSearchParams()
       // Filter by Window Scope department if selected
-      if (windowDepartmentId) {
-        params.append('department_id', windowDepartmentId)
+      const selectedDepartmentIds = getSelectedDepartmentIds()
+      if (selectedDepartmentIds.length > 0) {
+        params.append('department_id', selectedDepartmentIds.join(','))
       }
       // Additional filters from student filter section
       if (studentFilters.department) params.append('department', studentFilters.department)
@@ -1261,6 +1321,7 @@ function MarkEntryPermissionsPage() {
             teacher_id: null,
             user_id: selectedUserId || null,
             department_id: windowDepartmentId && windowDepartmentId !== '0' ? parseInt(windowDepartmentId, 10) : null,
+            department_ids: getSelectedDepartmentIds(),
             semester: windowSemester ? parseInt(windowSemester, 10) : null,
             course_id: windowCourseId && windowCourseId !== 'all' ? parseInt(windowCourseId, 10) : null,
           })
@@ -1299,6 +1360,7 @@ function MarkEntryPermissionsPage() {
           body: JSON.stringify({
             user_id: selectedUserId,
             department_id: windowDepartmentId ? parseInt(windowDepartmentId) : null,
+            department_ids: getSelectedDepartmentIds(),
             semester: windowSemester ? parseInt(windowSemester) : null,
             course_id: windowCourseId && windowCourseId !== 'all' ? parseInt(windowCourseId) : null,
             student_ids: selectedStudents,
@@ -1334,6 +1396,7 @@ function MarkEntryPermissionsPage() {
       setWindowStartAt('')
       setWindowEndAt('')
       setWindowDepartmentId('')
+      setWindowDepartmentIds([])
       setWindowSemester('')
       setWindowCourseId('')
       setSelectedPBLComponents([])
@@ -1593,19 +1656,44 @@ function MarkEntryPermissionsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">Department</label>
-                        <select
-                          value={windowDepartmentId}
-                          onChange={(e) => setWindowDepartmentId(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-sm"
-                        >
-                          <option value="">Select Department</option>
-                          <option value="0">All Departments</option>
+                        <div className="w-full min-h-[130px] max-h-[180px] overflow-y-auto px-3 py-2 border border-gray-300 rounded-lg bg-white">
                           {departments.map((department) => (
-                            <option key={department.id} value={department.id}>
-                              {department.department_name || department.name || `Department ${department.id}`}
-                            </option>
+                            <label
+                              key={department.id}
+                              className="flex items-center gap-2 py-1.5 text-sm text-gray-700 cursor-pointer hover:text-primary"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isDepartmentSelected(department.id)}
+                                onChange={() => toggleDepartmentSelection(department.id)}
+                                className="h-4 w-4 accent-primary"
+                              />
+                              <span>{department.department_name || department.name || `Department ${department.id}`}</span>
+                            </label>
                           ))}
-                        </select>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <p className="text-[11px] text-gray-500">Selected: {getSelectedDepartmentLabels().length}</p>
+                          {getSelectedDepartmentLabels().length > 0 && (
+                            <button
+                              type="button"
+                              onClick={clearSelectedDepartments}
+                              className="text-[11px] font-semibold text-red-600 hover:text-red-700"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                        {getSelectedDepartmentLabels().length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {getSelectedDepartmentLabels().map((item) => (
+                              <span key={item.id} className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[11px] font-medium">
+                                {item.label}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-[11px] text-gray-500 mt-2">Click departments to select or unselect.</p>
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">Semester</label>
@@ -1914,16 +2002,44 @@ function MarkEntryPermissionsPage() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Department (Optional)</label>
-                      <select
-                        value={windowDepartmentId}
-                        onChange={(e) => setWindowDepartmentId(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
-                      >
-                        <option value="">All Departments</option>
+                      <div className="w-full min-h-[130px] max-h-[180px] overflow-y-auto px-3 py-2 border border-gray-300 rounded-lg bg-white">
                         {departments.map((dept) => (
-                          <option key={dept.id} value={dept.id}>{dept.department_name || dept.name || `Department ${dept.id}`}</option>
+                          <label
+                            key={dept.id}
+                            className="flex items-center gap-2 py-1.5 text-sm text-gray-700 cursor-pointer hover:text-primary"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isDepartmentSelected(dept.id)}
+                              onChange={() => toggleDepartmentSelection(dept.id)}
+                              className="h-4 w-4 accent-primary"
+                            />
+                            <span>{dept.department_name || dept.name || `Department ${dept.id}`}</span>
+                          </label>
                         ))}
-                      </select>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <p className="text-[11px] text-gray-500">Selected: {getSelectedDepartmentLabels().length}</p>
+                        {getSelectedDepartmentLabels().length > 0 && (
+                          <button
+                            type="button"
+                            onClick={clearSelectedDepartments}
+                            className="text-[11px] font-semibold text-red-600 hover:text-red-700"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                      {getSelectedDepartmentLabels().length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {getSelectedDepartmentLabels().map((item) => (
+                            <span key={item.id} className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[11px] font-medium">
+                              {item.label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-[11px] text-gray-500 mt-2">Click departments to select or unselect.</p>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Semester (Optional)</label>
@@ -2108,7 +2224,7 @@ function MarkEntryPermissionsPage() {
                       <button
                         onClick={() => {
                           setEditingWindow(null); setSelectedUserId(''); setSelectedStudents([])
-                          setWindowName(''); setWindowDepartmentId(''); setWindowSemester(''); setWindowCourseId('')
+                          setWindowName(''); setWindowDepartmentId(''); setWindowDepartmentIds([]); setWindowSemester(''); setWindowCourseId('')
                           setWindowStartAt(''); setWindowEndAt(''); setWindowEnabled(true)
                           setSelectedPBLComponents([]); setSelectedUALComponents([])
                         }}

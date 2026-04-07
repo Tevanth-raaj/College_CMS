@@ -235,10 +235,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(currentSemesters) == 0 {
-		log.Printf("Teacher dashboard semester mapping unavailable for faculty_id='%s', academic_year='%s'", facultyID, currentAcademicYear)
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode([]interface{}{})
-		return
+		log.Printf("Teacher dashboard semester mapping unavailable for faculty_id='%s', academic_year='%s' (continuing with teacher_course_history data)", facultyID, currentAcademicYear)
 	}
 
 	oddCount := 0
@@ -260,15 +257,22 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		SELECT DISTINCT
 			c.id, tca.course_id, c.course_code, c.course_name, COALESCE(ct.course_type, ''),
 			c.credit, COALESCE(c.category, 'General'),
-			? AS academic_year, ? AS semester_type
-		FROM teacher_course_allocation tca
+			COALESCE(tca.academic_year, ''), LOWER(COALESCE(tca.semester_type, ''))
+		FROM teacher_course_history tca
+		INNER JOIN (
+			SELECT course_id, MAX(id) AS latest_id
+			FROM teacher_course_history
+			WHERE teacher_id = ?
+			  AND record_type = 'course'
+			  AND course_id IS NOT NULL
+			GROUP BY course_id
+		) latest ON latest.latest_id = tca.id
 		JOIN courses c ON tca.course_id = c.id
 		LEFT JOIN course_type ct ON c.course_type = ct.id
-		WHERE tca.teacher_id = ?
-		  AND tca.is_active = 1
+		WHERE c.status = 1
 	`
 
-	semWiseArgs := []interface{}{currentAcademicYear, derivedCalendarSemesterType, facultyID}
+	semWiseArgs := []interface{}{facultyID}
 
 	finalQuery := semWiseBaseQuery + ` ORDER BY c.course_code`
 	candidateRows, queryErr := db.DB.Query(finalQuery, semWiseArgs...)
@@ -393,6 +397,10 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		mappedSemSet := map[int]struct{}{}
 		for _, dept := range course.Departments {
 			if dept.Semester == nil {
+				continue
+			}
+			if len(activeSemesterMap) == 0 {
+				mappedSemSet[*dept.Semester] = struct{}{}
 				continue
 			}
 			if _, ok := activeSemesterMap[*dept.Semester]; ok {
@@ -579,17 +587,20 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Fetch allocated students for this course and teacher
+		// Fetch all allocated students for this course and teacher.
+		// Course details should always show the complete allocation list.
 		studentQuery := `
 			SELECT DISTINCT s.id, s.student_name, COALESCE(s.enrollment_no, ''), COALESCE(s.register_no, ''), s.learning_mode_id, s.department_id, COALESCE(d.department_name, '')
 			FROM course_student_teacher_allocation csta
 			JOIN students s ON csta.student_id = s.id
 			LEFT JOIN departments d ON s.department_id = d.id
-			WHERE csta.course_id = ? AND csta.teacher_id = ?
-			ORDER BY s.student_name
+			WHERE csta.course_id = ? AND csta.teacher_id = ? AND s.status = 1
 		`
+		studentArgs := []interface{}{course.CourseID, facultyID}
+		studentQuery += ` ORDER BY s.student_name`
+
 		log.Printf("Querying students for courseID=%d, faculty_id='%s'", course.CourseID, facultyID)
-		sRows, err := db.DB.Query(studentQuery, course.CourseID, facultyID)
+		sRows, err := db.DB.Query(studentQuery, studentArgs...)
 		if err != nil {
 			log.Printf("Error fetching students for course %d: %v", course.CourseID, err)
 		} else {
@@ -614,6 +625,58 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			log.Printf("No students found for course %s, setting empty array", course.CourseCode)
 		}
 
+		// Mark-entry windows are semester-scoped. Keep course/student visibility intact,
+		// but hide window actions when no allocated student is currently in the window semester.
+		if course.HasWindow && course.Window != nil && course.Window.Semester != nil && *course.Window.Semester > 0 {
+			var allocationEligibleCount int
+			allocationEligibleErr := db.DB.QueryRow(`
+				SELECT COUNT(DISTINCT s.id)
+				FROM course_student_teacher_allocation csta
+				JOIN students s ON csta.student_id = s.id
+				LEFT JOIN academic_calendar ac ON ac.id = s.year
+				WHERE csta.course_id = ?
+				  AND csta.teacher_id = ?
+				  AND s.status = 1
+				  AND ac.current_semester = ?
+			`, course.CourseID, facultyID, *course.Window.Semester).Scan(&allocationEligibleCount)
+
+			var assignedEligibleCount int
+			assignedEligibleErr := db.DB.QueryRow(`
+				SELECT COUNT(DISTINCT s.id)
+				FROM mark_entry_student_permissions mesp
+				JOIN mark_entry_windows w ON w.id = mesp.window_id
+				JOIN students s ON s.id = mesp.student_id
+				LEFT JOIN academic_calendar ac ON ac.id = s.year
+				LEFT JOIN student_courses sc ON sc.student_id = s.id
+				WHERE mesp.window_id = ?
+				  AND s.status = 1
+				  AND (
+					w.course_id IS NULL OR w.course_id = 0
+					OR w.course_id = ?
+					OR sc.course_id = ?
+				  )
+				  AND (
+					COALESCE(w.semester, 0) = 0
+					OR ac.current_semester = w.semester
+				  )
+			`, course.Window.ID, course.CourseID, course.CourseID).Scan(&assignedEligibleCount)
+
+			if allocationEligibleErr != nil {
+				log.Printf("Error checking allocation semester-eligible students for course %d window %d: %v", course.CourseID, course.Window.ID, allocationEligibleErr)
+			}
+			if assignedEligibleErr != nil {
+				log.Printf("Error checking window-assigned semester-eligible students for course %d window %d: %v", course.CourseID, course.Window.ID, assignedEligibleErr)
+			}
+
+			if allocationEligibleErr == nil && assignedEligibleErr == nil && allocationEligibleCount == 0 && assignedEligibleCount == 0 {
+				log.Printf("Suppressing mark entry window for course %d window %d: no students in semester %d", course.CourseID, course.Window.ID, *course.Window.Semester)
+				course.HasWindow = false
+				course.Window = nil
+				course.IsSubmitted = false
+				course.SubmittedAt = ""
+			}
+		}
+
 		courses = append(courses, course)
 	}
 
@@ -632,6 +695,11 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 // missedWindow: expired window with no submission by this teacher for this course.
 // submittedWindow: expired window where the teacher submitted before expiry.
 func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryWindow, *MarkEntryWindow, error) {
+	var numericUserID sql.NullInt64
+	if resolvedUserID, userErr := resolveNumericUserID(db.DB, facultyID); userErr == nil && resolvedUserID > 0 {
+		numericUserID = sql.NullInt64{Int64: int64(resolvedUserID), Valid: true}
+	}
+
 	// 1. Teacher's departments from department_teachers
 	var teacherDeptIDs []int64
 	tRows, err := db.DB.Query(`SELECT department_id FROM department_teachers WHERE teacher_id = ? AND status = 1`, facultyID)
@@ -676,20 +744,50 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 
 	// 3. Course semesters via curriculum chain
 	var courseSemesters []int64
+	studentSemesterSet := make(map[int64]bool)
+	var hasNonSemesterCard bool
 	semRows, err := db.DB.Query(`
-		SELECT DISTINCT nc.semester_number
+		SELECT nc.semester_number, COALESCE(nc.card_type, 'semester')
 		FROM curriculum_courses cc
 		JOIN normal_cards nc ON cc.semester_id = nc.id
-		WHERE cc.course_id = ? AND COALESCE(nc.card_type, 'semester') = 'semester' AND nc.semester_number IS NOT NULL
+		WHERE cc.course_id = ?
 	`, courseID)
 	if err == nil {
 		for semRows.Next() {
-			var sem int64
-			if semRows.Scan(&sem) == nil {
-				courseSemesters = append(courseSemesters, sem)
+			var semNum sql.NullInt64
+			var cType string
+			if semRows.Scan(&semNum, &cType) == nil {
+				if cType != "semester" {
+					hasNonSemesterCard = true
+				} else if semNum.Valid {
+					courseSemesters = append(courseSemesters, semNum.Int64)
+				}
 			}
 		}
 		semRows.Close()
+	}
+
+	studentSemRows, studentSemErr := db.DB.Query(`
+		SELECT DISTINCT COALESCE(ac.current_semester, 0)
+		FROM course_student_teacher_allocation csta
+		JOIN students s ON csta.student_id = s.id
+		LEFT JOIN academic_calendar ac ON ac.id = s.year
+		WHERE csta.course_id = ?
+		  AND csta.teacher_id = ?
+		  AND s.status = 1
+	`, courseID, facultyID)
+	if studentSemErr == nil {
+		for studentSemRows.Next() {
+			var currentSem int64
+			if studentSemRows.Scan(&currentSem) == nil && currentSem > 0 {
+				studentSemesterSet[currentSem] = true
+			}
+		}
+		studentSemRows.Close()
+	}
+
+	for sem := range studentSemesterSet {
+		courseSemesters = append(courseSemesters, sem)
 	}
 
 	log.Printf("[resolveExpired] courseID=%d facultyID=%s teacherDepts=%v courseDepts=%v allDepts=%v sems=%v",
@@ -697,7 +795,11 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 
 	// 4. Build dynamic WHERE clauses (same pattern as resolveMarkEntryWindow)
 	var queryArgs []interface{}
-	queryArgs = append(queryArgs, facultyID, courseID)
+	userIDValue := interface{}(nil)
+	if numericUserID.Valid {
+		userIDValue = numericUserID.Int64
+	}
+	queryArgs = append(queryArgs, facultyID, userIDValue, courseID)
 
 	var deptClause string
 	if len(allDeptIDs) == 0 {
@@ -712,8 +814,8 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 	}
 
 	var semClause string
-	if len(courseSemesters) == 0 {
-		semClause = "1=1"
+	if hasNonSemesterCard || len(courseSemesters) == 0 {
+		semClause = "(w.semester IS NULL OR w.semester = 0 OR 1=1)"
 	} else {
 		ph := make([]string, len(courseSemesters))
 		for i, s := range courseSemesters {
@@ -727,7 +829,7 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 	baseSQL := fmt.Sprintf(`
 		SELECT w.id, w.start_at, w.end_at
 		FROM mark_entry_windows w
-		WHERE (w.teacher_id IS NULL OR w.teacher_id = ?)
+		WHERE ((w.teacher_id IS NULL AND w.user_id IS NULL) OR w.teacher_id = ? OR w.user_id = ?)
 		  AND (w.course_id IS NULL OR w.course_id = ?)
 		  AND %s
 		  AND %s
@@ -743,7 +845,7 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 		SELECT w.id, w.start_at, w.end_at, ms.submitted_at
 		FROM mark_submissions ms
 		JOIN mark_entry_windows w ON w.id = ms.window_id
-		WHERE (w.teacher_id IS NULL OR w.teacher_id = ?)
+		WHERE ((w.teacher_id IS NULL AND w.user_id IS NULL) OR w.teacher_id = ? OR w.user_id = ?)
 		  AND (w.course_id IS NULL OR w.course_id = ?)
 		  AND %s
 		  AND %s

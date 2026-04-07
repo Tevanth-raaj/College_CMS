@@ -235,10 +235,10 @@ func UpdateCourse(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch old course data for diff
 	var oldCourse models.Course
-	err = db.DB.QueryRow(`SELECT course_code, course_name, course_type, category, credit, 
+	err = db.DB.QueryRow(`SELECT course_code, course_name, course_type, COALESCE(experiment_count_theorywithlab, 0), category, credit, 
 		lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, COALESCE(`+"`tw/sl`"+`, 0) as tw_sl, cia_marks, see_marks 
 		FROM courses WHERE id = ?`, courseID).Scan(
-		&oldCourse.CourseCode, &oldCourse.CourseName, &oldCourse.CourseType, &oldCourse.Category,
+		&oldCourse.CourseCode, &oldCourse.CourseName, &oldCourse.CourseType, &oldCourse.ExperimentCountTWL, &oldCourse.Category,
 		&oldCourse.Credit, &oldCourse.LectureHrs, &oldCourse.TutorialHrs, &oldCourse.PracticalHrs, &oldCourse.ActivityHrs, &oldCourse.TwSlHrs,
 		&oldCourse.CIAMarks, &oldCourse.SEEMarks)
 	if err != nil {
@@ -315,11 +315,13 @@ func UpdateCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := `UPDATE courses SET course_code = ?, course_name = ?, course_type = ?, category = ?, 
+		experiment_count_theorywithlab = ?,
 		credit = ?, lecture_hrs = ?, tutorial_hrs = ?, practical_hrs = ?, activity_hrs = ?, ` + "`tw/sl`" + ` = ?,
 		theory_total_hrs = ?, tutorial_total_hrs = ?, practical_total_hrs = ?, activity_total_hrs = ?,
 		cia_marks = ?, see_marks = ? WHERE id = ?`
 
 	_, err = db.DB.Exec(query, course.CourseCode, course.CourseName, courseTypeID, course.Category,
+		course.ExperimentCountTWL,
 		course.Credit, course.LectureHrs, course.TutorialHrs, course.PracticalHrs, course.ActivityHrs, course.TwSlHrs,
 		theoryTotal, tutorialTotal, practicalTotal, activityTotal,
 		course.CIAMarks, course.SEEMarks, courseID)
@@ -340,6 +342,9 @@ func UpdateCourse(w http.ResponseWriter, r *http.Request) {
 	}
 	if oldCourse.CourseType != course.CourseType {
 		diff["course_type"] = map[string]interface{}{"old": oldCourse.CourseType, "new": course.CourseType}
+	}
+	if oldCourse.ExperimentCountTWL != course.ExperimentCountTWL {
+		diff["experiment_count_theorywithlab"] = map[string]interface{}{"old": oldCourse.ExperimentCountTWL, "new": course.ExperimentCountTWL}
 	}
 	if oldCourse.Category != course.Category {
 		diff["category"] = map[string]interface{}{"old": oldCourse.Category, "new": course.Category}
@@ -390,12 +395,12 @@ func GetCourse(w http.ResponseWriter, r *http.Request) {
 
 	var course models.Course
 	err = db.DB.QueryRow(`
-		SELECT id, course_code, course_name, course_type, category, credit, 
+		SELECT id, course_code, course_name, course_type, COALESCE(experiment_count_theorywithlab, 0), category, credit, 
 		       lecture_hrs, tutorial_hrs, practical_hrs, COALESCE(`+"`tw/sl`"+`, 0) as tw_sl, cia_marks, see_marks, total_marks
 		FROM courses 
 		WHERE id = ?`, courseID).
 		Scan(&course.CourseID, &course.CourseCode, &course.CourseName, &course.CourseType,
-			&course.Category, &course.Credit, &course.LectureHrs, &course.TutorialHrs,
+			&course.ExperimentCountTWL, &course.Category, &course.Credit, &course.LectureHrs, &course.TutorialHrs,
 			&course.PracticalHrs, &course.TwSlHrs, &course.CIAMarks, &course.SEEMarks, &course.TotalMarks)
 
 	if err == sql.ErrNoRows {

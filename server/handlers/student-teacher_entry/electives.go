@@ -15,45 +15,45 @@ import (
 // ElectiveOption represents an available elective course
 type ElectiveOption struct {
 	HodSelectionID int    `json:"hod_selection_id"` // hod_elective_selections.id — use this as the key when submitting
-	CourseID        int    `json:"course_id"`
-	CourseCode      string `json:"course_code"`
-	CourseName      string `json:"course_name"`
-	Credits         int    `json:"credits"`
-	Category        string `json:"category"`
-	SlotID          int    `json:"slot_id"`
-	SlotName        string `json:"slot_name"`
+	CourseID       int    `json:"course_id"`
+	CourseCode     string `json:"course_code"`
+	CourseName     string `json:"course_name"`
+	Credits        int    `json:"credits"`
+	Category       string `json:"category"`
+	SlotID         int    `json:"slot_id"`
+	SlotName       string `json:"slot_name"`
 }
 
 // ElectiveSlot represents a group of electives for a specific slot
 type ElectiveSlot struct {
-	SlotID      int               `json:"slot_id"`
-	SlotName    string            `json:"slot_name"`
-	SlotType    string            `json:"slot_type"` // "PROFESSIONAL", "OPEN", or "MIXED"
-	Courses     []ElectiveOption  `json:"courses"`
-	IsActive    bool              `json:"is_active"`
+	SlotID   int              `json:"slot_id"`
+	SlotName string           `json:"slot_name"`
+	SlotType string           `json:"slot_type"` // "PROFESSIONAL", "OPEN", or "MIXED"
+	Courses  []ElectiveOption `json:"courses"`
+	IsActive bool             `json:"is_active"`
 }
 
 // ElectivesBySlot represents electives organized by slots
 type ElectivesBySlot struct {
-	StudentID          int             `json:"student_id"`
-	DepartmentID       int             `json:"department_id"`
-	CurrentSemester    int             `json:"current_semester"`
-	NextSemester       int             `json:"next_semester"`
-	Batch              string          `json:"batch"`
-	Slots              []ElectiveSlot  `json:"slots"`
-	ExistingSelections map[string]int  `json:"existing_selections"` // slot_name -> hod_selection_id
-	WindowOpen         bool            `json:"window_open"`
-	WindowStart        string          `json:"window_start"` // YYYY-MM-DD
-	WindowEnd          string          `json:"window_end"`   // YYYY-MM-DD
+	StudentID          int            `json:"student_id"`
+	DepartmentID       int            `json:"department_id"`
+	CurrentSemester    int            `json:"current_semester"`
+	NextSemester       int            `json:"next_semester"`
+	Batch              string         `json:"batch"`
+	Slots              []ElectiveSlot `json:"slots"`
+	ExistingSelections map[string]int `json:"existing_selections"` // slot_name -> hod_selection_id
+	WindowOpen         bool           `json:"window_open"`
+	WindowStart        string         `json:"window_start"` // YYYY-MM-DD
+	WindowEnd          string         `json:"window_end"`   // YYYY-MM-DD
 }
 
 // ElectiveSelection represents a student's elective choice
 type ElectiveSelection struct {
-	StudentID  int    `json:"student_id"`
-	SemNo      int    `json:"sem_no"`
-	CardType   string `json:"card_type"`
-	CourseID   int    `json:"course_id"`
-	CardID     int    `json:"card_id"`
+	StudentID int    `json:"student_id"`
+	SemNo     int    `json:"sem_no"`
+	CardType  string `json:"card_type"`
+	CourseID  int    `json:"course_id"`
+	CardID    int    `json:"card_id"`
 }
 
 type StudentDashboardCourse struct {
@@ -63,20 +63,20 @@ type StudentDashboardCourse struct {
 	Credits    int    `json:"credits"`
 	Category   string `json:"category"`
 	SlotType   string `json:"slot_type"` // CORE / PROFESSIONAL / OPEN / HONOR / MINOR / ADDON
-	Source     string `json:"source"`    // curriculum / selection
+	Source     string `json:"source"`    // curriculum / enrollment / selection
 }
 
 type StudentSemesterDashboard struct {
-	Semester    int                    `json:"semester"`
+	Semester    int                      `json:"semester"`
 	Courses     []StudentDashboardCourse `json:"courses"`
-	CourseCount int                    `json:"course_count"`
-	TotalCredit int                    `json:"total_credit"`
+	CourseCount int                      `json:"course_count"`
+	TotalCredit int                      `json:"total_credit"`
 }
 
 type StudentCourseDashboardResponse struct {
-	StudentID       int                       `json:"student_id"`
-	CurrentSemester int                       `json:"current_semester"`
-	NextSemester    int                       `json:"next_semester"`
+	StudentID       int                        `json:"student_id"`
+	CurrentSemester int                        `json:"current_semester"`
+	NextSemester    int                        `json:"next_semester"`
 	Semesters       []StudentSemesterDashboard `json:"semesters"`
 }
 
@@ -244,7 +244,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		FROM students s
 		WHERE s.id = ?
 	`, studentID).Scan(&departmentID)
-	
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			log.Printf("Student not found in students table with id: %d", studentID)
@@ -266,7 +266,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		FROM academic_details 
 		WHERE student_id = ?
 	`, studentID).Scan(&currentSemester, &batch)
-	
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			log.Printf("Academic details not found for student_id: %d", studentID)
@@ -319,7 +319,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 
 	// Step 4: Check student eligibility for Honour/Minor courses by type
 	eligibilityMap := make(map[string]bool)
-	
+
 	// Check for HONOUR eligibility
 	var hasHonourEligibility bool
 	err = db.DB.QueryRow(`
@@ -328,13 +328,13 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			WHERE student_email = ? AND (type = 'HONOUR')
 		)
 	`, email).Scan(&hasHonourEligibility)
-	
+
 	if err != nil {
 		log.Printf("Error checking honour eligibility: %v", err)
 		hasHonourEligibility = false
 	}
 	eligibilityMap["HONOUR"] = hasHonourEligibility
-	
+
 	// Check for MINOR eligibility
 	var hasMinorEligibility bool
 	err = db.DB.QueryRow(`
@@ -343,13 +343,13 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			WHERE student_email = ? AND (type = 'MINOR')
 		)
 	`, email).Scan(&hasMinorEligibility)
-	
+
 	if err != nil {
 		log.Printf("Error checking minor eligibility: %v", err)
 		hasMinorEligibility = false
 	}
 	eligibilityMap["MINOR"] = hasMinorEligibility
-	
+
 	log.Printf("Student eligible for Honour: %v, Minor: %v", hasHonourEligibility, hasMinorEligibility)
 
 	// Step 5: Get ALL elective slots for this semester with their HOD-assigned courses
@@ -453,7 +453,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		// Only add course if it exists (course_id > 0)
 		if elective.CourseID > 0 {
 			courseCount++
-			log.Printf("  -> Adding course #%d: %s - %s to slot %d", 
+			log.Printf("  -> Adding course #%d: %s - %s to slot %d",
 				courseCount, elective.CourseCode, elective.CourseName, elective.SlotID)
 			// Add course to the slot
 			slotMap[elective.SlotID].Courses = append(slotMap[elective.SlotID].Courses, elective)
@@ -472,7 +472,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		// reclassify it based on the dominant course category.
 		if slot.SlotType == "PROFESSIONAL" && len(slot.Courses) > 0 {
 			allAddon := true
-			allOpen  := true
+			allOpen := true
 			for _, c := range slot.Courses {
 				cat := strings.ToLower(c.Category)
 				if !strings.Contains(cat, "addon") && !strings.Contains(cat, "add-on") && !strings.Contains(cat, "add on") {
@@ -500,7 +500,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Filtering out MINOR slot '%s' - student not eligible", slot.SlotName)
 			continue
 		}
-		
+
 		slots = append(slots, *slot)
 	}
 
@@ -516,7 +516,7 @@ func GetAvailableElectives(w http.ResponseWriter, r *http.Request) {
 		INNER JOIN elective_semester_slots ess ON hes.slot_id = ess.id
 		WHERE sec.student_id = ? AND sec.semester = ?
 	`, studentID, nextSemester)
-	
+
 	if err != nil {
 		log.Printf("Warning: Could not fetch existing selections: %v", err)
 	} else {
@@ -860,7 +860,7 @@ func GetStudentElectiveSelections(w http.ResponseWriter, r *http.Request) {
 		)
 
 		err := rows.Scan(
-			&choiceID, &courseID, &semester, &courseCode, 
+			&choiceID, &courseID, &semester, &courseCode,
 			&courseName, &credits, &category, &selectedAt,
 		)
 		if err != nil {
@@ -952,6 +952,7 @@ func GetStudentCourseDashboard(w http.ResponseWriter, r *http.Request) {
 		buckets[sem] = []StudentDashboardCourse{}
 	}
 	seen := map[string]bool{}
+	seenAnySource := map[string]bool{}
 
 	// 1) Core courses from curriculum (exclude elective card types)
 	if curriculumID > 0 {
@@ -997,10 +998,15 @@ func GetStudentCourseDashboard(w http.ResponseWriter, r *http.Request) {
 				}
 
 				key := fmt.Sprintf("core|%d|%d", sem, courseID)
+				anySourceKey := fmt.Sprintf("%d|%d", sem, courseID)
+				if seenAnySource[anySourceKey] {
+					continue
+				}
 				if seen[key] {
 					continue
 				}
 				seen[key] = true
+				seenAnySource[anySourceKey] = true
 				buckets[sem] = append(buckets[sem], StudentDashboardCourse{
 					CourseID:   courseID,
 					CourseCode: code,
@@ -1014,7 +1020,62 @@ func GetStudentCourseDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2) Selected elective/honour/minor/addon courses from student choices
+	// 2) Enrolled courses from student_courses as a fallback source.
+	// This captures courses that may be allocated/enrolled but not present in student_elective_choices.
+	enrolledRows, err := db.DB.Query(`
+		SELECT
+			COALESCE(MIN(nc.semester_number), 0) AS semester,
+			c.id,
+			COALESCE(c.course_code, ''),
+			COALESCE(c.course_name, ''),
+			COALESCE(c.credit, 0),
+			COALESCE(c.category, '')
+		FROM student_courses sc
+		INNER JOIN courses c ON c.id = sc.course_id
+		LEFT JOIN curriculum_courses cc ON cc.course_id = c.id AND cc.curriculum_id = ?
+		LEFT JOIN normal_cards nc ON nc.id = cc.semester_id AND nc.status = 1
+		WHERE sc.student_id = ?
+		  AND c.status = 1
+		GROUP BY c.id, c.course_code, c.course_name, c.credit, c.category
+		ORDER BY semester, c.course_code
+	`, curriculumID, studentID)
+	if err != nil {
+		log.Printf("GetStudentCourseDashboard: enrolled course query error: %v", err)
+	} else {
+		defer enrolledRows.Close()
+		for enrolledRows.Next() {
+			var sem, courseID, credit int
+			var code, name, category string
+			if err := enrolledRows.Scan(&sem, &courseID, &code, &name, &credit, &category); err != nil {
+				continue
+			}
+			if sem == 0 {
+				sem = currentSemester
+			}
+			if sem < 1 || sem > nextSemester {
+				continue
+			}
+
+			anySourceKey := fmt.Sprintf("%d|%d", sem, courseID)
+			if seenAnySource[anySourceKey] {
+				continue
+			}
+
+			slotType := determineSlotType("", category)
+			seenAnySource[anySourceKey] = true
+			buckets[sem] = append(buckets[sem], StudentDashboardCourse{
+				CourseID:   courseID,
+				CourseCode: code,
+				CourseName: name,
+				Credits:    credit,
+				Category:   category,
+				SlotType:   slotType,
+				Source:     "enrollment",
+			})
+		}
+	}
+
+	// 3) Selected elective/honour/minor/addon courses from student choices
 	choiceRows, err := db.DB.Query(`
 		SELECT
 			hes.semester,
@@ -1064,10 +1125,15 @@ func GetStudentCourseDashboard(w http.ResponseWriter, r *http.Request) {
 
 		slotType := determineSlotType(slotName, category)
 		key := fmt.Sprintf("selection|%d|%d", sem, courseID)
+		anySourceKey := fmt.Sprintf("%d|%d", sem, courseID)
+		if seenAnySource[anySourceKey] {
+			continue
+		}
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
+		seenAnySource[anySourceKey] = true
 
 		buckets[sem] = append(buckets[sem], StudentDashboardCourse{
 			CourseID:   courseID,
@@ -1175,4 +1241,3 @@ func handleMixedSlots(slots []ElectiveSlot, semester int) []ElectiveSlot {
 
 	return slots
 }
-		

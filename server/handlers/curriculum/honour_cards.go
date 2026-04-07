@@ -240,25 +240,26 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 	// 1) By existing course_id (legacy behaviour)
 	// 2) By full course details (same as normal card flow)
 	var payload struct {
-		CourseID          *int   `json:"course_id,omitempty"`
-		CourseCode        string `json:"course_code,omitempty"`
-		CourseName        string `json:"course_name,omitempty"`
-		CourseType        string `json:"course_type,omitempty"`
-		Category          string `json:"category,omitempty"`
-		Credit            int    `json:"credit,omitempty"`
-		LectureHrs        int    `json:"lecture_hrs,omitempty"`
-		TutorialHrs       int    `json:"tutorial_hrs,omitempty"`
-		PracticalHrs      int    `json:"practical_hrs,omitempty"`
-		ActivityHrs       int    `json:"activity_hrs,omitempty"`
-		TwSlHrs           int    `json:"tw_sl_hrs,omitempty"`
-		TheoryTotalHrs    int    `json:"theory_total_hrs,omitempty"`
-		TutorialTotalHrs  int    `json:"tutorial_total_hrs,omitempty"`
-		PracticalTotalHrs int    `json:"practical_total_hrs,omitempty"`
-		ActivityTotalHrs  int    `json:"activity_total_hrs,omitempty"`
-		TotalHrs          int    `json:"total_hrs,omitempty"`
-		CIAMarks          int    `json:"cia_marks,omitempty"`
-		SEEMarks          int    `json:"see_marks,omitempty"`
-		TotalMarks        int    `json:"total_marks,omitempty"`
+		CourseID           *int   `json:"course_id,omitempty"`
+		CourseCode         string `json:"course_code,omitempty"`
+		CourseName         string `json:"course_name,omitempty"`
+		CourseType         string `json:"course_type,omitempty"`
+		ExperimentCountTWL int    `json:"experiment_count_theorywithlab,omitempty"`
+		Category           string `json:"category,omitempty"`
+		Credit             int    `json:"credit,omitempty"`
+		LectureHrs         int    `json:"lecture_hrs,omitempty"`
+		TutorialHrs        int    `json:"tutorial_hrs,omitempty"`
+		PracticalHrs       int    `json:"practical_hrs,omitempty"`
+		ActivityHrs        int    `json:"activity_hrs,omitempty"`
+		TwSlHrs            int    `json:"tw_sl_hrs,omitempty"`
+		TheoryTotalHrs     int    `json:"theory_total_hrs,omitempty"`
+		TutorialTotalHrs   int    `json:"tutorial_total_hrs,omitempty"`
+		PracticalTotalHrs  int    `json:"practical_total_hrs,omitempty"`
+		ActivityTotalHrs   int    `json:"activity_total_hrs,omitempty"`
+		TotalHrs           int    `json:"total_hrs,omitempty"`
+		CIAMarks           int    `json:"cia_marks,omitempty"`
+		SEEMarks           int    `json:"see_marks,omitempty"`
+		TotalMarks         int    `json:"total_marks,omitempty"`
 	}
 
 	err = json.NewDecoder(r.Body).Decode(&payload)
@@ -377,17 +378,19 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 
 			if globalErr == sql.ErrNoRows {
 				// Course doesn't exist globally with same code+name - create new course
-				insertCourseQuery := `INSERT INTO courses (course_code, course_name, course_type, category, credit, 
+				insertCourseQuery := `INSERT INTO courses (course_code, course_name, course_type, category, credit,
+					experiment_count_theorywithlab,
 					lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, ` + "`tw/sl`" + `,
 					theory_total_hrs, tutorial_total_hrs, practical_total_hrs, activity_total_hrs, 
 					cia_marks, see_marks, status) 
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
 				result, err := db.DB.Exec(insertCourseQuery,
 					payload.CourseCode,
 					payload.CourseName,
 					courseTypeID,
 					payload.Category,
 					payload.Credit,
+					payload.ExperimentCountTWL,
 					payload.LectureHrs,
 					payload.TutorialHrs,
 					payload.PracticalHrs,
@@ -454,12 +457,13 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 	// Fetch the complete course details including computed fields (matching normal card behavior)
 	var fullCourse models.CourseWithDetails
 	fetchQuery := `SELECT id, course_code, course_name, course_type, category, credit, 
+	               COALESCE(experiment_count_theorywithlab, 0),
 	               lecture_hrs, tutorial_hrs, practical_hrs, activity_hrs, COALESCE(` + "`tw/sl`" + `, 0) as tw_sl,
 	               COALESCE(theory_total_hrs, 0), COALESCE(tutorial_total_hrs, 0), COALESCE(practical_total_hrs, 0), COALESCE(activity_total_hrs, 0), COALESCE(total_hrs, 0),
 	               cia_marks, see_marks, total_marks 
 	               FROM courses WHERE id = ?`
 	err = db.DB.QueryRow(fetchQuery, courseID).Scan(&fullCourse.CourseID, &fullCourse.CourseCode, &fullCourse.CourseName,
-		&fullCourse.CourseType, &fullCourse.Category, &fullCourse.Credit,
+		&fullCourse.CourseType, &fullCourse.Category, &fullCourse.Credit, &fullCourse.ExperimentCountTWL,
 		&fullCourse.LectureHrs, &fullCourse.TutorialHrs, &fullCourse.PracticalHrs, &fullCourse.ActivityHrs, &fullCourse.TwSlHrs,
 		&fullCourse.TheoryTotalHrs, &fullCourse.TutorialTotalHrs, &fullCourse.PracticalTotalHrs, &fullCourse.ActivityTotalHrs, &fullCourse.TotalHrs,
 		&fullCourse.CIAMarks, &fullCourse.SEEMarks, &fullCourse.TotalMarks)
@@ -467,25 +471,26 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 		log.Println("Error fetching full course details:", err)
 		// Fallback to sent values
 		fullCourse = models.CourseWithDetails{
-			CourseID:          courseID,
-			CourseCode:        payload.CourseCode,
-			CourseName:        payload.CourseName,
-			CourseType:        payload.CourseType,
-			Category:          payload.Category,
-			Credit:            payload.Credit,
-			LectureHrs:        payload.LectureHrs,
-			TutorialHrs:       payload.TutorialHrs,
-			PracticalHrs:      payload.PracticalHrs,
-			ActivityHrs:       payload.ActivityHrs,
-			TwSlHrs:           payload.TwSlHrs,
-			TheoryTotalHrs:    payload.TheoryTotalHrs,
-			TutorialTotalHrs:  payload.TutorialTotalHrs,
-			PracticalTotalHrs: payload.PracticalTotalHrs,
-			ActivityTotalHrs:  payload.ActivityTotalHrs,
-			TotalHrs:          payload.TotalHrs,
-			CIAMarks:          payload.CIAMarks,
-			SEEMarks:          payload.SEEMarks,
-			TotalMarks:        payload.TotalMarks,
+			CourseID:           courseID,
+			CourseCode:         payload.CourseCode,
+			CourseName:         payload.CourseName,
+			CourseType:         payload.CourseType,
+			ExperimentCountTWL: payload.ExperimentCountTWL,
+			Category:           payload.Category,
+			Credit:             payload.Credit,
+			LectureHrs:         payload.LectureHrs,
+			TutorialHrs:        payload.TutorialHrs,
+			PracticalHrs:       payload.PracticalHrs,
+			ActivityHrs:        payload.ActivityHrs,
+			TwSlHrs:            payload.TwSlHrs,
+			TheoryTotalHrs:     payload.TheoryTotalHrs,
+			TutorialTotalHrs:   payload.TutorialTotalHrs,
+			PracticalTotalHrs:  payload.PracticalTotalHrs,
+			ActivityTotalHrs:   payload.ActivityTotalHrs,
+			TotalHrs:           payload.TotalHrs,
+			CIAMarks:           payload.CIAMarks,
+			SEEMarks:           payload.SEEMarks,
+			TotalMarks:         payload.TotalMarks,
 		}
 	}
 	fullCourse.CurriculumTemplate = curriculumTemplate
@@ -495,27 +500,28 @@ func AddCourseToVertical(w http.ResponseWriter, r *http.Request) {
 	// Return course with optional message if it was reused
 	if wasReused {
 		response := map[string]interface{}{
-			"course_id":           fullCourse.CourseID,
-			"course_code":         fullCourse.CourseCode,
-			"course_name":         fullCourse.CourseName,
-			"course_type":         fullCourse.CourseType,
-			"category":            fullCourse.Category,
-			"credit":              fullCourse.Credit,
-			"lecture_hrs":         fullCourse.LectureHrs,
-			"tutorial_hrs":        fullCourse.TutorialHrs,
-			"practical_hrs":       fullCourse.PracticalHrs,
-			"activity_hrs":        fullCourse.ActivityHrs,
-			"tw_sl_hrs":           fullCourse.TwSlHrs,
-			"theory_total_hrs":    fullCourse.TheoryTotalHrs,
-			"tutorial_total_hrs":  fullCourse.TutorialTotalHrs,
-			"practical_total_hrs": fullCourse.PracticalTotalHrs,
-			"activity_total_hrs":  fullCourse.ActivityTotalHrs,
-			"total_hrs":           fullCourse.TotalHrs,
-			"cia_marks":           fullCourse.CIAMarks,
-			"see_marks":           fullCourse.SEEMarks,
-			"total_marks":         fullCourse.TotalMarks,
-			"curriculum_template": fullCourse.CurriculumTemplate,
-			"message":             "Course already exists in another curriculum and has been reused",
+			"course_id":                      fullCourse.CourseID,
+			"course_code":                    fullCourse.CourseCode,
+			"course_name":                    fullCourse.CourseName,
+			"course_type":                    fullCourse.CourseType,
+			"experiment_count_theorywithlab": fullCourse.ExperimentCountTWL,
+			"category":                       fullCourse.Category,
+			"credit":                         fullCourse.Credit,
+			"lecture_hrs":                    fullCourse.LectureHrs,
+			"tutorial_hrs":                   fullCourse.TutorialHrs,
+			"practical_hrs":                  fullCourse.PracticalHrs,
+			"activity_hrs":                   fullCourse.ActivityHrs,
+			"tw_sl_hrs":                      fullCourse.TwSlHrs,
+			"theory_total_hrs":               fullCourse.TheoryTotalHrs,
+			"tutorial_total_hrs":             fullCourse.TutorialTotalHrs,
+			"practical_total_hrs":            fullCourse.PracticalTotalHrs,
+			"activity_total_hrs":             fullCourse.ActivityTotalHrs,
+			"total_hrs":                      fullCourse.TotalHrs,
+			"cia_marks":                      fullCourse.CIAMarks,
+			"see_marks":                      fullCourse.SEEMarks,
+			"total_marks":                    fullCourse.TotalMarks,
+			"curriculum_template":            fullCourse.CurriculumTemplate,
+			"message":                        "Course already exists in another curriculum and has been reused",
 		}
 		json.NewEncoder(w).Encode(response)
 	} else {

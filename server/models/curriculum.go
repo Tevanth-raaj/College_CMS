@@ -18,6 +18,7 @@ type Course struct {
 	CourseCode         string `json:"course_code"`
 	CourseName         string `json:"course_name"`
 	CourseType         string `json:"course_type"`
+	ExperimentCountTWL int    `json:"experiment_count_theorywithlab"`
 	Category           string `json:"category"`
 	Credit             int    `json:"credit"`
 	LectureHrs         int    `json:"lecture_hrs"`
@@ -49,6 +50,7 @@ type CourseWithDetails struct {
 	CourseCode         string `json:"course_code"`
 	CourseName         string `json:"course_name"`
 	CourseType         string `json:"course_type"`
+	ExperimentCountTWL int    `json:"experiment_count_theorywithlab"`
 	Category           string `json:"category"`
 	Credit             int    `json:"credit"`
 	LectureHrs         int    `json:"lecture_hrs"`

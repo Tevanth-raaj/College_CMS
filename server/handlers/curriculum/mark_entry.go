@@ -28,6 +28,15 @@ func mapCourseCategoryToTypeID(category string) int {
 	return 1
 }
 
+func isTheoryWithLabCategory(category string) bool {
+	categoryLower := strings.ToLower(strings.TrimSpace(category))
+	return strings.Contains(categoryLower, "theory") && strings.Contains(categoryLower, "lab")
+}
+
+func isContinuousAssessmentComponent(name string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(name)), "continuous assessment")
+}
+
 func normalizeFacultyIdentifier(raw string) string {
 	identifier := strings.TrimSpace(raw)
 	if identifier == "" {
@@ -251,11 +260,12 @@ func GetMarkCategoriesForCourse(w http.ResponseWriter, r *http.Request) {
 
 	var rawCourseType sql.NullString
 	var courseCategory sql.NullString
+	var experimentCountTheoryWithLab int
 	err = database.QueryRow(`
-		SELECT COALESCE(CAST(course_type AS CHAR), ''), COALESCE(category, '')
+		SELECT COALESCE(CAST(course_type AS CHAR), ''), COALESCE(category, ''), COALESCE(experiment_count_theorywithlab, 0)
 		FROM courses
 		WHERE id = ?
-	`, courseID).Scan(&rawCourseType, &courseCategory)
+	`, courseID).Scan(&rawCourseType, &courseCategory, &experimentCountTheoryWithLab)
 	if err != nil {
 		log.Printf("Error fetching course type/category: %v", err)
 		http.Error(w, "Failed to resolve course type", http.StatusInternalServerError)
@@ -372,6 +382,16 @@ func GetMarkCategoriesForCourse(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		repeatCount := 1
+		if experimentCountTheoryWithLab > 1 && isTheoryWithLabCategory(courseCategory.String) && isContinuousAssessmentComponent(category.Name) {
+			repeatCount = experimentCountTheoryWithLab
+		}
+
+		category.ExperimentCountTWL = experimentCountTheoryWithLab
+		category.PerEntryMaxMarks = category.MaxMarks
+		category.EntryRepeatCount = repeatCount
+		category.EffectiveMaxMarks = category.MaxMarks * repeatCount
+
 		categories = append(categories, category)
 	}
 
@@ -464,6 +484,21 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 			allowedByWindow[componentID] = true
 		}
 	}
+
+	var courseCategory string
+	experimentCountTheoryWithLab := 0
+	err = database.QueryRow(`
+		SELECT COALESCE(category, ''), COALESCE(experiment_count_theorywithlab, 0)
+		FROM courses
+		WHERE id = ?
+	`, saveRequest.CourseID).Scan(&courseCategory, &experimentCountTheoryWithLab)
+	if err != nil {
+		log.Printf("Error fetching course metadata: %v", err)
+		http.Error(w, "Failed to resolve course metadata", http.StatusInternalServerError)
+		return
+	}
+
+	isTheoryWithLab := isTheoryWithLabCategory(courseCategory)
 
 	savedCount := 0
 	deletedCount := 0
@@ -565,29 +600,35 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Get mark category details for conversion calculation
+		var componentName string
 		var maxMarks float64
 		var conversionMarks float64
 		err = database.QueryRow(`
-			SELECT max_marks, conversion_marks FROM mark_category_types 
+			SELECT COALESCE(name, ''), max_marks, conversion_marks FROM mark_category_types
 			WHERE id = ?
-		`, entry.AssessmentComponentID).Scan(&maxMarks, &conversionMarks)
+		`, entry.AssessmentComponentID).Scan(&componentName, &maxMarks, &conversionMarks)
 		if err != nil {
 			log.Printf("Error fetching mark category: %v", err)
 			errors = append(errors, fmt.Sprintf("Mark category %d not found", entry.AssessmentComponentID))
 			continue
 		}
 
+		effectiveMaxMarks := maxMarks
+		if isTheoryWithLab && experimentCountTheoryWithLab > 1 && isContinuousAssessmentComponent(componentName) {
+			effectiveMaxMarks = maxMarks * float64(experimentCountTheoryWithLab)
+		}
+
 		// Validate obtained marks against max marks
-		if entry.ObtainedMarks < 0 || entry.ObtainedMarks > maxMarks {
+		if entry.ObtainedMarks < 0 || entry.ObtainedMarks > effectiveMaxMarks {
 			errors = append(errors, fmt.Sprintf("Student %d: marks %.2f exceed maximum %.0f",
-				entry.StudentID, entry.ObtainedMarks, maxMarks))
+				entry.StudentID, entry.ObtainedMarks, effectiveMaxMarks))
 			continue
 		}
 
-		// Calculate converted marks: (obtained_marks / max_marks) * conversion_marks
+		// Calculate converted marks: (obtained_marks / effective_max_marks) * conversion_marks
 		var convertedMarks float64
-		if maxMarks > 0 {
-			convertedMarks = (entry.ObtainedMarks / maxMarks) * conversionMarks
+		if effectiveMaxMarks > 0 {
+			convertedMarks = (entry.ObtainedMarks / effectiveMaxMarks) * conversionMarks
 		}
 
 		// Upsert mark entry
