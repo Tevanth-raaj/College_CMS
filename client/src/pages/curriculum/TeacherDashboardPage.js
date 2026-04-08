@@ -174,6 +174,18 @@ function TeacherDashboardPage() {
     })
   }
 
+  const getSemesterDisplay = (course) => {
+    if (Array.isArray(course.mapped_semester_labels) && course.mapped_semester_labels.length > 0) {
+      return course.mapped_semester_labels.join(', ')
+    }
+
+    if (Array.isArray(course.mapped_semesters) && course.mapped_semesters.length > 0) {
+      return `Sem ${course.mapped_semesters.join(', ')}`
+    }
+
+    return 'Sem -'
+  }
+
   return (
     <MainLayout title={`Welcome, ${teacherName || 'Teacher'}`} subtitle="Your Teaching Dashboard">
       <div className="space-y-6">
@@ -354,9 +366,7 @@ function TeacherDashboardPage() {
                                 {course.academic_year || '—'}
                               </div>
                               <div className="text-xs text-gray-500 mt-0.5">
-                                {Array.isArray(course.mapped_semesters) && course.mapped_semesters.length > 0
-                                  ? `Sem ${course.mapped_semesters.join(', ')}`
-                                  : 'Sem —'}
+                                {getSemesterDisplay(course)}
                                 {' · '}
                                 {course.semester_type ? String(course.semester_type).toUpperCase() : '—'}
                               </div>

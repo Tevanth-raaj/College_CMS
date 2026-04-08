@@ -20,6 +20,7 @@ function Sidebar({ onExpandedChange }) {
 
   // Track if user has assigned windows
   const [hasAssignedWindows, setHasAssignedWindows] = useState(false);
+  const [hasCheckedWindowAccess, setHasCheckedWindowAccess] = useState(false);
 
   const rafId = useRef(0);
 
@@ -27,28 +28,24 @@ function Sidebar({ onExpandedChange }) {
   const userName = localStorage.getItem("userName") || "User";
   const userEmail = localStorage.getItem("userEmail") || "user@cms.edu";
   const username = localStorage.getItem("username");
+  const teacherId = localStorage.getItem("teacher_id") || localStorage.getItem("teacherId");
 
   const isSidebarExpanded =
     sidebarPinned || isHovering || isPointerDownInSidebar;
 
-  // Check if user has assigned windows (for non-teacher roles)
+  // Check if user has assigned windows (including teachers)
   useEffect(() => {
     const checkUserWindows = async () => {
-      if (userRole === "teacher") {
-        // Teachers always have access to mark entry
-        setHasAssignedWindows(true);
-        return;
-      }
-
-      // For other roles, check if they have assigned windows
       try {
-        if (!username) {
+        const userIdForWindowCheck = username || teacherId;
+        if (!userIdForWindowCheck) {
           setHasAssignedWindows(false);
+          setHasCheckedWindowAccess(true);
           return;
         }
 
         const response = await fetch(
-          `${API_BASE_URL}/mark-entry/check-user-windows?user_id=${username}`,
+          `${API_BASE_URL}/mark-entry/check-user-windows?user_id=${encodeURIComponent(userIdForWindowCheck)}`,
           {
             method: "GET",
             headers: {
@@ -59,20 +56,76 @@ function Sidebar({ onExpandedChange }) {
 
         if (response.ok) {
           const data = await response.json();
-          setHasAssignedWindows(data.has_windows || false);
+          let hasWindowAccess = data.has_windows || false;
+
+          // Fallback for teachers: if user-level window mapping is empty,
+          // still allow Mark Entry when at least one assigned course has an active window.
+          if (!hasWindowAccess && userRole === "teacher" && teacherId) {
+            try {
+              const teacherCoursesResponse = await fetch(
+                `${API_BASE_URL}/teachers/${encodeURIComponent(teacherId)}/courses`,
+              );
+              if (teacherCoursesResponse.ok) {
+                const teacherCourses = await teacherCoursesResponse.json();
+                hasWindowAccess = Array.isArray(teacherCourses)
+                  ? teacherCourses.some((course) => Boolean(course?.has_window))
+                  : false;
+              }
+            } catch (fallbackError) {
+              console.warn("Teacher window fallback check failed:", fallbackError);
+            }
+          }
+
+          setHasAssignedWindows(hasWindowAccess);
         } else {
           setHasAssignedWindows(false);
         }
       } catch (error) {
         console.error("Error checking user windows:", error);
         setHasAssignedWindows(false);
+      } finally {
+        setHasCheckedWindowAccess(true);
       }
     };
 
-    if (username && userRole) {
+    if (userRole) {
       checkUserWindows();
     }
-  }, [username, userRole]);
+  }, [username, teacherId, userRole]);
+
+  const markEntryBaseAllowedRoles = useMemo(
+    () =>
+      new Set([
+        "teacher",
+        "user",
+        "faculty",
+        "staff",
+        "coe",
+        "curriculum_entry_user",
+      ]),
+    [],
+  );
+
+  const canAccessMarkEntry =
+    markEntryBaseAllowedRoles.has(userRole) && hasAssignedWindows;
+
+  useEffect(() => {
+    if (!hasCheckedWindowAccess) return;
+    const isProtectedMarkEntryRoute =
+      location.pathname === "/mark-entry" ||
+      location.pathname.startsWith("/mark-entry-windows/");
+    if (!isProtectedMarkEntryRoute) return;
+    if (canAccessMarkEntry) return;
+
+    const fallbackPath = userRole === "teacher" ? "/teacher-dashboard" : "/dashboard";
+    navigate(fallbackPath, { replace: true });
+  }, [
+    canAccessMarkEntry,
+    hasCheckedWindowAccess,
+    location.pathname,
+    navigate,
+    userRole,
+  ]);
 
   useEffect(() => {
     onExpandedChange?.(isSidebarExpanded);
@@ -671,9 +724,9 @@ function Sidebar({ onExpandedChange }) {
     ];
 
     return allMenuItems.filter((item) => {
-      // Special handling for Mark Entry - show if teacher OR has assigned windows
+      // Mark Entry requires both role permission and assigned windows.
       if (item.name === "Mark Entry") {
-        return userRole === "teacher" || hasAssignedWindows;
+        return canAccessMarkEntry;
       }
 
       // For other items, check if role matches
@@ -683,7 +736,7 @@ function Sidebar({ onExpandedChange }) {
 
       return true;
     });
-  }, [userRole, hasAssignedWindows]);
+  }, [canAccessMarkEntry, userRole]);
 
   const isActive = (path) => {
     return (

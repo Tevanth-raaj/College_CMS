@@ -415,9 +415,9 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 
 	log.Printf("Teacher %s belongs to departments: %v", facultyID, teacherDeptIDs)
 
-	// Also look up which department(s) the COURSE belongs to via the curriculum chain.
-	// A Math teacher teaching 22AI401 in the AIDS curriculum should match an AIDS-dept window.
-	// Path: course → curriculum_courses → normal_cards → curriculum ← departments.current_curriculum_id
+	// Also look up which department(s) the COURSE belongs to via curriculum.department_id.
+	// This must not depend on departments.current_curriculum_id, because a course can belong
+	// to another valid curriculum of the same department.
 	var courseDeptIDs []int64
 	deptRows, err := database.Query(`
 		SELECT DISTINCT d.id
@@ -425,6 +425,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 		JOIN normal_cards nc ON cc.semester_id = nc.id
 		JOIN departments d ON d.current_curriculum_id = nc.curriculum_id
 		WHERE cc.course_id = ?
+		  AND d.id IS NOT NULL
 	`, courseID)
 	if err == nil {
 		for deptRows.Next() {
@@ -481,12 +482,12 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 
 	log.Printf("Course %d belongs to departments: %v (student depts: %v, teacher depts: %v, merged: %v)", courseID, courseDeptIDs, studentDeptIDs, teacherDeptIDs, allDeptIDs)
 
-	// Collect ALL semester numbers the course appears in across all curricula.
-	// A shared course (e.g. 22MA401) may be in sem 4 of AIDS and sem 3 of Math.
-	// We need to match a window scoped to ANY of these semesters.
+	// Collect semester/card info the course appears in across all curricula.
+	// Semester matching is applicable only for semester cards.
 	var courseSemesters []int64
 	studentSemesterSet := make(map[int64]bool)
 	var hasNonSemesterCard bool
+	var hasSemesterCard bool
 	semRows, err := database.Query(`
 		SELECT nc.semester_number, COALESCE(nc.card_type, 'semester')
 		FROM curriculum_courses cc
@@ -498,20 +499,23 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 			var semNum sql.NullInt64
 			var cType string
 			if semRows.Scan(&semNum, &cType) == nil {
-				if cType != "semester" {
-					hasNonSemesterCard = true
-				} else if semNum.Valid {
-					// Deduplicate
-					found := false
-					for _, s := range courseSemesters {
-						if s == semNum.Int64 {
-							found = true
-							break
+				if strings.EqualFold(strings.TrimSpace(cType), "semester") {
+					hasSemesterCard = true
+					if semNum.Valid {
+						// Deduplicate
+						found := false
+						for _, s := range courseSemesters {
+							if s == semNum.Int64 {
+								found = true
+								break
+							}
+						}
+						if !found {
+							courseSemesters = append(courseSemesters, semNum.Int64)
 						}
 					}
-					if !found {
-						courseSemesters = append(courseSemesters, semNum.Int64)
-					}
+				} else {
+					hasNonSemesterCard = true
 				}
 			}
 		}
@@ -519,7 +523,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 	}
 
 	if hasNonSemesterCard {
-		log.Printf("Course %d is on a non-semester card — will skip semester check for window matching", courseID)
+		log.Printf("Course %d is on a non-semester card — semester checks apply only to semester cards", courseID)
 	}
 
 	// Also include semester footprint from allocated students for this teacher+course.
@@ -579,48 +583,107 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 
 	queryArgs = append(queryArgs, facultyID, userIDValue, courseID)
 
-	// Department clause — use merged teacher + course departments
-	if len(allDeptIDs) == 0 {
+	// Department clause
+	// For semester courses, keep existing dept-scope behavior.
+	// For non-semester courses, additionally allow explicit curriculum->department matching
+	// against the opened window department.
+	deptIDsForScope := allDeptIDs
+	if !hasSemesterCard && hasNonSemesterCard {
+		deptIDsForScope = courseDeptIDs
+	}
+
+	baseDeptClause := "1=1"
+	if len(deptIDsForScope) == 0 {
 		// No department info at all — match all windows (backward-compatible fallback)
-		deptClause = "1=1"
+		baseDeptClause = "1=1"
 	} else {
-		placeholders := make([]string, len(allDeptIDs))
-		for i, did := range allDeptIDs {
+		placeholders := make([]string, len(deptIDsForScope))
+		for i, did := range deptIDsForScope {
 			placeholders[i] = "?"
 			queryArgs = append(queryArgs, did)
 		}
-		deptClause = fmt.Sprintf("(department_id IS NULL OR department_id = 0 OR department_id IN (%s))",
+		baseDeptClause = fmt.Sprintf("(w.department_id IS NULL OR w.department_id = 0 OR w.department_id IN (%s))",
 			strings.Join(placeholders, ","))
 	}
 
+	deptClause = baseDeptClause
+	if hasNonSemesterCard {
+		nonSemesterDeptClause := `EXISTS (
+			SELECT 1
+			FROM curriculum_courses ccv
+			JOIN normal_cards ncv ON ccv.semester_id = ncv.id
+			JOIN departments dv ON dv.current_curriculum_id = ncv.curriculum_id
+			WHERE ccv.course_id = ?
+			  AND LOWER(COALESCE(ncv.card_type, 'semester')) <> 'semester'
+			  AND (COALESCE(w.department_id, 0) = 0 OR dv.id = w.department_id)
+		)`
+		queryArgs = append(queryArgs, courseID)
+		deptClause = fmt.Sprintf("(%s OR %s)", baseDeptClause, nonSemesterDeptClause)
+	}
+
 	// Semester clause
-	if hasNonSemesterCard || len(courseSemesters) == 0 {
-		// Non-semester card or no semester info — match all windows (backward-compatible fallback)
-		semClause = "(semester IS NULL OR semester = 0 OR 1=1)"
+	// Rule:
+	// 1) Semester cards must match window semester (or all-semester window).
+	// 2) Non-semester cards (vertical, etc.) must match window department, and semester is ignored.
+	var semesterOnlyClause string
+	if !hasSemesterCard && hasNonSemesterCard {
+		// Course exists only on non-semester cards for matching scope.
+		semesterOnlyClause = "(w.semester IS NULL OR w.semester = 0)"
+	} else if len(courseSemesters) == 0 {
+		// No semester footprint for semester cards: allow only all-semester windows.
+		semesterOnlyClause = "(w.semester IS NULL OR w.semester = 0)"
 	} else {
 		placeholders := make([]string, len(courseSemesters))
 		for i, s := range courseSemesters {
 			placeholders[i] = "?"
 			queryArgs = append(queryArgs, s)
 		}
-		semClause = fmt.Sprintf("(semester IS NULL OR semester = 0 OR semester IN (%s))",
+		semesterOnlyClause = fmt.Sprintf("(w.semester IS NULL OR w.semester = 0 OR w.semester IN (%s))",
 			strings.Join(placeholders, ","))
 	}
 
+	nonSemesterByDeptClause := "0=1"
+	if hasNonSemesterCard {
+		nonSemesterByDeptClause = `EXISTS (
+			SELECT 1
+			FROM curriculum_courses ccx
+			JOIN normal_cards ncx ON ccx.semester_id = ncx.id
+			JOIN departments dx ON dx.current_curriculum_id = ncx.curriculum_id
+			WHERE ccx.course_id = ?
+			  AND LOWER(COALESCE(ncx.card_type, 'semester')) <> 'semester'
+			  AND (COALESCE(w.department_id, 0) = 0 OR dx.id = w.department_id)
+			  AND (
+				COALESCE(w.semester, 0) = 0
+				OR EXISTS (
+					SELECT 1
+					FROM course_student_teacher_allocation csta_val
+					JOIN students s_val ON csta_val.student_id = s_val.id
+					LEFT JOIN academic_calendar ac_val ON ac_val.id = s_val.year
+					WHERE csta_val.course_id = ?
+					  AND csta_val.teacher_id = ?
+					  AND s_val.status = 1
+					  AND COALESCE(ac_val.current_semester, 0) = w.semester
+				)
+			  )
+		)`
+		queryArgs = append(queryArgs, courseID, courseID, facultyID)
+	}
+	semClause = fmt.Sprintf("(%s OR %s)", semesterOnlyClause, nonSemesterByDeptClause)
+
 	query := fmt.Sprintf(`
 		SELECT id, start_at, end_at, enabled
-		FROM mark_entry_windows
-		WHERE ((teacher_id IS NULL AND user_id IS NULL) OR teacher_id = ? OR user_id = ?)
-		  AND (course_id IS NULL OR course_id = ?)
+		FROM mark_entry_windows w
+		WHERE ((w.teacher_id IS NULL AND w.user_id IS NULL) OR w.teacher_id = ? OR w.user_id = ?)
+		  AND (w.course_id IS NULL OR w.course_id = ?)
 		  AND %s
 		  AND %s
 		ORDER BY
-		  (teacher_id IS NOT NULL) DESC,
-		  (user_id IS NOT NULL) DESC,
-		  (course_id IS NOT NULL) DESC,
-		  (department_id IS NOT NULL) DESC,
-		  (semester IS NOT NULL) DESC,
-		  updated_at DESC
+		  (w.teacher_id IS NOT NULL) DESC,
+		  (w.user_id IS NOT NULL) DESC,
+		  (w.course_id IS NOT NULL) DESC,
+		  (w.department_id IS NOT NULL) DESC,
+		  (w.semester IS NOT NULL) DESC,
+		  w.updated_at DESC
 		LIMIT 25
 	`, deptClause, semClause)
 
@@ -1659,13 +1722,11 @@ func getLearningModesForComponents(database *sql.DB, componentIDs []int) (isUAL 
 		return true, true // No specific components means both are implicitly included
 	}
 
-	// Correctly format the query with placeholders
 	placeholders := strings.Repeat("?,", len(componentIDs)-1) + "?"
 	query := fmt.Sprintf(`
-		SELECT DISTINCT ct.component_type
-		FROM assessment_components ac
-		JOIN component_types ct ON ac.type_id = ct.id
-		WHERE ac.id IN (%s)
+		SELECT DISTINCT COALESCE(mct.learning_mode_id, 0)
+		FROM mark_category_types mct
+		WHERE mct.id IN (%s)
 	`, placeholders)
 
 	args := make([]interface{}, len(componentIDs))
@@ -1675,20 +1736,19 @@ func getLearningModesForComponents(database *sql.DB, componentIDs []int) (isUAL 
 
 	rows, err := database.Query(query, args...)
 	if err != nil {
-		log.Printf("Error checking component types: %v", err)
+		log.Printf("Error checking component learning modes: %v", err)
 		return false, false
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var componentType string
-		if err := rows.Scan(&componentType); err == nil {
-			// Check for substrings "PBL" or "UAL" in the component type name
-			if strings.Contains(strings.ToUpper(componentType), "PBL") {
-				isPBL = true
-			}
-			if strings.Contains(strings.ToUpper(componentType), "UAL") {
+		var learningModeID int
+		if err := rows.Scan(&learningModeID); err == nil {
+			switch learningModeID {
+			case 1:
 				isUAL = true
+			case 2:
+				isPBL = true
 			}
 		}
 	}

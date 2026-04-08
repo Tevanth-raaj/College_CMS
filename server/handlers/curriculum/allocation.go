@@ -300,6 +300,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		DepartmentName string `json:"department_name"`
 		Semester       *int   `json:"semester"`
 		CurriculumName string `json:"curriculum_name"`
+		CardType       string `json:"card_type"`
 	}
 
 	type TeacherCourse struct {
@@ -327,6 +328,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		HasSubmittedExpiredWindow bool                `json:"has_submitted_expired_window"`
 		SubmittedExpiredWindow    *MarkEntryWindow    `json:"submitted_expired_window"`
 		MappedSemesters           []int               `json:"mapped_semesters"`
+		MappedSemesterLabels      []string            `json:"mapped_semester_labels"`
 	}
 
 	var courses []TeacherCourse
@@ -351,7 +353,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Found course #%d: ID=%d, Code=%s, Name=%s", courseCount, course.CourseID, course.CourseCode, course.CourseName)
 
 		deptQuery := `
-			SELECT DISTINCT d.id, d.department_name, nc.semester_number, cur.name
+			SELECT DISTINCT d.id, d.department_name, nc.semester_number, cur.name, COALESCE(nc.card_type, 'semester')
 			FROM curriculum_courses cc
 			JOIN normal_cards nc ON cc.semester_id = nc.id
 			JOIN curriculum cur ON cc.curriculum_id = cur.id
@@ -369,7 +371,8 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 				var depName sql.NullString
 				var depSem sql.NullInt64
 				var curName sql.NullString
-				if err := deptRows.Scan(&depID, &depName, &depSem, &curName); err != nil {
+				var cardType sql.NullString
+				if err := deptRows.Scan(&depID, &depName, &depSem, &curName, &cardType); err != nil {
 					continue
 				}
 				if depID.Valid {
@@ -386,6 +389,9 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 				if curName.Valid {
 					info.CurriculumName = curName.String
 				}
+				if cardType.Valid {
+					info.CardType = strings.ToLower(strings.TrimSpace(cardType.String))
+				}
 				course.Departments = append(course.Departments, info)
 			}
 			deptRows.Close()
@@ -395,28 +401,70 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		}
 
 		mappedSemSet := map[int]struct{}{}
+		mappedLabelSet := map[string]struct{}{}
+		hasVerticalMapping := false
 		for _, dept := range course.Departments {
+			if dept.CardType == "vertical" {
+				mappedLabelSet["vertical"] = struct{}{}
+				hasVerticalMapping = true
+				continue
+			}
+
 			if dept.Semester == nil {
 				continue
 			}
 			if len(activeSemesterMap) == 0 {
 				mappedSemSet[*dept.Semester] = struct{}{}
+				mappedLabelSet[fmt.Sprintf("Sem %d", *dept.Semester)] = struct{}{}
 				continue
 			}
 			if _, ok := activeSemesterMap[*dept.Semester]; ok {
 				mappedSemSet[*dept.Semester] = struct{}{}
+				mappedLabelSet[fmt.Sprintf("Sem %d", *dept.Semester)] = struct{}{}
 			}
 		}
-		if len(mappedSemSet) == 0 {
+		if !hasVerticalMapping && len(mappedSemSet) == 0 {
 			for _, sem := range currentSemesters {
 				mappedSemSet[sem] = struct{}{}
+				mappedLabelSet[fmt.Sprintf("Sem %d", sem)] = struct{}{}
 			}
+		}
+		if hasVerticalMapping {
+			// For vertical courses, avoid mixed labels like "Sem 4, vertical".
+			mappedSemSet = map[int]struct{}{}
+			mappedLabelSet = map[string]struct{}{"vertical": {}}
+		}
+		if len(mappedLabelSet) == 0 {
+			mappedLabelSet["Sem -"] = struct{}{}
 		}
 		course.MappedSemesters = make([]int, 0, len(mappedSemSet))
 		for sem := range mappedSemSet {
 			course.MappedSemesters = append(course.MappedSemesters, sem)
 		}
 		sort.Ints(course.MappedSemesters)
+		course.MappedSemesterLabels = make([]string, 0, len(mappedLabelSet))
+		for label := range mappedLabelSet {
+			course.MappedSemesterLabels = append(course.MappedSemesterLabels, label)
+		}
+		sort.Slice(course.MappedSemesterLabels, func(i, j int) bool {
+			a := course.MappedSemesterLabels[i]
+			b := course.MappedSemesterLabels[j]
+			if strings.HasPrefix(a, "Sem ") && strings.HasPrefix(b, "Sem ") {
+				var ai, bi int
+				if _, err := fmt.Sscanf(a, "Sem %d", &ai); err == nil {
+					if _, err2 := fmt.Sscanf(b, "Sem %d", &bi); err2 == nil {
+						return ai < bi
+					}
+				}
+			}
+			if strings.HasPrefix(a, "Sem ") {
+				return true
+			}
+			if strings.HasPrefix(b, "Sem ") {
+				return false
+			}
+			return a < b
+		})
 
 		// Check if there's an active mark entry window for this course
 		windowOpen, windowIDs, windowComponents, err := resolveMarkEntryWindow(course.CourseID, facultyID)
@@ -625,9 +673,29 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			log.Printf("No students found for course %s, setting empty array", course.CourseCode)
 		}
 
+		hasNonSemesterMapping := false
+		for _, dept := range course.Departments {
+			if strings.TrimSpace(dept.CardType) != "" && !strings.EqualFold(strings.TrimSpace(dept.CardType), "semester") {
+				hasNonSemesterMapping = true
+				break
+			}
+		}
+		if !hasNonSemesterMapping {
+			var nonSemesterCount int
+			_ = db.DB.QueryRow(`
+				SELECT COUNT(1)
+				FROM curriculum_courses cc
+				JOIN normal_cards nc ON cc.semester_id = nc.id
+				WHERE cc.course_id = ?
+				  AND LOWER(TRIM(COALESCE(nc.card_type, 'semester'))) <> 'semester'
+			`, course.CourseID).Scan(&nonSemesterCount)
+			hasNonSemesterMapping = nonSemesterCount > 0
+		}
+
 		// Mark-entry windows are semester-scoped. Keep course/student visibility intact,
 		// but hide window actions when no allocated student is currently in the window semester.
-		if course.HasWindow && course.Window != nil && course.Window.Semester != nil && *course.Window.Semester > 0 {
+		// Non-semester cards (vertical/elective/etc.) are semester-agnostic and must not be suppressed.
+		if !hasNonSemesterMapping && course.HasWindow && course.Window != nil && course.Window.Semester != nil && *course.Window.Semester > 0 {
 			var allocationEligibleCount int
 			allocationEligibleErr := db.DB.QueryRow(`
 				SELECT COUNT(DISTINCT s.id)
@@ -721,6 +789,7 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 		JOIN normal_cards nc ON cc.semester_id = nc.id
 		JOIN departments d ON d.current_curriculum_id = nc.curriculum_id
 		WHERE cc.course_id = ?
+		  AND d.id IS NOT NULL
 	`, courseID)
 	if err == nil {
 		for cRows.Next() {
@@ -746,6 +815,7 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 	var courseSemesters []int64
 	studentSemesterSet := make(map[int64]bool)
 	var hasNonSemesterCard bool
+	var hasSemesterCard bool
 	semRows, err := db.DB.Query(`
 		SELECT nc.semester_number, COALESCE(nc.card_type, 'semester')
 		FROM curriculum_courses cc
@@ -757,10 +827,13 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 			var semNum sql.NullInt64
 			var cType string
 			if semRows.Scan(&semNum, &cType) == nil {
-				if cType != "semester" {
+				if !strings.EqualFold(strings.TrimSpace(cType), "semester") {
 					hasNonSemesterCard = true
-				} else if semNum.Valid {
-					courseSemesters = append(courseSemesters, semNum.Int64)
+				} else {
+					hasSemesterCard = true
+					if semNum.Valid {
+						courseSemesters = append(courseSemesters, semNum.Int64)
+					}
 				}
 			}
 		}
@@ -813,17 +886,47 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 		deptClause = fmt.Sprintf("(w.department_id IS NULL OR w.department_id = 0 OR w.department_id IN (%s))", strings.Join(ph, ","))
 	}
 
-	var semClause string
-	if hasNonSemesterCard || len(courseSemesters) == 0 {
-		semClause = "(w.semester IS NULL OR w.semester = 0 OR 1=1)"
+	var semesterOnlyClause string
+	if !hasSemesterCard && hasNonSemesterCard {
+		semesterOnlyClause = "(w.semester IS NULL OR w.semester = 0)"
+	} else if len(courseSemesters) == 0 {
+		semesterOnlyClause = "(w.semester IS NULL OR w.semester = 0)"
 	} else {
 		ph := make([]string, len(courseSemesters))
 		for i, s := range courseSemesters {
 			ph[i] = "?"
 			queryArgs = append(queryArgs, s)
 		}
-		semClause = fmt.Sprintf("(w.semester IS NULL OR w.semester = 0 OR w.semester IN (%s))", strings.Join(ph, ","))
+		semesterOnlyClause = fmt.Sprintf("(w.semester IS NULL OR w.semester = 0 OR w.semester IN (%s))", strings.Join(ph, ","))
 	}
+
+	nonSemesterByDeptClause := "0=1"
+	if hasNonSemesterCard {
+		nonSemesterByDeptClause = `EXISTS (
+			SELECT 1
+			FROM curriculum_courses ccx
+			JOIN normal_cards ncx ON ccx.semester_id = ncx.id
+			JOIN departments dx ON dx.current_curriculum_id = ncx.curriculum_id
+			WHERE ccx.course_id = ?
+			  AND LOWER(COALESCE(ncx.card_type, 'semester')) <> 'semester'
+			  AND (COALESCE(w.department_id, 0) = 0 OR dx.id = w.department_id)
+			  AND (
+				COALESCE(w.semester, 0) = 0
+				OR EXISTS (
+					SELECT 1
+					FROM course_student_teacher_allocation csta_val
+					JOIN students s_val ON csta_val.student_id = s_val.id
+					LEFT JOIN academic_calendar ac_val ON ac_val.id = s_val.year
+					WHERE csta_val.course_id = ?
+					  AND csta_val.teacher_id = ?
+					  AND s_val.status = 1
+					  AND COALESCE(ac_val.current_semester, 0) = w.semester
+				)
+			  )
+		)`
+		queryArgs = append(queryArgs, courseID, courseID, facultyID)
+	}
+	semClause := fmt.Sprintf("(%s OR %s)", semesterOnlyClause, nonSemesterByDeptClause)
 
 	// Base: expired windows matching this course+teacher (ownership check via teacher_id/dept/semester)
 	baseSQL := fmt.Sprintf(`

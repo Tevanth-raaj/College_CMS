@@ -1185,7 +1185,19 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		AND w.start_at <= ?
 		AND w.end_at >= ?
 		  AND s.status = 1
-		  AND (COALESCE(w.semester, 0) = 0 OR ac.current_semester = w.semester)
+		  AND (
+			COALESCE(w.semester, 0) = 0
+			OR ac.current_semester = w.semester
+			OR EXISTS (
+				SELECT 1
+				FROM curriculum_courses ccx
+				JOIN normal_cards ncx ON ccx.semester_id = ncx.id
+				JOIN departments dx ON dx.current_curriculum_id = ncx.curriculum_id
+				WHERE ccx.course_id = c.id
+				  AND (COALESCE(w.department_id, 0) = 0 OR dx.id = w.department_id)
+				  AND LOWER(TRIM(COALESCE(ncx.card_type, 'semester'))) <> 'semester'
+			)
+		  )
 		  AND (
 			(w.course_id IS NOT NULL AND w.course_id = c.id)
 			OR (w.course_id IS NULL OR w.course_id = 0)
@@ -1298,7 +1310,10 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 				}
 				// When semester=0 it means all semesters, so omit semester filter
 				if semID.Valid && semID.Int64 > 0 {
-					query += ` AND nc.semester_number = ?`
+					query += ` AND (
+						nc.semester_number = ?
+						OR LOWER(COALESCE(nc.card_type, 'semester')) <> 'semester'
+					)`
 					args = append(args, semID.Int64)
 				}
 				query += `
@@ -1309,7 +1324,11 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 					LEFT JOIN academic_calendar ac ON ac.id = s.year
 					INNER JOIN student_courses sc ON sc.student_id = s.id AND sc.course_id = c.id
 					WHERE mesp.window_id = ? AND mesp.user_id = ?
-					  AND (COALESCE(?, 0) = 0 OR ac.current_semester = ?)
+					  AND (
+						COALESCE(?, 0) = 0
+						OR (LOWER(COALESCE(nc.card_type, 'semester')) = 'semester' AND ac.current_semester = ?)
+						OR LOWER(COALESCE(nc.card_type, 'semester')) <> 'semester'
+					  )
 				)`
 				args = append(args, windowID.Int64, numericUserID, semID.Int64, semID.Int64)
 				query += ` ORDER BY c.course_code`
