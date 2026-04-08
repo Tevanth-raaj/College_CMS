@@ -3,6 +3,14 @@ import { useParams, useNavigate } from "react-router-dom";
 import MainLayout from "../../components/MainLayout";
 import { API_BASE_URL } from "../../config";
 
+const COURSE_CODE_LENGTH = 7;
+
+const normalizeCourseCode = (value) =>
+  String(value || "")
+    .replace(/\s+/g, "")
+    .toUpperCase()
+    .slice(0, COURSE_CODE_LENGTH);
+
 function SemesterDetailPage() {
   const { id, semId } = useParams();
   const navigate = useNavigate();
@@ -178,6 +186,13 @@ function SemesterDetailPage() {
   const handleAddCourse = async (e) => {
     e.preventDefault();
 
+    const normalizedCourseCode = normalizeCourseCode(newCourse.course_code);
+    if (normalizedCourseCode.length !== COURSE_CODE_LENGTH) {
+      setError("Course code must be exactly 7 characters (excluding spaces).");
+      setTimeout(() => setError(""), 5000);
+      return;
+    }
+
     // Validate total marks
     const totalMarks =
       (parseInt(newCourse.cia_marks) || 0) +
@@ -206,6 +221,7 @@ function SemesterDetailPage() {
 
       const courseData = {
         ...newCourse,
+        course_code: normalizedCourseCode,
         credit: parseInt(newCourse.credit),
         experiment_count_theorywithlab:
           newCourse.course_type === 3
@@ -349,6 +365,13 @@ function SemesterDetailPage() {
   const handleUpdateCourse = async (e) => {
     e.preventDefault();
 
+    const normalizedCourseCode = normalizeCourseCode(editCourseData.course_code);
+    if (normalizedCourseCode.length !== COURSE_CODE_LENGTH) {
+      setError("Course code must be exactly 7 characters (excluding spaces).");
+      setTimeout(() => setError(""), 5000);
+      return;
+    }
+
     // Validate total marks
     const totalMarks =
       (parseInt(editCourseData.cia_marks) || 0) +
@@ -369,6 +392,7 @@ function SemesterDetailPage() {
 
       const courseData = {
         ...editCourseData,
+        course_code: normalizedCourseCode,
         credit: parseInt(editCourseData.credit),
         experiment_count_theorywithlab:
           editCourseData.course_type === 3
@@ -696,12 +720,19 @@ function SemesterDetailPage() {
                   type="text"
                   value={newCourse.course_code}
                   onChange={(e) =>
-                    setNewCourse({ ...newCourse, course_code: e.target.value })
+                    setNewCourse({
+                      ...newCourse,
+                      course_code: normalizeCourseCode(e.target.value),
+                    })
                   }
-                  placeholder="e.g., CS101"
+                  maxLength={COURSE_CODE_LENGTH}
+                  placeholder="e.g., CS3101A"
                   required
                   className="input-custom"
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Enter exactly 7 characters.
+                </p>
               </div>
 
               <div>
@@ -1545,13 +1576,17 @@ function SemesterDetailPage() {
                       onChange={(e) =>
                         setEditCourseData({
                           ...editCourseData,
-                          course_code: e.target.value,
+                          course_code: normalizeCourseCode(e.target.value),
                         })
                       }
-                      placeholder="e.g., CS101"
+                      maxLength={COURSE_CODE_LENGTH}
+                      placeholder="e.g., CS3101A"
                       required
                       className="input-custom"
                     />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Enter exactly 7 characters.
+                    </p>
                   </div>
 
                   <div>

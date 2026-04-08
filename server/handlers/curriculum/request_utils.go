@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"server/db"
 	"server/models"
+	"strings"
 )
 
 type coursePayload struct {
@@ -47,8 +48,8 @@ func decodeCourseRequest(r *http.Request) (models.Course, error) {
 
 	course := models.Course{
 		CourseID:           payload.CourseID,
-		CourseCode:         payload.CourseCode,
-		CourseName:         payload.CourseName,
+		CourseCode:         strings.TrimSpace(payload.CourseCode),
+		CourseName:         strings.TrimSpace(payload.CourseName),
 		CourseType:         courseType,
 		ExperimentCountTWL: payload.ExperimentCountTWL,
 		Category:           payload.Category,
