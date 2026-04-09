@@ -962,11 +962,17 @@ function TeacherCourseStudentsPage() {
                           <p className="text-xs text-gray-600 mt-1">
                             ID: {student.student_id}
                           </p>
-                          {student.enrollment_no && (
+                          {student.learning_mode_id && (
                             <p className="text-xs text-gray-500 mt-1">
-                              Enrollment: {student.enrollment_no}
+                              Mode: {student.learning_mode_id === 1 ? 'UAL' : student.learning_mode_id === 2 ? 'PBL' : 'Unknown'}
                             </p>
                           )}
+                          <p className="text-xs text-gray-500 mt-1">
+                            Enrollment: {student.enrollment_no || 'N/A'}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            Register No: {student.register_no || 'N/A'}
+                          </p>
                         </div>
                       </div>
                     ))}
