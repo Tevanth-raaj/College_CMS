@@ -109,18 +109,34 @@ function Sidebar({ onExpandedChange }) {
   const canAccessMarkEntry =
     markEntryBaseAllowedRoles.has(userRole) && hasAssignedWindows;
 
+  const canAccessWindowDetailsRoute = useMemo(
+    () => new Set(["admin", "coe", "hod", "curriculum_entry_user"]).has(userRole),
+    [userRole],
+  );
+
   useEffect(() => {
     if (!hasCheckedWindowAccess) return;
-    const isProtectedMarkEntryRoute =
-      location.pathname === "/mark-entry" ||
-      location.pathname.startsWith("/mark-entry-windows/");
-    if (!isProtectedMarkEntryRoute) return;
-    if (canAccessMarkEntry) return;
+    const isMarkEntryRoute = location.pathname === "/mark-entry";
+    const isWindowDetailsRoute = location.pathname.startsWith("/mark-entry-windows/");
 
-    const fallbackPath = userRole === "teacher" ? "/teacher-dashboard" : "/dashboard";
-    navigate(fallbackPath, { replace: true });
+    // Mark entry itself requires user-specific window access.
+    if (isMarkEntryRoute && !canAccessMarkEntry) {
+      const fallbackPath = userRole === "teacher" ? "/teacher-dashboard" : "/dashboard";
+      navigate(fallbackPath, { replace: true });
+      return;
+    }
+
+    // Window details are also used by COE/Admin from Existing Windows.
+    // Keep teacher/user guard while allowing admin-side roles.
+    if (isWindowDetailsRoute && !canAccessWindowDetailsRoute && !canAccessMarkEntry) {
+      const fallbackPath = userRole === "teacher" ? "/teacher-dashboard" : "/dashboard";
+      navigate(fallbackPath, { replace: true });
+      return;
+    }
+
   }, [
     canAccessMarkEntry,
+    canAccessWindowDetailsRoute,
     hasCheckedWindowAccess,
     location.pathname,
     navigate,
