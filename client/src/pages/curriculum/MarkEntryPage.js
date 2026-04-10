@@ -346,9 +346,32 @@ function MarkEntryPage() {
     }
   }
 
+  const normalizeCategoryName = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+
+  const getCategoryNameForComponentId = (componentId) => {
+    const match = markCategories.find((cat) => Number(cat.id) === Number(componentId))
+    if (match?.name) return match.name
+
+    const absenteeMatch = absentees.find(
+      (item) => Number(item.mark_category_id) === Number(componentId) && item.category_name
+    )
+    return absenteeMatch?.category_name || ''
+  }
+
   // helper: is a given (studentId, categoryId) cell absent?
-  const isCellAbsent = (studentId, categoryId) =>
-    absentees.some(a => a.student_id === studentId && a.mark_category_id === categoryId)
+  const isCellAbsent = (studentId, categoryId) => {
+    const selectedWindowId = Number(selectedCourse?.window_id || 0)
+    const normalizedComponentName = normalizeCategoryName(getCategoryNameForComponentId(categoryId))
+
+    return absentees.some((a) => {
+      if (Number(a.student_id) !== Number(studentId)) return false
+      if (selectedWindowId > 0 && Number(a.window_id) !== selectedWindowId) return false
+      if (Number(a.mark_category_id) === Number(categoryId)) return true
+
+      if (!normalizedComponentName) return false
+      return normalizeCategoryName(a.category_name) === normalizedComponentName
+    })
+  }
 
   const getInnovativePracticeBaseName = (name = '') => {
     const normalized = String(name).replace(/\s+/g, ' ').trim()
@@ -1008,6 +1031,10 @@ function MarkEntryPage() {
     const deleteEntries = []
     students.forEach((student) => {
       displayMarkCategories.forEach((category) => {
+        if (isDisplayCellAbsent(student.student_id, category)) {
+          return
+        }
+
         const obtainedMarks = getDisplayMarkValue(student.student_id, category)
         ;(category.component_ids || [category.id]).forEach((componentId) => {
           if (obtainedMarks !== undefined && obtainedMarks !== null && obtainedMarks !== '') {
