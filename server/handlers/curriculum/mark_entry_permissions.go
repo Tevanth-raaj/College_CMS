@@ -1417,7 +1417,7 @@ func CheckUserHasAssignedWindows(w http.ResponseWriter, r *http.Request) {
 		SELECT COUNT(DISTINCT mesp.window_id)
 		FROM mark_entry_student_permissions mesp
 		INNER JOIN mark_entry_windows mew ON mesp.window_id = mew.id
-		WHERE mew.user_id = ?
+		WHERE mesp.user_id = ?
 			AND mew.enabled = 1
 			AND mew.start_at <= ?
 			AND mew.end_at > ?`

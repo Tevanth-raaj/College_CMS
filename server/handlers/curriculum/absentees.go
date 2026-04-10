@@ -598,8 +598,9 @@ func GetCourseWindowAbsentees(w http.ResponseWriter, r *http.Request) {
 	// The blocking logic in SaveStudentMarks will match against the specific window ID
 	// This avoids timezone issues with SQL NOW() vs Go time
 	query := `
-		SELECT ea.student_id, ea.mark_category_id, ea.id, ea.window_id
+		SELECT ea.student_id, ea.mark_category_id, ea.id, ea.window_id, COALESCE(mct.name, '') AS category_name
 		FROM exam_absentees ea
+		LEFT JOIN mark_category_types mct ON ea.mark_category_id = mct.id
 		WHERE ea.course_id = ?
 	`
 
@@ -614,16 +615,17 @@ func GetCourseWindowAbsentees(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type AbsenteeCell struct {
-		StudentID      int `json:"student_id"`
-		MarkCategoryID int `json:"mark_category_id"`
-		ID             int `json:"id"`
-		WindowID       int `json:"window_id"`
+		StudentID      int    `json:"student_id"`
+		MarkCategoryID int    `json:"mark_category_id"`
+		ID             int    `json:"id"`
+		WindowID       int    `json:"window_id"`
+		CategoryName   string `json:"category_name"`
 	}
 
 	var result []AbsenteeCell
 	for rows.Next() {
 		var a AbsenteeCell
-		if err := rows.Scan(&a.StudentID, &a.MarkCategoryID, &a.ID, &a.WindowID); err != nil {
+		if err := rows.Scan(&a.StudentID, &a.MarkCategoryID, &a.ID, &a.WindowID, &a.CategoryName); err != nil {
 			log.Printf("[ABSENTEES ENDPOINT] Scan error: %v", err)
 			continue
 		}
@@ -667,6 +669,46 @@ func DeleteExamAbsentee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// DeleteExamAbsenteeByScope removes absentee records for exactly one
+// student+course within a specific exam window.
+func DeleteExamAbsenteeByScope(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w, "DELETE, OPTIONS")
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	vars := mux.Vars(r)
+	windowID, errWindow := strconv.Atoi(vars["windowId"])
+	courseID, errCourse := strconv.Atoi(vars["courseId"])
+	studentID, errStudent := strconv.Atoi(vars["studentId"])
+	if errWindow != nil || errCourse != nil || errStudent != nil || windowID == 0 || courseID == 0 || studentID == 0 {
+		http.Error(w, "Invalid scope parameters", http.StatusBadRequest)
+		return
+	}
+
+	database := db.DB
+	if database == nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+
+	result, err := database.Exec(
+		`DELETE FROM exam_absentees WHERE window_id = ? AND course_id = ? AND student_id = ?`,
+		windowID,
+		courseID,
+		studentID,
+	)
+	if err != nil {
+		log.Printf("absentees: scoped delete error: %v", err)
+		http.Error(w, "Failed to delete absentee scope", http.StatusInternalServerError)
+		return
+	}
+
+	deleted, _ := result.RowsAffected()
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "deleted": deleted})
 }
 
 // DeleteExamAbsenteesByWindow removes ALL absentee records for a given window_id.

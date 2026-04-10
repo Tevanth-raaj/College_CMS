@@ -177,11 +177,26 @@ function AbsenteesContent() {
   }
 
   /* ── delete ── */
-  const handleDelete = async (id) => {
-    if (!window.confirm('Remove this absentee record?')) return
+  const handleDelete = async ({ windowId, courseId, studentId, studentName }) => {
+    if (!window.confirm(`Remove absentee for ${studentName || 'this student'} in window ${windowId}?`)) return
     try {
-      await fetch(`${API_BASE_URL}/exam-absentees/${id}`, { method: 'DELETE' })
-      setAbsentees(prev => prev.filter(a => a.id !== id))
+      const res = await fetch(
+        `${API_BASE_URL}/exam-absentees/by-scope/window/${windowId}/course/${courseId}/student/${studentId}`,
+        { method: 'DELETE' }
+      )
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(txt || 'Failed to delete absentee')
+      }
+
+      setAbsentees(prev =>
+        prev.filter(
+          (a) =>
+            !(Number(a.window_id) === Number(windowId) &&
+              Number(a.course_id) === Number(courseId) &&
+              Number(a.student_id) === Number(studentId))
+        )
+      )
     } catch (err) { console.error('Delete error:', err) }
   }
 
@@ -722,51 +737,24 @@ function RecordedAbsenteesSection({
 
                 {/* ── Expanded detail ── */}
                 {isOpen && (() => {
-                  // Group rows by student + course + PT type
+                  // Group rows by the exact individual scope expected by delete:
+                  // student + course + window.
                   const groupedRows = []
                   const groupMap = new Map()
 
-                  group.rows.forEach(row => {
-                    const nameUpper = (row.category_name || '').toUpperCase()
-                    
-                    // Detect PT-2 first to avoid false matches with PT-1
-                    const isPT2 = nameUpper.includes('PERIODICAL TEST 2') ||
-                                  nameUpper.includes('PERIODICALTEST2') ||
-                                  nameUpper.includes('TEST 2') ||
-                                  (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*2/))
-                    
-                    // Detect PT-1 variants (exclude PT-2)
-                    const isPT1 = !isPT2 && (
-                                  nameUpper.includes('PERIODICAL TEST 1') ||
-                                  nameUpper.includes('PERIODICALTEST1') ||
-                                  nameUpper.includes('TEST 1') ||
-                                  (nameUpper.includes('PT') && nameUpper.match(/PT[\s-]*1/))
-                                )
-                    
-                    let groupKey
-                    let displayName
-                    
-                    if (isPT1) {
-                      groupKey = `${row.student_id}_${row.course_id}_PT1`
-                      displayName = 'PT - 1'
-                    } else if (isPT2) {
-                      groupKey = `${row.student_id}_${row.course_id}_PT2`
-                      displayName = 'PT - 2'
-                    } else {
-                      // Non-PT components: keep separate
-                      groupKey = `${row.student_id}_${row.course_id}_${row.mark_category_id}`
-                      displayName = row.category_name
-                    }
-
+                  group.rows.forEach((row) => {
+                    const groupKey = `${row.window_id}_${row.course_id}_${row.student_id}`
                     if (!groupMap.has(groupKey)) {
                       groupMap.set(groupKey, {
                         ...row,
-                        displayName,
-                        originalIds: [row.id],
+                        componentNames: row.category_name ? [row.category_name] : [],
                       })
-                    } else {
-                      // Add this ID to the group for batch deletion
-                      groupMap.get(groupKey).originalIds.push(row.id)
+                      return
+                    }
+
+                    const existing = groupMap.get(groupKey)
+                    if (row.category_name && !existing.componentNames.includes(row.category_name)) {
+                      existing.componentNames.push(row.category_name)
                     }
                   })
 
@@ -787,7 +775,7 @@ function RecordedAbsenteesSection({
                           </thead>
                           <tbody className="bg-white divide-y divide-gray-100">
                             {groupedRows.map((a, idx) => (
-                              <tr key={a.originalIds.join('_')} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                              <tr key={`${a.window_id}_${a.course_id}_${a.student_id}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                                 <td className="px-4 py-2.5 text-gray-400 text-xs">{idx + 1}</td>
                                 <td className="px-4 py-2.5">
                                   <div className="font-medium text-gray-800">{a.course_code}</div>
@@ -797,7 +785,7 @@ function RecordedAbsenteesSection({
                                 <td className="px-4 py-2.5 font-mono text-gray-600 text-xs">{a.register_no}</td>
                                 <td className="px-4 py-2.5">
                                   <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">
-                                    {a.displayName}
+                                    {a.componentNames.length > 0 ? a.componentNames.join(', ') : '—'}
                                   </span>
                                 </td>
                                 <td className="px-4 py-2.5">
@@ -813,11 +801,15 @@ function RecordedAbsenteesSection({
                                 <td className="px-4 py-2.5">
                                   <button
                                     onClick={() => {
-                                      // Delete all records in this group
-                                      a.originalIds.forEach(id => handleDelete(id))
+                                      handleDelete({
+                                        windowId: a.window_id,
+                                        courseId: a.course_id,
+                                        studentId: a.student_id,
+                                        studentName: a.student_name,
+                                      })
                                     }}
                                     className="text-red-500 hover:text-red-700 text-xs font-medium hover:underline transition-colors"
-                                    title={a.originalIds.length > 1 ? `Remove ${a.originalIds.length} grouped records` : 'Remove'}
+                                    title="Remove this student from absentees for this course and exam window"
                                   >
                                     Remove
                                   </button>

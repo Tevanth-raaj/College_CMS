@@ -200,6 +200,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/exam-absentees/upload", curriculum.UploadAbsentees).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/exam-absentees", curriculum.GetExamAbsentees).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/exam-absentees/by-window/{windowId}", curriculum.DeleteExamAbsenteesByWindow).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/exam-absentees/by-scope/window/{windowId}/course/{courseId}/student/{studentId}", curriculum.DeleteExamAbsenteeByScope).Methods("DELETE", "OPTIONS")
 	router.HandleFunc("/api/exam-absentees/{id}", curriculum.DeleteExamAbsentee).Methods("DELETE", "OPTIONS")
 	router.HandleFunc("/api/course/{courseId}/exam-absentees", curriculum.GetCourseWindowAbsentees).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-categories/by-learning-mode", curriculum.GetMarkCategoriesByLearningMode).Methods("GET", "OPTIONS")
