@@ -201,6 +201,24 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Resolved teacherID '%s' to faculty_id '%s'", teacherID, facultyID)
 
+	teacherDeptIDs := make([]int64, 0)
+	teacherDeptRows, teacherDeptErr := db.DB.Query(`
+		SELECT department_id
+		FROM department_teachers
+		WHERE teacher_id = ? AND status = 1
+	`, facultyID)
+	if teacherDeptErr != nil {
+		log.Printf("Warning: failed to fetch teacher departments for faculty_id=%s: %v", facultyID, teacherDeptErr)
+	} else {
+		for teacherDeptRows.Next() {
+			var departmentID int64
+			if scanErr := teacherDeptRows.Scan(&departmentID); scanErr == nil {
+				teacherDeptIDs = append(teacherDeptIDs, departmentID)
+			}
+		}
+		teacherDeptRows.Close()
+	}
+
 	var rows *sql.Rows
 	var currentAcademicYear string
 	currentSemesters := []int{}
@@ -360,7 +378,16 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			JOIN departments d ON d.current_curriculum_id = cur.id
 			WHERE cc.course_id = ?
 		`
-		deptRows, deptErr := db.DB.Query(deptQuery, course.CourseID)
+		deptArgs := []interface{}{course.CourseID}
+		if len(teacherDeptIDs) > 0 {
+			placeholders := make([]string, len(teacherDeptIDs))
+			for i, deptID := range teacherDeptIDs {
+				placeholders[i] = "?"
+				deptArgs = append(deptArgs, deptID)
+			}
+			deptQuery += fmt.Sprintf(" AND d.id IN (%s)", strings.Join(placeholders, ","))
+		}
+		deptRows, deptErr := db.DB.Query(deptQuery, deptArgs...)
 		if deptErr != nil {
 			log.Printf("Error fetching departments for course %d: %v", course.CourseID, deptErr)
 		} else {
@@ -421,6 +448,27 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 			if _, ok := activeSemesterMap[*dept.Semester]; ok {
 				mappedSemSet[*dept.Semester] = struct{}{}
 				mappedLabelSet[fmt.Sprintf("Sem %d", *dept.Semester)] = struct{}{}
+			}
+		}
+		if !hasVerticalMapping && len(mappedSemSet) == 0 {
+			studentSemesterRows, studentSemesterErr := db.DB.Query(`
+				SELECT DISTINCT COALESCE(ac.current_semester, 0)
+				FROM course_student_teacher_allocation csta
+				JOIN students s ON csta.student_id = s.id
+				LEFT JOIN academic_calendar ac ON ac.id = s.year
+				WHERE csta.course_id = ?
+				  AND csta.teacher_id = ?
+				  AND s.status = 1
+			`, course.CourseID, facultyID)
+			if studentSemesterErr == nil {
+				for studentSemesterRows.Next() {
+					var studentSemester int
+					if scanErr := studentSemesterRows.Scan(&studentSemester); scanErr == nil && studentSemester > 0 {
+						mappedSemSet[studentSemester] = struct{}{}
+						mappedLabelSet[fmt.Sprintf("Sem %d", studentSemester)] = struct{}{}
+					}
+				}
+				studentSemesterRows.Close()
 			}
 		}
 		if !hasVerticalMapping && len(mappedSemSet) == 0 {
@@ -695,7 +743,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		// Mark-entry windows are semester-scoped. Keep course/student visibility intact,
 		// but hide window actions when no allocated student is currently in the window semester.
 		// Non-semester cards (vertical/elective/etc.) are semester-agnostic and must not be suppressed.
-		if !hasNonSemesterMapping && course.HasWindow && course.Window != nil && course.Window.Semester != nil && *course.Window.Semester > 0 {
+		if !hasNonSemesterMapping && len(course.Departments) > 0 && course.HasWindow && course.Window != nil && course.Window.Semester != nil && *course.Window.Semester > 0 {
 			var allocationEligibleCount int
 			allocationEligibleErr := db.DB.QueryRow(`
 				SELECT COUNT(DISTINCT s.id)

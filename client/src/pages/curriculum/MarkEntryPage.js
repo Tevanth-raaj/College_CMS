@@ -953,17 +953,11 @@ function MarkEntryPage() {
     checkSubmission()
   }, [selectedCourse, facultyIdentifier])
 
-  // Build submission summary: all students across both modes with their marks status
+  // Build submission summary only for the currently selected learning mode.
   const buildSubmitSummary = () => {
-    return allStudents.map((student) => {
-      const studentCategories = markCategories.filter((cat) => {
-        const modId = student.learning_mode_id
-        if (!modId) return true
-        return cat.learning_mode_id === modId
-      })
-      const studentDisplayCategories = buildDisplayCategories(studentCategories)
+    return students.map((student) => {
       let absentCount = 0
-      const missing = studentDisplayCategories.filter((cat) => {
+      const missing = displayMarkCategories.filter((cat) => {
         // Absent cells are not "missing" — they're excused
         if (isDisplayCellAbsent(student.student_id, cat)) {
           absentCount++
@@ -972,7 +966,7 @@ function MarkEntryPage() {
         const val = getDisplayMarkValue(student.student_id, cat)
         return val === '' || val === null || val === undefined
       })
-      return { student, total: studentDisplayCategories.length, missing: missing.length, absent: absentCount }
+      return { student, total: displayMarkCategories.length, missing: missing.length, absent: absentCount }
     })
   }
 
@@ -1707,6 +1701,9 @@ function MarkEntryPage() {
                     </div>
                     <div className="flex-1">
                       <h3 className="text-lg font-bold text-gray-900">Submit Marks — {selectedCourse.course_code}</h3>
+                      <p className="mt-1 text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                        Mode: {learningMode} (only this mode will be submitted)
+                      </p>
                       <div className="mt-2 px-4 py-2.5 bg-red-600 rounded-lg">
                         <p className="text-sm font-bold text-white tracking-wide">
                           ⚠ Once submitted, marks cannot be edited until the window reopens.
