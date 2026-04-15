@@ -430,10 +430,20 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 		mappedSemSet := map[int]struct{}{}
 		mappedLabelSet := map[string]struct{}{}
 		hasVerticalMapping := false
+		hasHonourMapping := false
 		for _, dept := range course.Departments {
-			if dept.CardType == "vertical" {
-				mappedLabelSet["vertical"] = struct{}{}
+			switch dept.CardType {
+			case "vertical":
+				mappedLabelSet["Vertical"] = struct{}{}
 				hasVerticalMapping = true
+				continue
+			case "honour", "honours", "honour_card":
+				mappedLabelSet["Honours"] = struct{}{}
+				hasHonourMapping = true
+				continue
+			}
+
+			if dept.CardType != "" && dept.CardType != "semester" {
 				continue
 			}
 
@@ -450,7 +460,7 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 				mappedLabelSet[fmt.Sprintf("Sem %d", *dept.Semester)] = struct{}{}
 			}
 		}
-		if !hasVerticalMapping && len(mappedSemSet) == 0 {
+		if !hasVerticalMapping && !hasHonourMapping && len(mappedSemSet) == 0 {
 			studentSemesterRows, studentSemesterErr := db.DB.Query(`
 				SELECT DISTINCT COALESCE(ac.current_semester, 0)
 				FROM course_student_teacher_allocation csta
@@ -471,19 +481,14 @@ func GetTeacherCourses(w http.ResponseWriter, r *http.Request) {
 				studentSemesterRows.Close()
 			}
 		}
-		if !hasVerticalMapping && len(mappedSemSet) == 0 {
-			for _, sem := range currentSemesters {
-				mappedSemSet[sem] = struct{}{}
-				mappedLabelSet[fmt.Sprintf("Sem %d", sem)] = struct{}{}
-			}
-		}
 		if hasVerticalMapping {
-			// For vertical courses, avoid mixed labels like "Sem 4, vertical".
+			// For vertical courses, avoid mixed labels like "Sem 4, Vertical".
 			mappedSemSet = map[int]struct{}{}
-			mappedLabelSet = map[string]struct{}{"vertical": {}}
+			mappedLabelSet = map[string]struct{}{"Vertical": {}}
 		}
-		if len(mappedLabelSet) == 0 {
-			mappedLabelSet["Sem -"] = struct{}{}
+		if hasHonourMapping {
+			mappedSemSet = map[int]struct{}{}
+			mappedLabelSet = map[string]struct{}{"Honours": {}}
 		}
 		course.MappedSemesters = make([]int, 0, len(mappedSemSet))
 		for sem := range mappedSemSet {
@@ -958,21 +963,8 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 			WHERE ccx.course_id = ?
 			  AND LOWER(COALESCE(ncx.card_type, 'semester')) <> 'semester'
 			  AND (COALESCE(w.department_id, 0) = 0 OR dx.id = w.department_id)
-			  AND (
-				COALESCE(w.semester, 0) = 0
-				OR EXISTS (
-					SELECT 1
-					FROM course_student_teacher_allocation csta_val
-					JOIN students s_val ON csta_val.student_id = s_val.id
-					LEFT JOIN academic_calendar ac_val ON ac_val.id = s_val.year
-					WHERE csta_val.course_id = ?
-					  AND csta_val.teacher_id = ?
-					  AND s_val.status = 1
-					  AND COALESCE(ac_val.current_semester, 0) = w.semester
-				)
-			  )
 		)`
-		queryArgs = append(queryArgs, courseID, courseID, facultyID)
+		queryArgs = append(queryArgs, courseID)
 	}
 	semClause := fmt.Sprintf("(%s OR %s)", semesterOnlyClause, nonSemesterByDeptClause)
 

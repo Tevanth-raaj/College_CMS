@@ -644,29 +644,18 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 
 	nonSemesterByDeptClause := "0=1"
 	if hasNonSemesterCard {
-		nonSemesterByDeptClause = `EXISTS (
-			SELECT 1
-			FROM curriculum_courses ccx
-			JOIN normal_cards ncx ON ccx.semester_id = ncx.id
-			JOIN departments dx ON dx.current_curriculum_id = ncx.curriculum_id
-			WHERE ccx.course_id = ?
-			  AND LOWER(COALESCE(ncx.card_type, 'semester')) <> 'semester'
-			  AND (COALESCE(w.department_id, 0) = 0 OR dx.id = w.department_id)
-			  AND (
-				COALESCE(w.semester, 0) = 0
-				OR EXISTS (
-					SELECT 1
-					FROM course_student_teacher_allocation csta_val
-					JOIN students s_val ON csta_val.student_id = s_val.id
-					LEFT JOIN academic_calendar ac_val ON ac_val.id = s_val.year
-					WHERE csta_val.course_id = ?
-					  AND csta_val.teacher_id = ?
-					  AND s_val.status = 1
-					  AND COALESCE(ac_val.current_semester, 0) = w.semester
-				)
-			  )
-		)`
-		queryArgs = append(queryArgs, courseID, courseID, facultyID)
+		if len(allDeptIDs) == 0 {
+			// If no department context is derivable for this non-semester course,
+			// avoid blocking an otherwise valid active window by semester.
+			nonSemesterByDeptClause = "1=1"
+		} else {
+			placeholders := make([]string, len(allDeptIDs))
+			for i, did := range allDeptIDs {
+				placeholders[i] = "?"
+				queryArgs = append(queryArgs, did)
+			}
+			nonSemesterByDeptClause = fmt.Sprintf("(COALESCE(w.department_id, 0) = 0 OR w.department_id IN (%s))", strings.Join(placeholders, ","))
+		}
 	}
 	semClause = fmt.Sprintf("(%s OR %s)", semesterOnlyClause, nonSemesterByDeptClause)
 
