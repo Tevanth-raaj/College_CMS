@@ -45,13 +45,23 @@ function StudentCard({ student, onEdit, onDelete }) {
       <div className="space-y-3 mb-4">
         <div className="flex items-start">
           <svg className="w-5 h-5 text-primary-400 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2"/>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
           </svg>
           <div className="flex-1 min-w-0">
-            <p className="text-xs text-gray-500 uppercase font-bold">Student ID</p>
-            <p className="text-sm text-gray-900 truncate" title={student.student_id}>
-              {student.student_id || student.id || "—"}
+            <p className="text-xs text-gray-500 uppercase font-bold">Register Number</p>
+            <p className="text-sm text-gray-900 truncate" title={student.register_no}>
+              {student.register_no || "-"}
             </p>
+          </div>
+        </div>
+
+        <div className="flex items-start">
+          <svg className="w-5 h-5 text-primary-400 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5V4H2v16h5m10 0v-8H7v8m10 0H7"/>
+          </svg>
+          <div className="flex-1">
+            <p className="text-xs text-gray-500 uppercase font-bold">Learning Mode</p>
+            <p className="text-sm text-gray-900">{student.learning_mode || "-"}</p>
           </div>
         </div>
 
@@ -60,24 +70,32 @@ function StudentCard({ student, onEdit, onDelete }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
           </svg>
           <div className="flex-1">
-            <p className="text-xs text-gray-500 uppercase font-bold">Age</p>
-            <p className="text-sm text-gray-900">{student.age || "—"}</p>
+            <p className="text-xs text-gray-500 uppercase font-bold">Year</p>
+            <p className="text-sm text-gray-900">{student.year || "-"}</p>
           </div>
         </div>
 
-        {student.department && (
-          <div className="flex items-start">
-            <svg className="w-5 h-5 text-primary-400 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
-            </svg>
-            <div className="flex-1">
-              <p className="text-xs text-gray-500 uppercase font-bold">
-                Department
-              </p>
-              <p className="text-sm text-gray-900">{student.department}</p>
-            </div>
+        <div className="flex items-start">
+          <svg className="w-5 h-5 text-primary-400 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7l9-4 9 4-9 4-9-4zm0 10l9 4 9-4M3 12l9 4 9-4"/>
+          </svg>
+          <div className="flex-1">
+            <p className="text-xs text-gray-500 uppercase font-bold">Department Code</p>
+            <p className="text-sm text-gray-900">{student.department_code || "-"}</p>
           </div>
-        )}
+        </div>
+
+        <div className="flex items-start">
+          <svg className="w-5 h-5 text-primary-400 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 12H8m8 0a4 4 0 11-8 0m8 0a4 4 0 10-8 0m8 0v1a2 2 0 01-2 2H10a2 2 0 01-2-2v-1"/>
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-gray-500 uppercase font-bold">Mail ID</p>
+            <p className="text-sm text-gray-900 truncate" title={student.mail_id}>
+              {student.mail_id || "-"}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Status Badge */}

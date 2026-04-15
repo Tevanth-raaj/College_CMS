@@ -1,4 +1,4 @@
-  import React, { useState, useEffect } from 'react'
+  import React, { useState, useEffect, useMemo } from 'react'
   import MainLayout from '../../components/MainLayout'
   import StudentCard from '../../components/StudentCard'
   import SearchBarWithDropdown from '../../components/SearchBarWithDropdown'
@@ -99,6 +99,9 @@
     const [curriculums, setCurriculums] = useState([])
     const [departments, setDepartments] = useState([])
     const [searchTerm, setSearchTerm] = useState('')
+    const [yearFilter, setYearFilter] = useState('all')
+    const [learningModeFilter, setLearningModeFilter] = useState('all')
+    const [departmentFilter, setDepartmentFilter] = useState('all')
     const [showForm, setShowForm] = useState(false)
     const [editingStudent, setEditingStudent] = useState(null)
 
@@ -513,6 +516,66 @@
       fetchDepartments()
     }, [])
 
+    const yearOptions = useMemo(() => {
+      const years = [...new Set(
+        students
+          .map((s) => Number(s.year))
+          .filter((y) => Number.isFinite(y) && y > 0)
+      )]
+      return years.sort((a, b) => a - b)
+    }, [students])
+
+    const learningModeOptions = useMemo(() => {
+      const modes = [...new Set(
+        students
+          .map((s) => String(s.learning_mode || '').trim())
+          .filter(Boolean)
+      )]
+      return modes.sort((a, b) => a.localeCompare(b))
+    }, [students])
+
+    const departmentCodeOptions = useMemo(() => {
+      const codes = [...new Set(
+        students
+          .map((s) => String(s.department_code || '').trim())
+          .filter(Boolean)
+      )]
+      return codes.sort((a, b) => a.localeCompare(b))
+    }, [students])
+
+    const filteredStudents = useMemo(() => {
+      return students.filter((s) => {
+        const q = searchTerm.trim().toLowerCase()
+        const searchable = [
+          s.student_name,
+          s.student_id,
+          s.id,
+          s.enrollment_no,
+          s.register_no,
+          s.mail_id,
+          s.department_code,
+        ]
+          .map((v) => String(v || '').toLowerCase())
+          .join(' ')
+
+        if (q && !searchable.includes(q)) return false
+        if (yearFilter !== 'all' && String(s.year || '') !== yearFilter) return false
+        if (learningModeFilter !== 'all' && String(s.learning_mode || '') !== learningModeFilter) return false
+        if (departmentFilter !== 'all' && String(s.department_code || '') !== departmentFilter) return false
+
+        return true
+      })
+    }, [students, searchTerm, yearFilter, learningModeFilter, departmentFilter])
+
+    const activeFilterCount = [yearFilter, learningModeFilter, departmentFilter].filter((f) => f !== 'all').length + (searchTerm.trim() ? 1 : 0)
+
+    const resetFilters = () => {
+      setSearchTerm('')
+      setYearFilter('all')
+      setLearningModeFilter('all')
+      setDepartmentFilter('all')
+    }
+
     return (
       <MainLayout
         title="Student Details"
@@ -520,13 +583,6 @@
         actions={
           !showForm && (
             <div className="flex items-center space-x-3">
-              <input
-                type="search"
-                placeholder="Search by name, student id, or enrollment..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="input-custom w-64"
-              />
               <button
                 type="button"
                 onClick={handleDownloadTemplate}
@@ -695,18 +751,102 @@
           {/* Student List (hidden when form shown) */}
           {!showForm && (
             <div className="mb-8">
+            <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Student Register Filters</h3>
+                  <p className="text-sm text-gray-600">Find students quickly by year, learning mode, department, or any keyword.</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[#7D53F6]/10 text-[#7D53F6] border border-[#7D53F6]/30">
+                    {filteredStudents.length} Result{filteredStudents.length !== 1 ? 's' : ''}
+                  </span>
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[#7D53F6]/10 text-[#7D53F6] border border-[#7D53F6]/30">
+                    {activeFilterCount} Active Filter{activeFilterCount !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-gray-600 mb-1">Search</label>
+                  <input
+                    type="search"
+                    placeholder="Name, register no, mail, enrollment..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="input-custom w-full bg-gray-50 border-gray-200 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-gray-600 mb-1">Year</label>
+                  <select
+                    value={yearFilter}
+                    onChange={(e) => setYearFilter(e.target.value)}
+                    className="input-custom w-full bg-gray-50 border-gray-200 focus:bg-white"
+                  >
+                    <option value="all">All Years</option>
+                    {yearOptions.map((year) => (
+                      <option key={year} value={String(year)}>Year {year}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-gray-600 mb-1">Learning Mode</label>
+                  <select
+                    value={learningModeFilter}
+                    onChange={(e) => setLearningModeFilter(e.target.value)}
+                    className="input-custom w-full bg-gray-50 border-gray-200 focus:bg-white"
+                  >
+                    <option value="all">All Modes</option>
+                    {learningModeOptions.map((mode) => (
+                      <option key={mode} value={mode}>{mode}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-gray-600 mb-1">Department</label>
+                  <select
+                    value={departmentFilter}
+                    onChange={(e) => setDepartmentFilter(e.target.value)}
+                    className="input-custom w-full bg-gray-50 border-gray-200 focus:bg-white"
+                  >
+                    <option value="all">All Departments</option>
+                    {departmentCodeOptions.map((code) => (
+                      <option key={code} value={code}>{code}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-primary border border-primary rounded-lg hover:opacity-90"
+                >
+                  Reset Filters
+                </button>
+                {yearFilter !== 'all' && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">Year: {yearFilter}</span>
+                )}
+                {learningModeFilter !== 'all' && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">Mode: {learningModeFilter}</span>
+                )}
+                {departmentFilter !== 'all' && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">Dept: {departmentFilter}</span>
+                )}
+                {searchTerm.trim() && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">Search: {searchTerm.trim()}</span>
+                )}
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-              {students
-                .filter(s => {
-                  if (!searchTerm) return true
-                  const q = searchTerm.toLowerCase()
-                  const name = String(s.student_name || '').toLowerCase()
-                  const id = String(s.student_id || s.id || '').toLowerCase()
-                  const enroll = String(s.enrollment_no || '').toLowerCase()
-                  return name.includes(q) || id.includes(q) || enroll.includes(q)
-                })
-                .map((s) => (
+              {filteredStudents.map((s) => (
                   <StudentCard 
                     key={s.student_id || s.id} 
                     student={s} 

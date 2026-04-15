@@ -584,7 +584,16 @@ func GetCourseWindowAbsentees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	teacherID := r.URL.Query().Get("teacher_id")
+	teacherID := strings.TrimSpace(r.URL.Query().Get("teacher_id"))
+	selectedWindowID := 0
+	if windowIDStr := strings.TrimSpace(r.URL.Query().Get("window_id")); windowIDStr != "" {
+		value, convErr := strconv.Atoi(windowIDStr)
+		if convErr != nil || value <= 0 {
+			http.Error(w, "Invalid window_id", http.StatusBadRequest)
+			return
+		}
+		selectedWindowID = value
+	}
 
 	database := db.DB
 	if database == nil {
@@ -592,21 +601,40 @@ func GetCourseWindowAbsentees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[ABSENTEES ENDPOINT] Fetching absentees for courseID=%d, teacherID=%s", courseID, teacherID)
+	resolvedWindowID := selectedWindowID
+	if teacherID != "" {
+		normalizedTeacherID := normalizeFacultyIdentifier(teacherID)
+		windowOpen, windowID, _, resolveErr := resolveMarkEntryWindowWithSelection(courseID, normalizedTeacherID, selectedWindowID)
+		if resolveErr != nil {
+			log.Printf("[ABSENTEES ENDPOINT] Failed to resolve mark-entry window: %v", resolveErr)
+			http.Error(w, "Failed to resolve mark entry window", http.StatusInternalServerError)
+			return
+		}
+		if !windowOpen || windowID == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]interface{}{})
+			return
+		}
+		resolvedWindowID = windowID
+	}
 
-	// Simply return all absentees for this course
-	// The blocking logic in SaveStudentMarks will match against the specific window ID
-	// This avoids timezone issues with SQL NOW() vs Go time
+	log.Printf("[ABSENTEES ENDPOINT] Fetching absentees for courseID=%d, teacherID=%s, windowID=%d", courseID, teacherID, resolvedWindowID)
+
 	query := `
 		SELECT ea.student_id, ea.mark_category_id, ea.id, ea.window_id, COALESCE(mct.name, '') AS category_name
 		FROM exam_absentees ea
 		LEFT JOIN mark_category_types mct ON ea.mark_category_id = mct.id
 		WHERE ea.course_id = ?
 	`
+	args := []interface{}{courseID}
+	if resolvedWindowID > 0 {
+		query += ` AND ea.window_id = ?`
+		args = append(args, resolvedWindowID)
+	}
 
-	log.Printf("[ABSENTEES ENDPOINT] Executing query for courseID=%d", courseID)
+	log.Printf("[ABSENTEES ENDPOINT] Executing query for courseID=%d, windowID=%d", courseID, resolvedWindowID)
 
-	rows, err := database.Query(query, courseID)
+	rows, err := database.Query(query, args...)
 	if err != nil {
 		log.Printf("[ABSENTEES ENDPOINT] Query ERROR: %v", err)
 		http.Error(w, "Failed to fetch absentees", http.StatusInternalServerError)

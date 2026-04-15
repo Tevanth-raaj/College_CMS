@@ -455,10 +455,7 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, windowIDs, _, allWindowErr := resolveMarkEntryWindow(saveRequest.CourseID, normalizedFacultyID)
-	if allWindowErr != nil || len(windowIDs) == 0 {
-		windowIDs = []int{windowID}
-	}
+	windowIDs := []int{windowID}
 
 	// Get assigned student IDs for this user (if student-specific permissions exist)
 	assignedStudents, err := getAssignedStudentIDs(normalizedFacultyID, saveRequest.CourseID)

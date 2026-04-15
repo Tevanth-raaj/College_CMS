@@ -19,35 +19,44 @@ func GetStudents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	query := `
 			SELECT 
-				id, 
-				COALESCE(enrollment_no, ''), 
-				COALESCE(register_no, ''), 
-				COALESCE(dte_reg_no, ''), 
-				COALESCE(application_no, ''), 
-				COALESCE(admission_no, ''), 
-				student_name, 
-				COALESCE(gender, ''), 
-				COALESCE(CAST(dob AS CHAR), ''), 
-				COALESCE(age, 0),
-				COALESCE(father_name, ''), 
-				COALESCE(mother_name, ''), 
-				COALESCE(guardian_name, ''), 
-				COALESCE(religion, ''), 
-				COALESCE(nationality, ''),
-				COALESCE(community, ''), 
-				COALESCE(mother_tongue, ''), 
-				COALESCE(blood_group, ''), 
-				COALESCE(aadhar_no, ''), 
-				COALESCE(parent_occupation, ''),
-				COALESCE(designation, ''), 
-				COALESCE(place_of_work, ''), 
-				COALESCE(parent_income, 0), 
-				COALESCE(status, 1),
-				learning_mode_id,
-				department_id
-			FROM students
-			WHERE status = 1
-			ORDER BY id DESC
+				s.id, 
+				COALESCE(s.enrollment_no, ''), 
+				COALESCE(s.register_no, ''), 
+				COALESCE(s.dte_reg_no, ''), 
+				COALESCE(s.application_no, ''), 
+				COALESCE(s.admission_no, ''), 
+				s.student_name, 
+				COALESCE(s.gender, ''), 
+				COALESCE(CAST(s.dob AS CHAR), ''), 
+				COALESCE(s.age, 0),
+				COALESCE(s.father_name, ''), 
+				COALESCE(s.mother_name, ''), 
+				COALESCE(s.guardian_name, ''), 
+				COALESCE(s.religion, ''), 
+				COALESCE(s.nationality, ''),
+				COALESCE(s.community, ''), 
+				COALESCE(s.mother_tongue, ''), 
+				COALESCE(s.blood_group, ''), 
+				COALESCE(s.aadhar_no, ''), 
+				COALESCE(s.parent_occupation, ''),
+				COALESCE(s.designation, ''), 
+				COALESCE(s.place_of_work, ''), 
+				COALESCE(s.parent_income, 0), 
+				COALESCE(s.status, 1),
+				s.learning_mode_id,
+				COALESCE(NULLIF(TRIM(lm.code), ''), NULLIF(TRIM(lm.name), ''), '') AS learning_mode,
+				s.department_id,
+				COALESCE(ac.year_level, s.year, ad.year, 0) AS year,
+				COALESCE(d.department_code, '') AS department_code,
+				COALESCE(NULLIF(TRIM(cd.student_email), ''), NULLIF(TRIM(cd.official_email), ''), NULLIF(TRIM(s.email), ''), '') AS mail_id
+			FROM students s
+			LEFT JOIN academic_details ad ON ad.student_id = s.id
+			LEFT JOIN academic_calendar ac ON ac.id = s.year
+			LEFT JOIN learning_modes lm ON lm.id = s.learning_mode_id
+			LEFT JOIN departments d ON d.id = s.department_id
+			LEFT JOIN contact_details cd ON cd.student_id = s.id
+			WHERE s.status = 1
+			ORDER BY s.id DESC
 		`
 
 	rows, err := db.DB.Query(query)
@@ -70,7 +79,8 @@ func GetStudents(w http.ResponseWriter, r *http.Request) {
 			&student.MotherTongue, &student.BloodGroup, &student.AadharNo,
 			&student.ParentOccupation, &student.Designation, &student.PlaceOfWork,
 			&student.ParentIncome, &student.Status,
-			&student.LearningModeID, &student.DepartmentID,
+			&student.LearningModeID, &student.LearningMode, &student.DepartmentID,
+			&student.Year, &student.DepartmentCode, &student.MailID,
 		)
 		if err != nil {
 			log.Printf("Error scanning student row: %v", err)

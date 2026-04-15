@@ -332,9 +332,11 @@ function MarkEntryPage() {
   const loadAbsentees = async () => {
     if (!selectedCourse) return
     try {
-      const url = facultyIdentifier 
-        ? `${API_BASE_URL}/course/${selectedCourse.course_id}/exam-absentees?teacher_id=${facultyIdentifier}`
-        : `${API_BASE_URL}/course/${selectedCourse.course_id}/exam-absentees`
+      const params = new URLSearchParams()
+      if (facultyIdentifier) params.set('teacher_id', facultyIdentifier)
+      if (selectedCourse?.window_id) params.set('window_id', selectedCourse.window_id)
+      const query = params.toString()
+      const url = `${API_BASE_URL}/course/${selectedCourse.course_id}/exam-absentees${query ? `?${query}` : ''}`
       const res = await fetch(url)
       if (res.ok) {
         const data = await res.json()
@@ -705,6 +707,7 @@ function MarkEntryPage() {
             body: JSON.stringify({
               course_id: selectedCourse.course_id,
               faculty_id: facultyId,
+              window_id: selectedCourse.window_id,
               mark_entries: markEntries,
               delete_entries: deleteEntries,
             }),
@@ -1068,6 +1071,7 @@ function MarkEntryPage() {
         body: JSON.stringify({
           course_id: selectedCourse.course_id,
           faculty_id: facultyId,
+          window_id: selectedCourse.window_id,
           mark_entries: markEntries,
           delete_entries: deleteEntries,
         }),
