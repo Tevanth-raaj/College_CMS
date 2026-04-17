@@ -477,7 +477,13 @@
     // Fetch list of students from API
     const fetchStudents = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/students`)
+        const params = new URLSearchParams()
+        if (yearFilter !== 'all') {
+          params.set('year_level', yearFilter)
+        }
+
+        const url = `${API_BASE_URL}/students${params.toString() ? `?${params.toString()}` : ''}`
+        const res = await fetch(url)
         if (!res.ok) throw new Error('Failed to fetch students')
         const data = await res.json()
         setStudents(Array.isArray(data) ? data : [])
@@ -512,18 +518,16 @@
 
     useEffect(() => {
       fetchStudents()
+    }, [yearFilter])
+
+    useEffect(() => {
       fetchCurriculums()
       fetchDepartments()
     }, [])
 
     const yearOptions = useMemo(() => {
-      const years = [...new Set(
-        students
-          .map((s) => Number(s.year))
-          .filter((y) => Number.isFinite(y) && y > 0)
-      )]
-      return years.sort((a, b) => a - b)
-    }, [students])
+      return [1, 2, 3, 4]
+    }, [])
 
     const learningModeOptions = useMemo(() => {
       const modes = [...new Set(
@@ -831,7 +835,7 @@
                   Reset Filters
                 </button>
                 {yearFilter !== 'all' && (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">Year: {yearFilter}</span>
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">Year: Year {yearFilter}</span>
                 )}
                 {learningModeFilter !== 'all' && (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">Mode: {learningModeFilter}</span>

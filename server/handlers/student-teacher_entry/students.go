@@ -9,6 +9,7 @@ import (
 	"server/db"
 	"server/models"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 )
@@ -17,6 +18,20 @@ import (
 func GetStudents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	yearLevelParam := strings.TrimSpace(r.URL.Query().Get("year_level"))
+
+	var (
+		yearLevel int
+		err       error
+	)
+	if yearLevelParam != "" {
+		yearLevel, err = strconv.Atoi(yearLevelParam)
+		if err != nil || yearLevel < 1 || yearLevel > 4 {
+			http.Error(w, "year_level must be between 1 and 4", http.StatusBadRequest)
+			return
+		}
+	}
+
 	query := `
 			SELECT 
 				s.id, 
@@ -46,7 +61,7 @@ func GetStudents(w http.ResponseWriter, r *http.Request) {
 				s.learning_mode_id,
 				COALESCE(NULLIF(TRIM(lm.code), ''), NULLIF(TRIM(lm.name), ''), '') AS learning_mode,
 				s.department_id,
-				COALESCE(ac.year_level, s.year, ad.year, 0) AS year,
+				COALESCE(ac.year_level, 0) AS year,
 				COALESCE(d.department_code, '') AS department_code,
 				COALESCE(NULLIF(TRIM(cd.student_email), ''), NULLIF(TRIM(cd.official_email), ''), NULLIF(TRIM(s.email), ''), '') AS mail_id
 			FROM students s
@@ -56,10 +71,19 @@ func GetStudents(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN departments d ON d.id = s.department_id
 			LEFT JOIN contact_details cd ON cd.student_id = s.id
 			WHERE s.status = 1
+	`
+
+	args := []interface{}{}
+	if yearLevelParam != "" {
+		query += "\n\t\t\tAND ac.year_level = ?"
+		args = append(args, yearLevel)
+	}
+
+	query += `
 			ORDER BY s.id DESC
 		`
 
-	rows, err := db.DB.Query(query)
+	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		log.Printf("Error querying students: %v", err)
 		http.Error(w, "Failed to fetch students", http.StatusInternalServerError)
