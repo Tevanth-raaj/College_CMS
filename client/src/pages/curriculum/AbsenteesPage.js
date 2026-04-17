@@ -543,6 +543,8 @@ function RecordedAbsenteesSection({
           key,
           window_id: a.window_id,
           window_name: a.window_name || '',
+          department_name: a.department_name || '',
+          department_names: Array.isArray(a.department_names) ? a.department_names : [],
           earliest: a.created_at,
           window_end_at: a.window_end_at || null,
           rows: [],
@@ -550,6 +552,10 @@ function RecordedAbsenteesSection({
       }
       const g = map.get(key)
       if (a.window_name && !g.window_name) g.window_name = a.window_name
+      if (Array.isArray(a.department_names) && a.department_names.length > 0 && (!g.department_names || g.department_names.length === 0)) {
+        g.department_names = a.department_names
+      }
+      if (a.department_name && !g.department_name) g.department_name = a.department_name
       g.rows.push(a)
       if (new Date(a.created_at) < new Date(g.earliest)) g.earliest = a.created_at
       // Keep the latest window_end_at across rows
@@ -652,6 +658,12 @@ function RecordedAbsenteesSection({
             /* unique modes */
             const modeSet = [...new Set(group.rows.map(r => r.learning_mode_id))]
 
+            const deptLabel = Array.isArray(group.department_names) && group.department_names.length > 0
+              ? group.department_names.join(', ')
+              : (group.department_name || 'All Departments')
+
+            const windowTitle = (group.window_name || '').trim() || `Window #${group.window_id}`
+
             /* check if exam window is over */
             const isExamOver = group.window_end_at && new Date(group.window_end_at) < new Date()
 
@@ -685,9 +697,8 @@ function RecordedAbsenteesSection({
 
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
-                    {group.window_name && (
-                      <p className="text-sm font-semibold text-gray-800 mb-1 truncate">{group.window_name}</p>
-                    )}
+                    <p className="text-sm font-semibold text-gray-800 mb-1 truncate">{windowTitle}</p>
+                    <p className="text-xs text-gray-500 mb-1 truncate">{deptLabel}</p>
                     <div className="flex items-center gap-2 flex-wrap">
                       {isExamOver && (
                         <span className="px-2.5 py-0.5 bg-gray-200 text-gray-600 text-xs font-bold rounded-full uppercase tracking-wide">

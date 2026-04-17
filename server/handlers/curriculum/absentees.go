@@ -1,6 +1,7 @@
 package curriculum
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,10 @@ type ExamAbsentee struct {
 	CourseID       int        `json:"course_id"`
 	CourseCode     string     `json:"course_code,omitempty"`
 	CourseName     string     `json:"course_name,omitempty"`
+	DepartmentID   *int       `json:"department_id,omitempty"`
+	DepartmentName string     `json:"department_name,omitempty"`
+	DepartmentIDs  []int      `json:"department_ids,omitempty"`
+	DepartmentList []string   `json:"department_names,omitempty"`
 	StudentID      int        `json:"student_id"`
 	StudentName    string     `json:"student_name,omitempty"`
 	RegisterNo     string     `json:"register_no,omitempty"`
@@ -186,6 +191,12 @@ func PreviewAbsentees(w http.ResponseWriter, r *http.Request) {
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+
+	if err := ensureWindowDepartmentsTable(database); err != nil {
+		log.Printf("absentees: failed ensuring window department mapping table: %v", err)
+		http.Error(w, "Failed to fetch absentees", http.StatusInternalServerError)
 		return
 	}
 
@@ -518,6 +529,8 @@ func GetExamAbsentees(w http.ResponseWriter, r *http.Request) {
 			ea.course_id,
 			COALESCE(c.course_code, '')             AS course_code,
 			COALESCE(c.course_name, '')             AS course_name,
+			mew.department_id,
+			COALESCE(d.department_name, '')          AS department_name,
 			ea.student_id,
 			COALESCE(s.student_name, '')            AS student_name,
 			COALESCE(s.register_no, '')             AS register_no,
@@ -532,9 +545,11 @@ func GetExamAbsentees(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN students s ON ea.student_id = s.id
 		LEFT JOIN mark_category_types mct ON ea.mark_category_id = mct.id
 		LEFT JOIN mark_entry_windows mew ON ea.window_id = mew.id
+		LEFT JOIN departments d ON mew.department_id = d.id
 		%s
 		GROUP BY ea.window_id, ea.course_id, ea.student_id, ea.mark_category_id,
 		         ea.learning_mode_id, c.course_code, c.course_name,
+		         mew.department_id, d.department_name,
 		         s.student_name, s.register_no, mct.name
 		ORDER BY MIN(ea.created_at) DESC
 	`, where)
@@ -550,8 +565,11 @@ func GetExamAbsentees(w http.ResponseWriter, r *http.Request) {
 	var result []ExamAbsentee
 	for rows.Next() {
 		var a ExamAbsentee
+		var deptID sql.NullInt64
+		var deptName sql.NullString
 		if err := rows.Scan(
 			&a.ID, &a.WindowID, &a.CourseID, &a.CourseCode, &a.CourseName,
+			&deptID, &deptName,
 			&a.StudentID, &a.StudentName, &a.RegisterNo,
 			&a.MarkCategoryID, &a.CategoryName, &a.LearningModeID, &a.CreatedAt,
 			&a.WindowEndAt, &a.WindowName,
@@ -559,6 +577,20 @@ func GetExamAbsentees(w http.ResponseWriter, r *http.Request) {
 			log.Printf("absentees: scan error: %v", err)
 			continue
 		}
+
+		if deptID.Valid {
+			value := int(deptID.Int64)
+			a.DepartmentID = &value
+		}
+		a.DepartmentName = strings.TrimSpace(deptName.String)
+
+		mappedIDs, mappedNames := getWindowDepartments(database, a.WindowID, a.DepartmentID)
+		a.DepartmentIDs = mappedIDs
+		a.DepartmentList = mappedNames
+		if len(mappedNames) > 0 {
+			a.DepartmentName = strings.Join(mappedNames, ", ")
+		}
+
 		result = append(result, a)
 	}
 	if result == nil {

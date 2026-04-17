@@ -16,6 +16,107 @@ import (
 
 const markEntryTimeLayout = "2006-01-02T15:04"
 
+func sanitizeDepartmentIDs(ids []int) []int {
+	seen := make(map[int]struct{})
+	cleaned := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		cleaned = append(cleaned, id)
+	}
+	return cleaned
+}
+
+func ensureWindowDepartmentsTable(database *sql.DB) error {
+	_, err := database.Exec(`
+		CREATE TABLE IF NOT EXISTS mark_entry_window_departments (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			window_id INT NOT NULL,
+			department_id INT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uq_window_department (window_id, department_id),
+			KEY idx_window_id (window_id),
+			KEY idx_department_id (department_id),
+			CONSTRAINT fk_mewd_window FOREIGN KEY (window_id) REFERENCES mark_entry_windows(id) ON DELETE CASCADE,
+			CONSTRAINT fk_mewd_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
+		)
+	`)
+	return err
+}
+
+func replaceWindowDepartmentsTx(tx *sql.Tx, windowID int, departmentIDs []int) error {
+	if _, err := tx.Exec(`DELETE FROM mark_entry_window_departments WHERE window_id = ?`, windowID); err != nil {
+		return err
+	}
+
+	for _, departmentID := range sanitizeDepartmentIDs(departmentIDs) {
+		if _, err := tx.Exec(`
+			INSERT INTO mark_entry_window_departments (window_id, department_id)
+			VALUES (?, ?)
+		`, windowID, departmentID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func replaceWindowDepartments(database *sql.DB, windowID int, departmentIDs []int) error {
+	if _, err := database.Exec(`DELETE FROM mark_entry_window_departments WHERE window_id = ?`, windowID); err != nil {
+		return err
+	}
+
+	for _, departmentID := range sanitizeDepartmentIDs(departmentIDs) {
+		if _, err := database.Exec(`
+			INSERT INTO mark_entry_window_departments (window_id, department_id)
+			VALUES (?, ?)
+		`, windowID, departmentID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getWindowDepartments(database *sql.DB, windowID int, fallbackDepartmentID *int) ([]int, []string) {
+	deptIDs := make([]int, 0)
+	deptNames := make([]string, 0)
+
+	rows, err := database.Query(`
+		SELECT d.id, d.department_name
+		FROM mark_entry_window_departments mwd
+		INNER JOIN departments d ON d.id = mwd.department_id
+		WHERE mwd.window_id = ?
+		ORDER BY d.department_name
+	`, windowID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id int
+			var name sql.NullString
+			if scanErr := rows.Scan(&id, &name); scanErr == nil {
+				deptIDs = append(deptIDs, id)
+				deptNames = append(deptNames, strings.TrimSpace(name.String))
+			}
+		}
+	}
+
+	if len(deptIDs) == 0 && fallbackDepartmentID != nil && *fallbackDepartmentID > 0 {
+		deptIDs = append(deptIDs, *fallbackDepartmentID)
+		var fallbackName sql.NullString
+		if err := database.QueryRow(`SELECT department_name FROM departments WHERE id = ?`, *fallbackDepartmentID).Scan(&fallbackName); err == nil {
+			deptNames = append(deptNames, strings.TrimSpace(fallbackName.String))
+		}
+	}
+
+	return deptIDs, deptNames
+}
+
 // parseDateTime attempts to parse datetime in multiple formats (ISO 8601 with timezone, or simple local format)
 func parseDateTime(dateStr string) (time.Time, error) {
 	// Try RFC3339 first (ISO 8601 with timezone: "2006-01-02T15:04:05Z07:00")
@@ -91,6 +192,12 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+
+	if err := ensureWindowDepartmentsTable(database); err != nil {
+		log.Printf("Error ensuring mark_entry_window_departments table: %v", err)
+		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
 		return
 	}
 
@@ -260,25 +367,14 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		teacherValue = sql.NullString{String: strings.TrimSpace(*req.TeacherID), Valid: true}
 	}
 
-	departmentValue := sql.NullInt64{}
-	if req.DepartmentID != nil {
-		departmentValue = sql.NullInt64{Int64: int64(*req.DepartmentID), Valid: true}
+	departmentIDs := sanitizeDepartmentIDs(req.DepartmentIDs)
+	if len(departmentIDs) == 0 && req.DepartmentID != nil && *req.DepartmentID > 0 {
+		departmentIDs = []int{*req.DepartmentID}
 	}
 
-	departmentValues := []sql.NullInt64{departmentValue}
-	if len(req.DepartmentIDs) > 0 {
-		departmentValues = []sql.NullInt64{}
-		seenDepartmentIDs := make(map[int]bool)
-		for _, departmentID := range req.DepartmentIDs {
-			if departmentID <= 0 || seenDepartmentIDs[departmentID] {
-				continue
-			}
-			seenDepartmentIDs[departmentID] = true
-			departmentValues = append(departmentValues, sql.NullInt64{Int64: int64(departmentID), Valid: true})
-		}
-		if len(departmentValues) == 0 {
-			departmentValues = []sql.NullInt64{{}}
-		}
+	departmentValue := sql.NullInt64{}
+	if len(departmentIDs) == 1 {
+		departmentValue = sql.NullInt64{Int64: int64(departmentIDs[0]), Valid: true}
 	}
 
 	semesterValue := sql.NullInt64{}
@@ -303,42 +399,44 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	createdWindowIDs := make([]int, 0, len(departmentValues))
-	for _, deptValue := range departmentValues {
-		result, execErr := tx.Exec(`
-			INSERT INTO mark_entry_windows
-			(teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, teacherValue, deptValue, semesterValue, courseValue, startAt, endAt, enabledValue, req.WindowName)
-		if execErr != nil {
-			_ = tx.Rollback()
-			log.Printf("Error saving mark entry window: %v", execErr)
-			http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
-			return
-		}
+	result, execErr := tx.Exec(`
+		INSERT INTO mark_entry_windows
+		(teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, teacherValue, departmentValue, semesterValue, courseValue, startAt, endAt, enabledValue, req.WindowName)
+	if execErr != nil {
+		_ = tx.Rollback()
+		log.Printf("Error saving mark entry window: %v", execErr)
+		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
+		return
+	}
 
-		windowID, idErr := result.LastInsertId()
-		if idErr != nil {
-			_ = tx.Rollback()
-			log.Printf("Error getting inserted window ID: %v", idErr)
-			http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
-			return
-		}
+	windowID, idErr := result.LastInsertId()
+	if idErr != nil {
+		_ = tx.Rollback()
+		log.Printf("Error getting inserted window ID: %v", idErr)
+		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
+		return
+	}
 
-		createdWindowIDs = append(createdWindowIDs, int(windowID))
+	if err := replaceWindowDepartmentsTx(tx, int(windowID), departmentIDs); err != nil {
+		_ = tx.Rollback()
+		log.Printf("Error saving selected window departments: %v", err)
+		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
+		return
+	}
 
-		if len(req.ComponentIDs) > 0 {
-			for _, componentID := range req.ComponentIDs {
-				_, componentErr := tx.Exec(`
-					INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
-					VALUES (?, ?)
-				`, windowID, componentID)
-				if componentErr != nil {
-					_ = tx.Rollback()
-					log.Printf("Error saving window component for window %d: %v", windowID, componentErr)
-					http.Error(w, "Failed to save window components", http.StatusInternalServerError)
-					return
-				}
+	if len(req.ComponentIDs) > 0 {
+		for _, componentID := range req.ComponentIDs {
+			_, componentErr := tx.Exec(`
+				INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
+				VALUES (?, ?)
+			`, windowID, componentID)
+			if componentErr != nil {
+				_ = tx.Rollback()
+				log.Printf("Error saving window component for window %d: %v", windowID, componentErr)
+				http.Error(w, "Failed to save window components", http.StatusInternalServerError)
+				return
 			}
 		}
 	}
@@ -351,8 +449,8 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]interface{}{
 		"message":         "Mark entry window saved",
-		"window_ids":      createdWindowIDs,
-		"windows_created": len(createdWindowIDs),
+		"window_ids":      []int{int(windowID)},
+		"windows_created": 1,
 	}
 	json.NewEncoder(w).Encode(response)
 }
@@ -1145,6 +1243,8 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 		Enabled        bool      `json:"enabled"`
 		WindowName     string    `json:"window_name"`
 		Components     []int     `json:"component_ids"`
+		DepartmentIDs  []int     `json:"department_ids,omitempty"`
+		DepartmentList []string  `json:"department_names,omitempty"`
 		StudentCount   *int      `json:"student_count,omitempty"`
 	}
 
@@ -1247,6 +1347,11 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		window.DepartmentIDs, window.DepartmentList = getWindowDepartments(database, window.ID, window.DepartmentID)
+		if len(window.DepartmentList) > 0 {
+			window.DepartmentName = strings.Join(window.DepartmentList, ", ")
+		}
+
 		// Load components for this window
 		compRows, err := database.Query(`
 			SELECT assessment_component_id
@@ -1328,6 +1433,12 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := ensureWindowDepartmentsTable(database); err != nil {
+		log.Printf("Error ensuring mark_entry_window_departments table: %v", err)
+		http.Error(w, "Failed to update window", http.StatusInternalServerError)
+		return
+	}
+
 	// Parse times
 	startAt, err := parseDateTime(request.StartAt)
 	if err != nil {
@@ -1360,9 +1471,14 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	departmentIDs := sanitizeDepartmentIDs(request.DepartmentIDs)
+	if len(departmentIDs) == 0 && request.DepartmentID != nil && *request.DepartmentID > 0 {
+		departmentIDs = []int{*request.DepartmentID}
+	}
+
 	departmentIDValue := interface{}(nil)
-	if request.DepartmentID != nil && *request.DepartmentID > 0 {
-		departmentIDValue = *request.DepartmentID
+	if len(departmentIDs) == 1 {
+		departmentIDValue = departmentIDs[0]
 	}
 
 	semesterValue := interface{}(nil)
@@ -1408,6 +1524,18 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(departmentIDs) == 0 {
+		existingMappedDepartmentIDs, _ := getWindowDepartments(database, windowID, nil)
+		if len(existingMappedDepartmentIDs) > 0 {
+			departmentIDs = existingMappedDepartmentIDs
+			if len(departmentIDs) == 1 {
+				departmentIDValue = departmentIDs[0]
+			}
+		} else if v, ok := departmentIDValue.(int); ok && v > 0 {
+			departmentIDs = []int{v}
+		}
+	}
+
 	// Update window
 	updateQuery := `
 		UPDATE mark_entry_windows
@@ -1431,6 +1559,12 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Error updating window: %v", err)
 		http.Error(w, "Failed to update window", http.StatusInternalServerError)
+		return
+	}
+
+	if err := replaceWindowDepartments(database, windowID, departmentIDs); err != nil {
+		log.Printf("Error updating selected window departments for window %d: %v", windowID, err)
+		http.Error(w, "Failed to update window departments", http.StatusInternalServerError)
 		return
 	}
 
@@ -1881,6 +2015,8 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		WindowName     string           `json:"window_name"`
 		DepartmentID   *int             `json:"department_id"`
 		DepartmentName string           `json:"department_name"`
+		DepartmentIDs  []int            `json:"department_ids,omitempty"`
+		DepartmentList []string         `json:"department_names,omitempty"`
 		Semester       *int             `json:"semester"`
 		CourseID       *int             `json:"course_id"`
 		CourseCode     string           `json:"course_code"`
@@ -1959,6 +2095,10 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 			v := int(deptID.Int64)
 			windowData.DepartmentID = &v
 		}
+		windowData.DepartmentIDs, windowData.DepartmentList = getWindowDepartments(database, windowID, windowData.DepartmentID)
+		if len(windowData.DepartmentList) > 0 {
+			windowData.DepartmentName = strings.Join(windowData.DepartmentList, ", ")
+		}
 		if semester.Valid {
 			v := int(semester.Int64)
 			windowData.Semester = &v
@@ -2003,7 +2143,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		// Determine which scope fields are meaningful (non-nil and non-zero where applicable)
 		hasTeacher := teacherID.Valid && teacherID.String != ""
 		hasCourse := courseID.Valid && courseID.Int64 != 0
-		hasDepartment := deptID.Valid && deptID.Int64 != 0
+		hasDepartment := len(windowData.DepartmentIDs) > 0
 		hasSemester := semester.Valid && semester.Int64 != 0
 
 		if !hasTeacher && !hasCourse && !hasDepartment && !hasSemester {
@@ -2027,8 +2167,12 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if hasDepartment {
-			whereClauses = append(whereClauses, "s.department_id = ?")
-			teacherArgs = append(teacherArgs, deptID.Int64)
+			placeholders := make([]string, 0, len(windowData.DepartmentIDs))
+			for _, selectedDepartmentID := range windowData.DepartmentIDs {
+				placeholders = append(placeholders, "?")
+				teacherArgs = append(teacherArgs, selectedDepartmentID)
+			}
+			whereClauses = append(whereClauses, fmt.Sprintf("s.department_id IN (%s)", strings.Join(placeholders, ",")))
 		}
 
 		if hasSemester {

@@ -249,6 +249,12 @@ func SaveMarkEntryPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := ensureWindowDepartmentsTable(database); err != nil {
+		log.Printf("Error ensuring mark_entry_window_departments table: %v", err)
+		http.Error(w, "Failed to create window", http.StatusInternalServerError)
+		return
+	}
+
 	tx, err := database.Begin()
 	if err != nil {
 		log.Printf("Error starting transaction: %v", err)
@@ -701,22 +707,14 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	departmentScopes := []sql.NullInt64{{}}
-	if len(req.DepartmentIDs) > 0 {
-		departmentScopes = []sql.NullInt64{}
-		seenDepartmentIDs := make(map[int]bool)
-		for _, departmentID := range req.DepartmentIDs {
-			if departmentID <= 0 || seenDepartmentIDs[departmentID] {
-				continue
-			}
-			seenDepartmentIDs[departmentID] = true
-			departmentScopes = append(departmentScopes, sql.NullInt64{Int64: int64(departmentID), Valid: true})
-		}
-		if len(departmentScopes) == 0 {
-			departmentScopes = []sql.NullInt64{{}}
-		}
-	} else if req.DepartmentID != nil && *req.DepartmentID > 0 {
-		departmentScopes = []sql.NullInt64{{Int64: int64(*req.DepartmentID), Valid: true}}
+	selectedDepartmentIDs := sanitizeDepartmentIDs(req.DepartmentIDs)
+	if len(selectedDepartmentIDs) == 0 && req.DepartmentID != nil && *req.DepartmentID > 0 {
+		selectedDepartmentIDs = []int{*req.DepartmentID}
+	}
+
+	departmentValue := sql.NullInt64{}
+	if len(selectedDepartmentIDs) == 1 {
+		departmentValue = sql.NullInt64{Int64: int64(selectedDepartmentIDs[0]), Valid: true}
 	}
 
 	studentDepartmentMap := make(map[int]int)
@@ -751,69 +749,79 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		studentRows.Close()
 	}
 
-	windowIDs := make([]int, 0, len(departmentScopes))
+	allowedDepartmentSet := make(map[int]struct{}, len(selectedDepartmentIDs))
+	for _, departmentID := range selectedDepartmentIDs {
+		allowedDepartmentSet[departmentID] = struct{}{}
+	}
+
+	windowIDs := make([]int, 0, 1)
 	assignmentsCreated := 0
 
-	for _, departmentScope := range departmentScopes {
-		result, execErr := tx.Exec(`
-			INSERT INTO mark_entry_windows 
-			(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
-			VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-		`, numericUserID, departmentScope, req.Semester, req.CourseID, req.StartAt, req.EndAt, req.WindowName)
-		if execErr != nil {
-			_ = tx.Rollback()
-			log.Printf("Error creating window: %v", execErr)
-			http.Error(w, "Failed to create window", http.StatusInternalServerError)
-			return
-		}
+	result, execErr := tx.Exec(`
+		INSERT INTO mark_entry_windows 
+		(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+	`, numericUserID, departmentValue, req.Semester, req.CourseID, req.StartAt, req.EndAt, req.WindowName)
+	if execErr != nil {
+		_ = tx.Rollback()
+		log.Printf("Error creating window: %v", execErr)
+		http.Error(w, "Failed to create window", http.StatusInternalServerError)
+		return
+	}
 
-		windowID, idErr := result.LastInsertId()
-		if idErr != nil {
-			_ = tx.Rollback()
-			log.Printf("Error getting window ID: %v", idErr)
-			http.Error(w, "Failed to get window ID", http.StatusInternalServerError)
-			return
-		}
-		windowIDs = append(windowIDs, int(windowID))
+	windowID, idErr := result.LastInsertId()
+	if idErr != nil {
+		_ = tx.Rollback()
+		log.Printf("Error getting window ID: %v", idErr)
+		http.Error(w, "Failed to get window ID", http.StatusInternalServerError)
+		return
+	}
+	windowIDs = append(windowIDs, int(windowID))
 
-		if len(req.ComponentIDs) > 0 {
-			for _, componentID := range req.ComponentIDs {
-				_, componentErr := tx.Exec(`
-					INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
-					VALUES (?, ?)
-				`, windowID, componentID)
-				if componentErr != nil {
-					_ = tx.Rollback()
-					log.Printf("Error adding component %d to window: %v", componentID, componentErr)
-					http.Error(w, "Failed to add components to window", http.StatusInternalServerError)
-					return
-				}
-			}
-		}
+	if err := replaceWindowDepartmentsTx(tx, int(windowID), selectedDepartmentIDs); err != nil {
+		_ = tx.Rollback()
+		log.Printf("Error saving selected departments for user window: %v", err)
+		http.Error(w, "Failed to save selected departments", http.StatusInternalServerError)
+		return
+	}
 
-		for _, studentID := range req.StudentIDs {
-			if departmentScope.Valid {
-				if studentDepartmentMap[studentID] != int(departmentScope.Int64) {
-					continue
-				}
-			}
-
-			assignResult, assignErr := tx.Exec(`
-				INSERT INTO mark_entry_student_permissions
-				(window_id, user_id, student_id, created_by)
-				VALUES (?, ?, ?, ?)
-			`, windowID, numericUserID, studentID, req.CreatedBy)
-			if assignErr != nil {
+	if len(req.ComponentIDs) > 0 {
+		for _, componentID := range req.ComponentIDs {
+			_, componentErr := tx.Exec(`
+				INSERT INTO mark_entry_window_components (window_id, assessment_component_id)
+				VALUES (?, ?)
+			`, windowID, componentID)
+			if componentErr != nil {
 				_ = tx.Rollback()
-				log.Printf("ERROR assigning student %d to window %d: %v", studentID, windowID, assignErr)
-				http.Error(w, fmt.Sprintf("Failed to assign student %d: %v", studentID, assignErr), http.StatusInternalServerError)
+				log.Printf("Error adding component %d to window: %v", componentID, componentErr)
+				http.Error(w, "Failed to add components to window", http.StatusInternalServerError)
 				return
 			}
+		}
+	}
 
-			rowsAffected, _ := assignResult.RowsAffected()
-			if rowsAffected > 0 {
-				assignmentsCreated++
+	for _, studentID := range req.StudentIDs {
+		if len(allowedDepartmentSet) > 0 {
+			if _, ok := allowedDepartmentSet[studentDepartmentMap[studentID]]; !ok {
+				continue
 			}
+		}
+
+		assignResult, assignErr := tx.Exec(`
+			INSERT INTO mark_entry_student_permissions
+			(window_id, user_id, student_id, created_by)
+			VALUES (?, ?, ?, ?)
+		`, windowID, numericUserID, studentID, req.CreatedBy)
+		if assignErr != nil {
+			_ = tx.Rollback()
+			log.Printf("ERROR assigning student %d to window %d: %v", studentID, windowID, assignErr)
+			http.Error(w, fmt.Sprintf("Failed to assign student %d: %v", studentID, assignErr), http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, _ := assignResult.RowsAffected()
+		if rowsAffected > 0 {
+			assignmentsCreated++
 		}
 	}
 

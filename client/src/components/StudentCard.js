@@ -35,8 +35,8 @@ function StudentCard({ student, onEdit, onDelete }) {
           <h3 className="text-xl font-bold text-gray-900 truncate">
             {student.student_name || "—"}
           </h3>
-          <p className="text-sm text-primary-700 font-medium mt-1">
-            {student.enrollment_no || "—"}
+          <p className="text-sm text-primary-700 font-medium mt-1" title={student.register_no || ""}>
+            {student.register_no || ""}
           </p>
         </div>
       </div>
