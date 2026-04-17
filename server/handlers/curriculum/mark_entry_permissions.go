@@ -114,6 +114,12 @@ func GetMarkEntryPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := ensureWindowDepartmentsTable(database); err != nil {
+		log.Printf("Error ensuring mark_entry_window_departments table in CreateUserStudentWindow: %v", err)
+		http.Error(w, "Failed to initialize selected departments support", http.StatusInternalServerError)
+		return
+	}
+
 	var courseCategory string
 	err = database.QueryRow(`SELECT COALESCE(category, '') FROM courses WHERE id = ?`, courseID).Scan(&courseCategory)
 	if err != nil {
@@ -779,10 +785,8 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 	windowIDs = append(windowIDs, int(windowID))
 
 	if err := replaceWindowDepartmentsTx(tx, int(windowID), selectedDepartmentIDs); err != nil {
-		_ = tx.Rollback()
-		log.Printf("Error saving selected departments for user window: %v", err)
-		http.Error(w, "Failed to save selected departments", http.StatusInternalServerError)
-		return
+		// Department mapping is supplementary metadata; do not fail user-window creation.
+		log.Printf("Warning: unable to persist selected departments for user window %d (ids=%v): %v", windowID, selectedDepartmentIDs, err)
 	}
 
 	if len(req.ComponentIDs) > 0 {

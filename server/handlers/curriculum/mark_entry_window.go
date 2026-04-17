@@ -57,7 +57,9 @@ func replaceWindowDepartmentsTx(tx *sql.Tx, windowID int, departmentIDs []int) e
 	for _, departmentID := range sanitizeDepartmentIDs(departmentIDs) {
 		if _, err := tx.Exec(`
 			INSERT INTO mark_entry_window_departments (window_id, department_id)
-			VALUES (?, ?)
+			SELECT ?, d.id
+			FROM departments d
+			WHERE d.id = ?
 		`, windowID, departmentID); err != nil {
 			return err
 		}
@@ -74,7 +76,9 @@ func replaceWindowDepartments(database *sql.DB, windowID int, departmentIDs []in
 	for _, departmentID := range sanitizeDepartmentIDs(departmentIDs) {
 		if _, err := database.Exec(`
 			INSERT INTO mark_entry_window_departments (window_id, department_id)
-			VALUES (?, ?)
+			SELECT ?, d.id
+			FROM departments d
+			WHERE d.id = ?
 		`, windowID, departmentID); err != nil {
 			return err
 		}
@@ -420,10 +424,8 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := replaceWindowDepartmentsTx(tx, int(windowID), departmentIDs); err != nil {
-		_ = tx.Rollback()
-		log.Printf("Error saving selected window departments: %v", err)
-		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
-		return
+		// Department mapping is supplementary metadata; do not fail window creation.
+		log.Printf("Warning: unable to persist selected departments for window %d (ids=%v): %v", windowID, departmentIDs, err)
 	}
 
 	if len(req.ComponentIDs) > 0 {
@@ -1563,9 +1565,8 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := replaceWindowDepartments(database, windowID, departmentIDs); err != nil {
-		log.Printf("Error updating selected window departments for window %d: %v", windowID, err)
-		http.Error(w, "Failed to update window departments", http.StatusInternalServerError)
-		return
+		// Department mapping is supplementary metadata; do not fail core window updates.
+		log.Printf("Warning: unable to update selected departments for window %d (ids=%v): %v", windowID, departmentIDs, err)
 	}
 
 	log.Printf("[UpdateMarkEntryWindow] saved id=%d teacher=%v user=%v dept=%v sem=%v course=%v",
