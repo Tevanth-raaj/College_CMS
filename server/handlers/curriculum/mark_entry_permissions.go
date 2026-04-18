@@ -687,6 +687,23 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	startAt, err := parseDateTime(req.StartAt)
+	if err != nil {
+		http.Error(w, "Invalid start_at", http.StatusBadRequest)
+		return
+	}
+
+	endAt, err := parseDateTime(req.EndAt)
+	if err != nil {
+		http.Error(w, "Invalid end_at", http.StatusBadRequest)
+		return
+	}
+
+	if !endAt.After(startAt) {
+		http.Error(w, "end_at must be after start_at", http.StatusBadRequest)
+		return
+	}
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
@@ -695,7 +712,7 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 
 	// Lookup numeric user ID from username
 	var numericUserID int
-	err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, req.UserID).Scan(&numericUserID)
+	err = database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, req.UserID).Scan(&numericUserID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "User not found or inactive", http.StatusBadRequest)
@@ -767,7 +784,7 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO mark_entry_windows 
 		(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
 		VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-	`, numericUserID, departmentValue, req.Semester, req.CourseID, req.StartAt, req.EndAt, req.WindowName)
+	`, numericUserID, departmentValue, req.Semester, req.CourseID, startAt, endAt, req.WindowName)
 	if execErr != nil {
 		_ = tx.Rollback()
 		log.Printf("Error creating window: %v", execErr)
@@ -891,6 +908,16 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	windowIDStr := r.URL.Query().Get("window_id")
+	var windowID *int
+	if windowIDStr != "" {
+		id, err := strconv.Atoi(windowIDStr)
+		if err == nil && id > 0 {
+			windowID = &id
+			log.Printf("[DEBUG] GetUserAssignedStudents: window_id filter=%d", id)
+		}
+	}
+
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
@@ -911,7 +938,7 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[DEBUG] GetUserAssignedStudents: Resolved user identifier '%s' to user_id=%d", userIdentifier, numericUserID)
 
-	log.Printf("[INFO] GetUserAssignedStudents: user_id=%s resolved_user_id=%d course_id=%v now=%s", userIdentifier, numericUserID, courseID, time.Now().Format("2006-01-02 15:04:05"))
+	log.Printf("[INFO] GetUserAssignedStudents: user_id=%s resolved_user_id=%d course_id=%v window_id=%v now=%s", userIdentifier, numericUserID, courseID, windowID, time.Now().Format("2006-01-02 15:04:05"))
 
 	now := time.Now()
 	query := `
@@ -947,6 +974,10 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 	if courseID != nil {
 		query += " AND (mew.course_id = ? OR (mew.course_id IS NULL AND EXISTS (SELECT 1 FROM student_courses sc WHERE sc.student_id = s.id AND sc.course_id = ?)))"
 		args = append(args, *courseID, *courseID)
+	}
+	if windowID != nil {
+		query += " AND mew.id = ?"
+		args = append(args, *windowID)
 	}
 
 	query += " ORDER BY s.student_name ASC"
@@ -990,6 +1021,12 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var assignedStudents []models.AssignedStudentInfo
+	type dedupeCandidate struct {
+		student models.AssignedStudentInfo
+		startAt time.Time
+		endAt   time.Time
+	}
+	dedupedByStudentCourse := make(map[string]dedupeCandidate)
 	rowCount := 0
 	log.Printf("[DEBUG] GetUserAssignedStudents: Starting to scan rows...")
 	for rows.Next() {
@@ -1044,11 +1081,39 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DEBUG] GetUserAssignedStudents: Row %d - student_id=%d, name=%s, window_id=%d, window: %s to %s",
 			rowCount+1, student.StudentID, student.StudentName, student.WindowID, student.WindowStart, student.WindowEnd)
 
-		assignedStudents = append(assignedStudents, student)
+		courseKey := 0
+		if student.CourseID != nil {
+			courseKey = *student.CourseID
+		}
+		dedupeKey := fmt.Sprintf("%d:%d", courseKey, student.StudentID)
+		existing, exists := dedupedByStudentCourse[dedupeKey]
+		if !exists || endAt.After(existing.endAt) || (endAt.Equal(existing.endAt) && startAt.After(existing.startAt)) {
+			dedupedByStudentCourse[dedupeKey] = dedupeCandidate{
+				student: student,
+				startAt: startAt,
+				endAt:   endAt,
+			}
+		}
 		rowCount++
 	}
 
-	log.Printf("[INFO] GetUserAssignedStudents: Total rows returned=%d", rowCount)
+	for _, candidate := range dedupedByStudentCourse {
+		assignedStudents = append(assignedStudents, candidate.student)
+	}
+
+	sort.Slice(assignedStudents, func(i, j int) bool {
+		leftName := strings.ToLower(strings.TrimSpace(assignedStudents[i].StudentName))
+		rightName := strings.ToLower(strings.TrimSpace(assignedStudents[j].StudentName))
+		if leftName == rightName {
+			if assignedStudents[i].EnrollmentNo == assignedStudents[j].EnrollmentNo {
+				return assignedStudents[i].StudentID < assignedStudents[j].StudentID
+			}
+			return assignedStudents[i].EnrollmentNo < assignedStudents[j].EnrollmentNo
+		}
+		return leftName < rightName
+	})
+
+	log.Printf("[INFO] GetUserAssignedStudents: Total rows returned=%d, after dedupe=%d", rowCount, len(assignedStudents))
 
 	if assignedStudents == nil {
 		log.Printf("[DEBUG] GetUserAssignedStudents: No students found, returning empty array")

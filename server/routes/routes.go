@@ -167,6 +167,8 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/api/mark-entry-windows/stats", curriculum.GetMarkEntryStats).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry/stats", curriculum.GetMarkEntryStats).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry-windows/pending-submissions", curriculum.GetWindowsPendingSubmissions).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/mark-entry-windows/{id}/user-submissions", curriculum.GetWindowUserSubmissionsSummary).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/mark-entry-windows/{id}/user-students", curriculum.GetWindowUserEnteredStudents).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/mark-entry-windows/extend-for-teachers", curriculum.ExtendWindowForTeachers).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/mark-entry-windows/{id}", curriculum.UpdateMarkEntryWindow).Methods("PUT", "OPTIONS")
 	router.HandleFunc("/api/mark-entry-windows/{id}", curriculum.DeleteMarkEntryWindow).Methods("DELETE", "OPTIONS")

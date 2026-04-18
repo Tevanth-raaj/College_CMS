@@ -1,21 +1,57 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
 
 function MarkEntryWindowDetailsPage() {
   const { windowId } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [windowData, setWindowData] = useState(null)
+  const [userSummary, setUserSummary] = useState(null)
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
+
+  const requestedScope = (searchParams.get('scope') || '').trim().toLowerCase()
+  const isUserScope = Boolean(windowData?.user_id) || requestedScope === 'user'
+
+  const departmentOptions = useMemo(() => {
+    const sourceIds = Array.isArray(windowData?.department_ids) ? windowData.department_ids : []
+    const sourceNames = Array.isArray(windowData?.department_names) ? windowData.department_names : []
+
+    if (sourceIds.length > 0) {
+      return sourceIds.map((id, index) => ({
+        department_id: id,
+        department_name: sourceNames[index] || `Department ${id}`,
+      }))
+    }
+
+    if (Array.isArray(userSummary?.department_options) && userSummary.department_options.length > 0) {
+      return userSummary.department_options
+    }
+
+    if (windowData?.department_id && windowData?.department_name) {
+      return [{ department_id: windowData.department_id, department_name: windowData.department_name }]
+    }
+
+    return []
+  }, [windowData, userSummary])
+
+  const requiresDepartmentSelection = departmentOptions.length > 1
 
   useEffect(() => {
     const fetchWindowDetails = async () => {
       setLoading(true)
       setError('')
       try {
-        const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?window_id=${windowId}`)
+        const params = new URLSearchParams()
+        params.set('window_id', windowId)
+        if (selectedDepartmentId) {
+          params.set('department_id', selectedDepartmentId)
+        }
+
+        const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?${params.toString()}`)
         if (!res.ok) throw new Error('Failed to fetch window details')
         const data = await res.json()
         const details = Array.isArray(data) && data.length > 0 ? data[0] : null
@@ -25,26 +61,63 @@ function MarkEntryWindowDetailsPage() {
         } else {
           setWindowData(details)
         }
+
+        if ((details?.user_id || requestedScope === 'user') && windowId) {
+          const userParams = new URLSearchParams()
+          if (selectedDepartmentId) {
+            userParams.set('department_id', selectedDepartmentId)
+          }
+          const userRes = await fetch(`${API_BASE_URL}/mark-entry-windows/${windowId}/user-submissions?${userParams.toString()}`)
+          if (!userRes.ok) throw new Error('Failed to fetch user-scope details')
+          const userData = await userRes.json()
+          setUserSummary(userData)
+        } else {
+          setUserSummary(null)
+        }
       } catch (err) {
         setError(err.message || 'Failed to load window details')
         setWindowData(null)
+        setUserSummary(null)
       } finally {
         setLoading(false)
       }
     }
 
     if (windowId) fetchWindowDetails()
-  }, [windowId])
+  }, [windowId, requestedScope, selectedDepartmentId])
+
+  useEffect(() => {
+    if (!requiresDepartmentSelection) {
+      if (departmentOptions.length === 1 && String(departmentOptions[0].department_id) !== selectedDepartmentId) {
+        setSelectedDepartmentId(String(departmentOptions[0].department_id))
+      }
+      return
+    }
+
+    if (selectedDepartmentId) {
+      return
+    }
+  }, [requiresDepartmentSelection, departmentOptions, selectedDepartmentId])
 
   const allTeachers = useMemo(() => {
-    if (!windowData) return []
+    if (!windowData || isUserScope) return []
     const pending = Array.isArray(windowData.pending_teachers) ? windowData.pending_teachers : []
     const completed = Array.isArray(windowData.completed_teachers) ? windowData.completed_teachers : []
     return [
       ...pending.map(t => ({ ...t, status: 'Pending' })),
       ...completed.map(t => ({ ...t, status: 'Completed' })),
     ]
-  }, [windowData])
+  }, [windowData, isUserScope])
+
+  const allUserEntries = useMemo(() => {
+    if (!isUserScope) return []
+    const pending = Array.isArray(userSummary?.pending_users) ? userSummary.pending_users : []
+    const completed = Array.isArray(userSummary?.completed_users) ? userSummary.completed_users : []
+    return [
+      ...pending.map((entry) => ({ ...entry, status: 'Pending' })),
+      ...completed.map((entry) => ({ ...entry, status: 'Completed' })),
+    ]
+  }, [isUserScope, userSummary])
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '-'
@@ -65,7 +138,7 @@ function MarkEntryWindowDetailsPage() {
   }
 
   return (
-    <MainLayout title="Window Details" subtitle="Teachers involved in this mark entry window">
+    <MainLayout title="Window Details" subtitle={isUserScope ? 'User scope: track submissions and entered marks' : 'Teachers involved in this mark entry window'}>
       <div className="space-y-5">
         <div className="flex items-center justify-between">
           <button
@@ -91,6 +164,9 @@ function MarkEntryWindowDetailsPage() {
                 <div>
                   <h3 className="text-lg font-semibold text-gray-800">{windowData.window_name || `Window #${windowData.window_id}`}</h3>
                   <p className="text-xs text-gray-500 mt-1">Window ID: #{windowData.window_id}</p>
+                  {isUserScope && (
+                    <p className="text-xs text-gray-500 mt-1">User: {windowData.user_name || userSummary?.user_name || windowData.user_id}</p>
+                  )}
                 </div>
                 <div className="text-xs text-gray-600 text-right">
                   <div>Start: <span className="font-medium text-gray-800">{formatDate(windowData.start_at)}</span></div>
@@ -112,48 +188,82 @@ function MarkEntryWindowDetailsPage() {
                   <div className="font-semibold text-gray-800 mt-0.5">{windowData.course_code ? `${windowData.course_code} - ${windowData.course_name || ''}` : (windowData.course_name || 'All')}</div>
                 </div>
                 <div className="bg-gray-50 border border-gray-200 rounded p-3">
-                  <div className="text-gray-500">Teachers Involved</div>
-                  <div className="font-semibold text-gray-800 mt-0.5">{allTeachers.length}</div>
+                  <div className="text-gray-500">{isUserScope ? 'User Course Entries' : 'Teachers Involved'}</div>
+                  <div className="font-semibold text-gray-800 mt-0.5">{isUserScope ? allUserEntries.length : allTeachers.length}</div>
                 </div>
               </div>
+
+              {requiresDepartmentSelection && (
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <label className="block text-xs font-semibold text-gray-600 mb-2">Select Department</label>
+                  <select
+                    value={selectedDepartmentId}
+                    onChange={(e) => setSelectedDepartmentId(e.target.value)}
+                    className="w-full md:w-80 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Choose department</option>
+                    {departmentOptions.map((department) => (
+                      <option key={department.department_id} value={String(department.department_id)}>
+                        {department.department_name || `Department ${department.department_id}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="border-b border-gray-200 px-6 py-4">
-                <h4 className="text-sm font-semibold text-gray-700">Teachers for Mark Entry</h4>
+                <h4 className="text-sm font-semibold text-gray-700">
+                  {isUserScope ? 'Courses for User Mark Entry' : 'Teachers for Mark Entry'}
+                </h4>
               </div>
 
-              {allTeachers.length === 0 ? (
-                <div className="p-6 text-sm text-gray-500">No teachers found for this window.</div>
+              {requiresDepartmentSelection && !selectedDepartmentId ? (
+                <div className="p-6 text-sm text-gray-500">Select a department to view submissions.</div>
+              ) : (isUserScope ? allUserEntries.length === 0 : allTeachers.length === 0) ? (
+                <div className="p-6 text-sm text-gray-500">
+                  {isUserScope ? 'No user-course entries found for this window.' : 'No teachers found for this window.'}
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50">
                       <tr>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Teacher</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">{isUserScope ? 'User' : 'Teacher'}</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Course</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Modes</th>
+                        {isUserScope && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Progress</th>}
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {allTeachers.map((teacher, idx) => (
+                      {(isUserScope ? allUserEntries : allTeachers).map((teacher, idx) => (
                         <tr
-                          key={`${teacher.teacher_id}|${teacher.course_id}|${idx}`}
+                          key={`${isUserScope ? (teacher.user_id || windowData.user_id || 'user') : (teacher.teacher_id || 'teacher')}|${teacher.course_id}|${idx}`}
                           className="hover:bg-gray-50 cursor-pointer"
                           onClick={() => {
                             const params = new URLSearchParams()
-                            params.set('teacher_id', teacher.teacher_id || '')
+                            if (isUserScope) {
+                              params.set('scope', 'user')
+                              params.set('user_id', String(teacher.user_id || windowData.user_id || ''))
+                              params.set('user_name', teacher.user_name || windowData.user_name || '')
+                            } else {
+                              params.set('teacher_id', teacher.teacher_id || '')
+                              params.set('teacher_name', teacher.teacher_name || '')
+                            }
                             params.set('course_id', teacher.course_id || '')
-                            params.set('teacher_name', teacher.teacher_name || '')
                             params.set('course_code', teacher.course_code || '')
                             params.set('course_name', teacher.course_name || '')
+                            if (selectedDepartmentId) {
+                              params.set('department_id', selectedDepartmentId)
+                            }
                             navigate(`/mark-entry-windows/${windowData.window_id}/teacher-details?${params.toString()}`)
                           }}
                         >
                           <td className="px-4 py-3 text-sm">
-                            <div className="font-medium text-gray-800">{teacher.teacher_name}</div>
-                            <div className="text-xs text-gray-500">{teacher.teacher_id}</div>
+                            <div className="font-medium text-gray-800">{isUserScope ? (teacher.user_name || windowData.user_name || '-') : teacher.teacher_name}</div>
+                            <div className="text-xs text-gray-500">{isUserScope ? (teacher.user_id || windowData.user_id || '-') : teacher.teacher_id}</div>
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-700">
                             {teacher.course_code ? `${teacher.course_code} - ${teacher.course_name || ''}` : (teacher.course_name || '-')}
@@ -163,6 +273,11 @@ function MarkEntryWindowDetailsPage() {
                               ? teacher.learning_modes.join(', ')
                               : '-'}
                           </td>
+                          {isUserScope && (
+                            <td className="px-4 py-3 text-sm text-gray-700">
+                              {Number(teacher.updated_students || 0)} / {Number(teacher.assigned_students || 0)} updated
+                            </td>
+                          )}
                           <td className="px-4 py-3 text-sm">
                             <span className={`inline-flex items-center px-2 py-1 rounded border text-xs font-medium ${getStatusBadge(teacher.status)}`}>
                               {teacher.status}

@@ -947,8 +947,8 @@ function MarkEntryPermissionsPage() {
     setWindowSemester(win.semester || '')
     setWindowCourseId(win.course_id || '')
 
-    // Load components if course is set
-    if (win.course_id && win.component_ids) {
+    // Load saved components irrespective of course scope (course can be null for all-course/all-department windows)
+    if (Array.isArray(win.component_ids) && win.component_ids.length > 0) {
       try {
         // Fetch all components to check their learning modes
         const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
@@ -1225,6 +1225,13 @@ function MarkEntryPermissionsPage() {
     }
   }
 
+  const isUserStudentScopeWindow = (window) => Boolean(window?.user_id || window?.user_username)
+
+  const windowScopeWindows = useMemo(
+    () => existingWindows.filter((window) => !isUserStudentScopeWindow(window)),
+    [existingWindows]
+  )
+
   const downloadWindowTeacherDetails = async (win) => {
     try {
       const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?window_id=${win.id}`)
@@ -1401,6 +1408,8 @@ function MarkEntryPermissionsPage() {
         })
       } else {
         // Create new window
+        const startDate = new Date(windowStartAt)
+        const endDate = new Date(windowEndAt)
         const res = await fetch(`${API_BASE_URL}/mark-entry/create-user-window`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1411,8 +1420,8 @@ function MarkEntryPermissionsPage() {
             semester: windowSemester ? parseInt(windowSemester) : null,
             course_id: windowCourseId && windowCourseId !== 'all' ? parseInt(windowCourseId) : null,
             student_ids: selectedStudents,
-            start_at: windowStartAt,
-            end_at: windowEndAt,
+            start_at: startDate.toISOString(),
+            end_at: endDate.toISOString(),
             window_name: windowName.trim(),
             component_ids: allComponents.length > 0 ? allComponents : [],
             created_by: localStorage.getItem('username') || 'coe_admin'
@@ -2345,10 +2354,10 @@ function MarkEntryPermissionsPage() {
                     className="w-56 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                   <span className="px-3 py-1 bg-background text-primary rounded-full text-sm font-semibold">
-                    {existingWindows.filter(w => {
+                    {windowScopeWindows.filter(w => {
                       const q = existingWindowSearch.toLowerCase()
                       return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.course_name||'').toLowerCase().includes(q)
-                    }).length} {existingWindows.length === 1 ? 'window' : 'windows'}
+                    }).length} {windowScopeWindows.length === 1 ? 'window' : 'windows'}
                   </span>
                 </div>
               ) : (
@@ -2373,12 +2382,12 @@ function MarkEntryPermissionsPage() {
             {/* Window Scope content */}
             {existingTab === 'window-scope' && (
               <div className="p-6">
-                {existingWindows.length === 0 ? (
+                {windowScopeWindows.length === 0 ? (
                   <div className="text-center py-12 text-gray-400">
                     <p className="text-sm">No windows configured yet</p>
                   </div>
                 ) : (() => {
-                  const filtered = existingWindows.filter(w => {
+                  const filtered = windowScopeWindows.filter(w => {
                     const q = existingWindowSearch.toLowerCase()
                     return !q || String(w.id).includes(q) || (w.window_name||'').toLowerCase().includes(q) || (w.department_name||'').toLowerCase().includes(q) || (w.course_code||'').toLowerCase().includes(q) || (w.course_name||'').toLowerCase().includes(q)
                   })
@@ -2471,7 +2480,11 @@ function MarkEntryPermissionsPage() {
                     {filteredU.map((win) => {
                       const { status, color } = getWindowStatus(win)
                       return (
-                        <div key={win.id} className="bg-background rounded-lg p-4 border border-purple-200 hover:border-purple-300 hover:shadow-sm transition-all">
+                        <div
+                          key={win.id}
+                          className="bg-background rounded-lg p-4 border border-purple-200 hover:border-purple-300 hover:shadow-sm transition-all cursor-pointer"
+                          onClick={() => navigate(`/mark-entry-windows/${win.id}?scope=user`)}
+                        >
                           <div className="flex items-start justify-between mb-3">
                             <div className="flex-1">
                               <p className="font-semibold text-gray-800 text-sm">
@@ -2500,9 +2513,9 @@ function MarkEntryPermissionsPage() {
                               )}
                             </div>
                             <div className="flex gap-2 ml-4">
-                              <button onClick={() => { editUserWindow(win); setMainTab('create'); setActiveTab('student-assignment') }}
+                              <button onClick={(e) => { e.stopPropagation(); editUserWindow(win); setMainTab('create'); setActiveTab('student-assignment') }}
                                 className="px-3 py-1.5 text-xs text-purple-600 hover:bg-purple-100 rounded-lg font-medium transition-colors">Edit</button>
-                              <button onClick={() => deleteWindow(win.id)}
+                              <button onClick={(e) => { e.stopPropagation(); deleteWindow(win.id) }}
                                 className="px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors">Delete</button>
                             </div>
                           </div>

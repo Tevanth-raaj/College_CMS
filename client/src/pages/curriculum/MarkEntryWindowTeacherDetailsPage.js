@@ -9,11 +9,15 @@ function MarkEntryWindowTeacherDetailsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
+  const scope = (searchParams.get('scope') || 'teacher').trim().toLowerCase()
   const teacherId = (searchParams.get('teacher_id') || '').trim()
+  const userId = (searchParams.get('user_id') || '').trim()
+  const userName = (searchParams.get('user_name') || '').trim()
   const courseId = (searchParams.get('course_id') || '').trim()
   const teacherName = (searchParams.get('teacher_name') || '').trim()
   const courseCode = (searchParams.get('course_code') || '').trim()
   const courseName = (searchParams.get('course_name') || '').trim()
+  const selectedDepartmentId = (searchParams.get('department_id') || '').trim()
 
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -22,7 +26,8 @@ function MarkEntryWindowTeacherDetailsPage() {
   const [students, setStudents] = useState([])
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
 
-  const canFetch = Boolean(windowId && teacherId && courseId)
+  const isUserScope = scope === 'user'
+  const canFetch = Boolean(windowId && courseId && (isUserScope ? userId : teacherId))
 
   const loadStudents = useCallback(async (isRefresh = false) => {
     if (!canFetch) return
@@ -32,31 +37,43 @@ function MarkEntryWindowTeacherDetailsPage() {
 
     try {
       const params = new URLSearchParams()
-      params.append('teacher_id', teacherId)
       params.append('course_id', courseId)
-      params.append('window_id', windowId)
+      if (selectedDepartmentId) {
+        params.append('department_id', selectedDepartmentId)
+      }
 
-      const res = await fetch(`${API_BASE_URL}/hod/mark-entry/teacher-students?${params.toString()}`)
+      if (isUserScope) {
+        params.append('user_id', userId)
+      } else {
+        params.append('teacher_id', teacherId)
+        params.append('window_id', windowId)
+      }
+
+      const endpoint = isUserScope
+        ? `${API_BASE_URL}/mark-entry-windows/${windowId}/user-students?${params.toString()}`
+        : `${API_BASE_URL}/hod/mark-entry/teacher-students?${params.toString()}`
+
+      const res = await fetch(endpoint)
       if (!res.ok) {
         const text = await res.text()
-        throw new Error(text || 'Failed to fetch teacher students')
+        throw new Error(text || 'Failed to fetch entry details')
       }
       const data = await res.json()
       setStudents(Array.isArray(data.students) ? data.students : [])
       setLastUpdatedAt(new Date())
     } catch (err) {
       setStudents([])
-      setError(err.message || 'Failed to load teacher student details')
+      setError(err.message || 'Failed to load student details')
     } finally {
       if (isRefresh) setRefreshing(false)
       else setLoading(false)
     }
-  }, [canFetch, teacherId, courseId, windowId])
+  }, [canFetch, teacherId, userId, courseId, windowId, isUserScope, selectedDepartmentId])
 
   useEffect(() => {
     if (!canFetch) {
       setLoading(false)
-      setError('Missing teacher_id or course_id in URL')
+      setError(isUserScope ? 'Missing user_id or course_id in URL' : 'Missing teacher_id or course_id in URL')
       return
     }
 
@@ -66,7 +83,7 @@ function MarkEntryWindowTeacherDetailsPage() {
     }, 15000)
 
     return () => clearInterval(interval)
-  }, [canFetch, loadStudents])
+  }, [canFetch, loadStudents, isUserScope])
 
   const summary = useMemo(() => {
     const totalStudents = students.length
@@ -143,6 +160,10 @@ function MarkEntryWindowTeacherDetailsPage() {
   }
 
   const getDisplayName = () => {
+    if (isUserScope) {
+      if (userName) return userName
+      return userId || 'User'
+    }
     if (teacherName) return teacherName
     return teacherId || 'Teacher'
   }
@@ -193,7 +214,7 @@ function MarkEntryWindowTeacherDetailsPage() {
   }
 
   return (
-    <MainLayout title="Teacher Student Mark Details" subtitle="Live view of entered marks for this teacher in the selected window">
+    <MainLayout title={isUserScope ? 'User Student Mark Details' : 'Teacher Student Mark Details'} subtitle="Live view of entered marks in the selected window">
       <div className="space-y-5">
         <div className="flex items-center justify-between gap-3">
           <button
@@ -224,8 +245,11 @@ function MarkEntryWindowTeacherDetailsPage() {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <h3 className="text-lg font-semibold text-gray-800">{getDisplayName()}</h3>
-              <p className="text-xs text-gray-500 mt-1">Teacher ID: {teacherId || '-'}</p>
+              <p className="text-xs text-gray-500 mt-1">{isUserScope ? 'User ID' : 'Teacher ID'}: {isUserScope ? (userId || '-') : (teacherId || '-')}</p>
               <p className="text-xs text-gray-500 mt-1">Window ID: #{windowId}</p>
+              {selectedDepartmentId && (
+                <p className="text-xs text-gray-500 mt-1">Department ID: {selectedDepartmentId}</p>
+              )}
             </div>
             <div className="text-xs text-gray-600">
               <div>Course: <span className="font-medium text-gray-800">{getCourseDisplay()}</span></div>

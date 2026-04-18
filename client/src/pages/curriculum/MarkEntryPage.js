@@ -40,6 +40,26 @@ function MarkEntryPage() {
   const normalizeKey = (value) => String(value)
   const normalizeLearningModeId = (value) => Number(value)
 
+  const dedupeStudentsById = (studentList = []) => {
+    const deduped = new Map()
+    studentList.forEach((student) => {
+      const key = normalizeKey(student?.student_id)
+      if (!key || key === 'undefined' || key === 'null') return
+      const existing = deduped.get(key)
+      // Prefer richer row data when duplicates exist.
+      if (!existing) {
+        deduped.set(key, student)
+        return
+      }
+      const existingScore = [existing.register_no, existing.enrollment_no, existing.student_name].filter(Boolean).length
+      const candidateScore = [student.register_no, student.enrollment_no, student.student_name].filter(Boolean).length
+      if (candidateScore > existingScore) {
+        deduped.set(key, student)
+      }
+    })
+    return Array.from(deduped.values())
+  }
+
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
   const userRole = localStorage.getItem('userRole') || localStorage.getItem('role')
@@ -544,7 +564,7 @@ function MarkEntryPage() {
     }
 
     if (hasEnrollments) {
-      const enrollments = selectedCourse.enrollments
+      const enrollments = dedupeStudentsById(selectedCourse.enrollments)
       setAllStudents(enrollments)
 
       // Keep student list locked to current learningMode in a dedicated effect
@@ -591,7 +611,7 @@ function MarkEntryPage() {
       const data = await response.json()
       
       // Data already includes enrollment_no, register_no, learning_mode_id from the backend
-      const studentList = Array.isArray(data) ? data : []
+      const studentList = dedupeStudentsById(Array.isArray(data) ? data : [])
       
       setAllStudents(studentList)
       setSelectedCourse((prevCourse) => {
@@ -889,7 +909,13 @@ function MarkEntryPage() {
   const visibleStudents = students.filter((student) => {
     if (!normalizedStudentRegisterFilter) return true
     const registerId = String(student.register_id || student.register_no || '').toLowerCase()
-    return registerId.includes(normalizedStudentRegisterFilter)
+    const enrollmentNo = String(student.enrollment_no || '').toLowerCase()
+    const studentName = String(student.student_name || '').toLowerCase()
+    return (
+      registerId.includes(normalizedStudentRegisterFilter) ||
+      enrollmentNo.includes(normalizedStudentRegisterFilter) ||
+      studentName.includes(normalizedStudentRegisterFilter)
+    )
   })
 
   // All marks are considered complete when every student×category cell is either
@@ -1461,7 +1487,7 @@ function MarkEntryPage() {
                       type="text"
                       value={studentRegisterFilter}
                       onChange={(e) => setStudentRegisterFilter(e.target.value)}
-                      placeholder="Filter students by Register ID"
+                      placeholder="Filter by register no, enrollment no, or name"
                       className="w-72 max-w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                     />
                   </div>
