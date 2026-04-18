@@ -201,6 +201,12 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := ensureWindowDepartmentsTable(database); err != nil {
+		log.Printf("[GetAllMarkEntryWindows] Error ensuring mark_entry_window_departments table: %v", err)
+		http.Error(w, "Failed to initialize selected departments support", http.StatusInternalServerError)
+		return
+	}
+
+	if err := ensureWindowDepartmentsTable(database); err != nil {
 		log.Printf("Error ensuring mark_entry_window_departments table: %v", err)
 		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
 		return
@@ -1362,13 +1368,16 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			WHERE window_id = ?
 		`, window.ID)
 		if err == nil {
-			defer compRows.Close()
+			componentIDs := make([]int, 0)
 			for compRows.Next() {
 				var compID int
 				if err := compRows.Scan(&compID); err == nil {
-					window.Components = append(window.Components, compID)
+					componentIDs = append(componentIDs, compID)
 				}
 			}
+			compRows.Close()
+			sort.Ints(componentIDs)
+			window.Components = componentIDs
 		}
 
 		windows = append(windows, window)

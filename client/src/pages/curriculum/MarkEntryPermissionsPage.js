@@ -919,36 +919,57 @@ function MarkEntryPermissionsPage() {
   }
 
   const editUserWindow = async (win) => {
+    let windowData = win
+    try {
+      const latestRes = await fetch(`${API_BASE_URL}/mark-entry-windows?user_only=true`)
+      if (latestRes.ok) {
+        const latestWindows = await latestRes.json()
+        const matched = (Array.isArray(latestWindows) ? latestWindows : []).find(
+          (windowItem) => String(windowItem.id) === String(win.id)
+        )
+        if (matched) {
+          windowData = matched
+        }
+      }
+    } catch (error) {
+      console.warn('Falling back to existing user window payload for edit:', error)
+    }
+
     // Switch to student-assignment tab
     setActiveTab('student-assignment')
 
     // Set editing mode
-    setEditingWindow(win)
-    setWindowName(win.window_name || '')
-    setWindowStartAt(formatDateTimeLocal(win.start_at))
-    setWindowEndAt(formatDateTimeLocal(win.end_at))
-    setWindowEnabled(win.enabled)
+    setEditingWindow(windowData)
+    setWindowName(windowData.window_name || '')
+    setWindowStartAt(formatDateTimeLocal(windowData.start_at))
+    setWindowEndAt(formatDateTimeLocal(windowData.end_at))
+    setWindowEnabled(windowData.enabled)
 
-    // Set user
-    if (win.user_id) {
-      const userRes = await fetch(`${API_BASE_URL}/users/${win.user_id}`)
-      if (userRes.ok) {
-        const userData = await userRes.json()
-        setSelectedUserId(userData.username)
-      }
+    // Set user; prefer username from window payload to avoid extra dependency.
+    if (windowData.user_username) {
+      setSelectedUserId(windowData.user_username)
+    } else if (windowData.user_id) {
+      const matchedUser = availableUsers.find((user) => String(user.id) === String(windowData.user_id))
+      setSelectedUserId(matchedUser?.username || '')
     }
 
     // Set scope fields
-    const userWindowDeptIds = Array.isArray(win.department_ids) && win.department_ids.length > 0
-      ? win.department_ids.map((id) => String(id))
-      : (win.department_id ? [String(win.department_id)] : [])
+    const userWindowDeptIds = Array.isArray(windowData.department_ids) && windowData.department_ids.length > 0
+      ? windowData.department_ids.map((id) => String(id))
+      : (windowData.department_id ? [String(windowData.department_id)] : [])
     setWindowDepartmentId(userWindowDeptIds.length > 0 ? userWindowDeptIds[0] : '')
     setWindowDepartmentIds(userWindowDeptIds)
-    setWindowSemester(win.semester || '')
-    setWindowCourseId(win.course_id || '')
+    setWindowSemester(windowData.semester || '')
+    setWindowCourseId(windowData.course_id || '')
 
     // Load saved components irrespective of course scope (course can be null for all-course/all-department windows)
-    if (Array.isArray(win.component_ids) && win.component_ids.length > 0) {
+    const selectedComponentIDs = Array.isArray(windowData.component_ids)
+      ? windowData.component_ids
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      : []
+
+    if (selectedComponentIDs.length > 0) {
       try {
         // Fetch all components to check their learning modes
         const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
@@ -956,8 +977,8 @@ function MarkEntryPermissionsPage() {
         const allPBL = []
         const allUAL = []
 
-        for (const compId of win.component_ids) {
-          const comp = allComponents.find(c => c.id === compId)
+        for (const compId of selectedComponentIDs) {
+          const comp = allComponents.find((c) => Number(c.id) === compId)
           if (comp) {
             if (comp.learning_mode_id === 2) {
               allPBL.push(compId)
@@ -971,6 +992,12 @@ function MarkEntryPermissionsPage() {
         const ualComponents = allComponents.filter(c => c.learning_mode_id === 1)
         setSelectedPBLComponents(normalizeInnovativePracticeSelections(allPBL, pblComponents))
         setSelectedUALComponents(normalizeInnovativePracticeSelections(allUAL, ualComponents))
+
+        if (allPBL.length === 0 && allUAL.length > 0) {
+          setLearningMode('UAL')
+        } else {
+          setLearningMode('PBL')
+        }
       } catch (error) {
         console.error('Error loading components:', error)
       }
@@ -982,7 +1009,7 @@ function MarkEntryPermissionsPage() {
     // Load assigned students for this window
     try {
       const res = await fetch(
-        `${API_BASE_URL}/mark-entry/user-assigned-students?user_id=${win.user_id}&window_id=${win.id}`
+        `${API_BASE_URL}/mark-entry/user-assigned-students?user_id=${windowData.user_id}&window_id=${windowData.id}`
       )
       if (res.ok) {
         const assignedStudents = await res.json()
@@ -1227,9 +1254,24 @@ function MarkEntryPermissionsPage() {
 
   const isUserStudentScopeWindow = (window) => Boolean(window?.user_id || window?.user_username)
 
+  const userScopeWindowIds = useMemo(() => {
+    return new Set(
+      (Array.isArray(userAssignedWindows) ? userAssignedWindows : [])
+        .map((window) => Number(window?.id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  }, [userAssignedWindows])
+
   const windowScopeWindows = useMemo(
-    () => existingWindows.filter((window) => !isUserStudentScopeWindow(window)),
-    [existingWindows]
+    () =>
+      existingWindows.filter((window) => {
+        const windowId = Number(window?.id)
+        if (Number.isInteger(windowId) && userScopeWindowIds.has(windowId)) {
+          return false
+        }
+        return !isUserStudentScopeWindow(window)
+      }),
+    [existingWindows, userScopeWindowIds]
   )
 
   const downloadWindowTeacherDetails = async (win) => {
