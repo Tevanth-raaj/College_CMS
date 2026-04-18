@@ -274,6 +274,10 @@ function MarkEntryPermissionsPage() {
   }, [showTeacherDropdown])
 
   useEffect(() => {
+    if (activeTab !== 'windows') {
+      return
+    }
+
     // Load window components when course context changes
     if (windowScope === 'teacher_course' && selectedCourseId) {
       fetchMarkCategoriesForCourseType(selectedCourseId)
@@ -286,7 +290,7 @@ function MarkEntryPermissionsPage() {
       setWindowComponents([])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowScope, selectedCourseId, windowCourseId, learningMode])
+  }, [activeTab, windowScope, selectedCourseId, windowCourseId, learningMode])
 
   useEffect(() => {
     if (selectedTeacherId) {
@@ -300,6 +304,10 @@ function MarkEntryPermissionsPage() {
 
 
   useEffect(() => {
+    if (activeTab !== 'windows') {
+      return
+    }
+
     const selectedDepartmentIds = getSelectedDepartmentIds()
     if (windowScope === 'department_semester_course' && selectedDepartmentIds.length === 1 && windowSemester) {
       fetchDepartmentCourses(String(selectedDepartmentIds[0]), windowSemester)
@@ -309,15 +317,19 @@ function MarkEntryPermissionsPage() {
         setWindowCourseId('')
       }
     }
-  }, [windowScope, windowDepartmentId, windowDepartmentIds, windowSemester])
+  }, [activeTab, windowScope, windowDepartmentId, windowDepartmentIds, windowSemester])
 
   useEffect(() => {
+    if (activeTab !== 'windows') {
+      return
+    }
+
     // Skip loadWindowRule when editing - editWindow directly populates selections
     if (!editingWindow) {
       loadWindowRule()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowScope, selectedTeacherId, selectedCourseId, windowDepartmentId, windowSemester, windowCourseId])
+  }, [activeTab, windowScope, selectedTeacherId, selectedCourseId, windowDepartmentId, windowSemester, windowCourseId])
 
   const fetchTeachers = async () => {
     try {
