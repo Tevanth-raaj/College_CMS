@@ -947,6 +947,36 @@ function MarkEntryPermissionsPage() {
       console.warn('Falling back to existing user window payload for edit:', error)
     }
 
+    // Defensive merge: some deployments may omit component/department details in the
+    // user_only payload for certain rows, so enrich with the full windows payload.
+    try {
+      const allWindowsRes = await fetch(`${API_BASE_URL}/mark-entry-windows`)
+      if (allWindowsRes.ok) {
+        const allWindows = await allWindowsRes.json()
+        const fullMatch = (Array.isArray(allWindows) ? allWindows : []).find(
+          (windowItem) => String(windowItem.id) === String(windowData.id)
+        )
+        if (fullMatch) {
+          windowData = {
+            ...fullMatch,
+            ...windowData,
+            component_ids:
+              Array.isArray(windowData.component_ids) && windowData.component_ids.length > 0
+                ? windowData.component_ids
+                : (Array.isArray(fullMatch.component_ids) ? fullMatch.component_ids : []),
+            department_ids:
+              Array.isArray(windowData.department_ids) && windowData.department_ids.length > 0
+                ? windowData.department_ids
+                : (Array.isArray(fullMatch.department_ids) ? fullMatch.department_ids : []),
+            department_id:
+              windowData.department_id ?? fullMatch.department_id ?? null,
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Unable to enrich user window payload from all windows API:', error)
+    }
+
     // Switch to student-assignment tab
     setActiveTab('student-assignment')
 
@@ -968,7 +998,7 @@ function MarkEntryPermissionsPage() {
     // Set scope fields
     const userWindowDeptIds = Array.isArray(windowData.department_ids) && windowData.department_ids.length > 0
       ? windowData.department_ids.map((id) => String(id))
-      : (windowData.department_id ? [String(windowData.department_id)] : [])
+      : (windowData.department_id ? [String(windowData.department_id)] : ['0'])
     setWindowDepartmentId(userWindowDeptIds.length > 0 ? userWindowDeptIds[0] : '')
     setWindowDepartmentIds(userWindowDeptIds)
     setWindowSemester(windowData.semester || '')
