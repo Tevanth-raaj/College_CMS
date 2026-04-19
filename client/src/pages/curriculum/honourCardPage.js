@@ -54,6 +54,13 @@ function HonourCardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardId])
 
+  const normalizeCourseType = (courseType) => {
+    if (courseType === 'Theory&Lab') return 'Theory with Lab'
+    return courseType
+  }
+
+  const isTheoryWithLabType = (courseType) => normalizeCourseType(courseType) === 'Theory with Lab'
+
   const fetchCurriculumTemplate = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/curriculum`)
@@ -154,6 +161,7 @@ function HonourCardPage() {
       
       const courseData = {
         ...newCourse,
+        course_type: normalizeCourseType(newCourse.course_type),
         credit: parseInt(newCourse.credit),
         lecture_hrs: lectureHrs,
         tutorial_hrs: tutorialHrs,
@@ -175,7 +183,7 @@ function HonourCardPage() {
         courseData.tutorial_total_hrs = tutorialHrs * 15
         courseData.activity_total_hrs = activityHrs * 15
         courseData.practical_total_hrs = 0
-      } else if (newCourse.course_type === 'Theory&Lab' || newCourse.course_type === 'NA') {
+      } else if (isTheoryWithLabType(newCourse.course_type) || newCourse.course_type === 'NA') {
         courseData.theory_total_hrs = lectureHrs * 15
         courseData.tutorial_total_hrs = tutorialHrs * 15
         courseData.practical_total_hrs = practicalHrs * 15
@@ -294,6 +302,7 @@ function HonourCardPage() {
       
       const courseData = {
         ...editCourseData,
+        course_type: normalizeCourseType(editCourseData.course_type),
         credit: parseInt(editCourseData.credit),
         lecture_hrs: lectureHrs,
         tutorial_hrs: tutorialHrs,
@@ -315,7 +324,7 @@ function HonourCardPage() {
         courseData.tutorial_total_hrs = tutorialHrs * 15
         courseData.activity_total_hrs = activityHrs * 15
         courseData.practical_total_hrs = 0
-      } else if (editCourseData.course_type === 'Theory&Lab' || editCourseData.course_type === 'NA') {
+      } else if (isTheoryWithLabType(editCourseData.course_type) || editCourseData.course_type === 'NA') {
         courseData.theory_total_hrs = lectureHrs * 15
         courseData.tutorial_total_hrs = tutorialHrs * 15
         courseData.practical_total_hrs = practicalHrs * 15
@@ -600,7 +609,7 @@ function HonourCardPage() {
                           value={newCourse.course_type}
                           onChange={(e) => setNewCourse({ ...newCourse, course_type: e.target.value })}
                           onSelect={(item) => setNewCourse({ ...newCourse, course_type: item })}
-                          items={["Theory", "Lab", "Theory&Lab", "NA"]}
+                          items={["Theory", "Lab", "Theory with Lab", "NA"]}
                           placeholder="Select or search course type"
                           width="w-full"
                         />
@@ -662,7 +671,7 @@ function HonourCardPage() {
                       </div>
                       )}
 
-                      {/* Practical field - Show only for Lab, Theory&Lab, and NA */}
+                      {/* Practical field - Show only for Lab, Theory with Lab, and NA */}
                       {newCourse.course_type !== 'Theory' && (
                         <div>
                           <label className="block text-sm font-semibold text-gray-700 mb-2">Practical (hrs per week)</label>
@@ -818,7 +827,7 @@ function HonourCardPage() {
                         </>
                       )}
 
-                      {(newCourse.course_type === 'Theory&Lab' || newCourse.course_type === 'NA') && (
+                      {(isTheoryWithLabType(newCourse.course_type) || newCourse.course_type === 'NA') && (
                         <>
                           <div className="md:col-span-2">
                             <h3 className="text-sm font-bold text-gray-900 mb-3 mt-4 pt-4 border-t border-gray-200">Total Hours (for whole semester)</h3>
@@ -1118,7 +1127,7 @@ function HonourCardPage() {
                       value={editCourseData.course_type}
                       onChange={(e) => setEditCourseData({ ...editCourseData, course_type: e.target.value })}
                       onSelect={(item) => setEditCourseData({ ...editCourseData, course_type: item })}
-                      items={["Theory", "Lab", "Theory&Lab", "NA"]}
+                      items={["Theory", "Lab", "Theory with Lab", "NA"]}
                       placeholder="Select or search course type"
                       width="w-full"
                     />
@@ -1278,8 +1287,8 @@ function HonourCardPage() {
                   </>
                 )}
 
-                {/* Total Hours for whole semester - Theory&Lab */}
-                {(editCourseData.course_type === 'Theory&Lab' || editCourseData.course_type === 'NA') && (
+                {/* Total Hours for whole semester - Theory with Lab */}
+                {(isTheoryWithLabType(editCourseData.course_type) || editCourseData.course_type === 'NA') && (
                   <>
                     <div className="border-t pt-4 mt-4">
                       <h3 className="text-sm font-bold text-gray-900 mb-3">Total Hours (for whole semester)</h3>
