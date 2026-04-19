@@ -14,7 +14,8 @@ function MarkEntryWindowDetailsPage() {
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
 
   const requestedScope = (searchParams.get('scope') || '').trim().toLowerCase()
-  const isUserScope = Boolean(windowData?.user_id) || requestedScope === 'user'
+  const scopeType = (windowData?.scope_type || '').trim().toLowerCase()
+  const isUserScope = scopeType === 'user_single' || scopeType === 'user_multi' || requestedScope === 'user'
 
   const departmentOptions = useMemo(() => {
     const sourceIds = Array.isArray(windowData?.department_ids) ? windowData.department_ids : []
@@ -62,7 +63,9 @@ function MarkEntryWindowDetailsPage() {
           setWindowData(details)
         }
 
-        if ((details?.user_id || requestedScope === 'user') && windowId) {
+        const detailsScopeType = (details?.scope_type || '').trim().toLowerCase()
+        const detailsIsUserScope = detailsScopeType === 'user_single' || detailsScopeType === 'user_multi' || requestedScope === 'user'
+        if (detailsIsUserScope && windowId) {
           const userParams = new URLSearchParams()
           if (selectedDepartmentId) {
             userParams.set('department_id', selectedDepartmentId)

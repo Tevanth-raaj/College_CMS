@@ -8,6 +8,9 @@ import QuickActionBtn from '../../components/QuickActionBtn'
 function Dashboard() {
   const navigate = useNavigate()
   const userRole = localStorage.getItem('userRole')
+  const username = localStorage.getItem('username')
+  const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
+  const storedUserId = Number(localStorage.getItem('userId') || localStorage.getItem('id') || 0)
 
   const [stats, setStats] = useState({
     totalCurriculum: 0,
@@ -22,6 +25,9 @@ function Dashboard() {
     upcomingWindows: 0,
     teachersWithPermissions: 0
   })
+
+  const [userWindowCards, setUserWindowCards] = useState([])
+  const [userWindowLoading, setUserWindowLoading] = useState(false)
 
   useEffect(() => {
     if (userRole === 'teacher') {
@@ -39,6 +45,139 @@ function Dashboard() {
       fetchMarkEntryStats()
     }
   }, [])
+
+  useEffect(() => {
+    fetchUserScopedWindowCards()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username, teacherId, storedUserId, userRole])
+
+  const isWindowActiveNow = (windowItem) => {
+    if (!windowItem?.enabled) return false
+    const now = new Date()
+    const startAt = windowItem?.start_at ? new Date(windowItem.start_at) : null
+    const endAt = windowItem?.end_at ? new Date(windowItem.end_at) : null
+    if (!startAt || !endAt || Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
+      return false
+    }
+    return now >= startAt && now <= endAt
+  }
+
+  const isUserMappedToWindow = (windowItem) => {
+    const mappedUsernames = String(windowItem?.user_username || '')
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+
+    if (username && mappedUsernames.includes(String(username).toLowerCase())) {
+      return true
+    }
+
+    const numericUserId = Number(windowItem?.user_id || 0)
+    return Boolean(storedUserId > 0 && numericUserId > 0 && numericUserId === storedUserId)
+  }
+
+  const fetchUserScopedWindowCards = async () => {
+    if (userRole === 'student' || userRole === 'hr') {
+      setUserWindowCards([])
+      return
+    }
+
+    const userIdentifier = username || teacherId || (storedUserId > 0 ? String(storedUserId) : '')
+    if (!userIdentifier) {
+      setUserWindowCards([])
+      return
+    }
+
+    setUserWindowLoading(true)
+    try {
+      const safeReadJson = async (response) => {
+        const text = await response.text()
+        if (!text) return []
+        try {
+          return JSON.parse(text)
+        } catch {
+          return []
+        }
+      }
+
+      const [windowResponse, assignedResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/mark-entry-windows?user_only=true`),
+        fetch(`${API_BASE_URL}/mark-entry/user-assigned-students?user_id=${encodeURIComponent(userIdentifier)}`),
+      ])
+
+      if (!windowResponse.ok) {
+        setUserWindowCards([])
+        return
+      }
+
+      const windows = await safeReadJson(windowResponse)
+      const assignedRows = assignedResponse.ok ? await safeReadJson(assignedResponse) : []
+      const students = Array.isArray(assignedRows) ? assignedRows : []
+
+      const cards = (Array.isArray(windows) ? windows : [])
+        .filter((windowItem) => isWindowActiveNow(windowItem) && isUserMappedToWindow(windowItem))
+        .map((windowItem) => {
+          const rowsForWindow = students.filter((row) => Number(row?.window_id) === Number(windowItem?.id))
+          const coursesByDepartment = new Map()
+
+          rowsForWindow.forEach((row) => {
+            const department = String(row?.department || 'Unassigned Department').trim()
+            const courseId = Number(row?.course_id || 0)
+            if (!courseId) return
+
+            if (!coursesByDepartment.has(department)) {
+              coursesByDepartment.set(department, new Map())
+            }
+
+            const courseMap = coursesByDepartment.get(department)
+            if (!courseMap.has(courseId)) {
+              courseMap.set(courseId, {
+                course_id: courseId,
+                course_code: row?.course_code || `COURSE-${courseId}`,
+                course_name: row?.course_name || 'Unnamed Course',
+              })
+            }
+          })
+
+          const departments = Array.from(coursesByDepartment.entries())
+            .map(([department, courseMap]) => ({
+              department,
+              courses: Array.from(courseMap.values()).sort((left, right) =>
+                String(left.course_code).localeCompare(String(right.course_code))
+              ),
+            }))
+            .sort((left, right) => String(left.department).localeCompare(String(right.department)))
+
+          const fallbackDepartments = Array.isArray(windowItem.department_names) && windowItem.department_names.length > 0
+            ? windowItem.department_names
+            : [windowItem.department_name || 'All Departments']
+
+          const safeDepartments = departments.length > 0
+            ? departments
+            : fallbackDepartments
+                .filter(Boolean)
+                .map((departmentName) => ({
+                  department: String(departmentName),
+                  courses: [],
+                }))
+
+          return {
+            id: Number(windowItem.id),
+            window_name: windowItem.window_name || `User Window #${windowItem.id}`,
+            start_at: windowItem.start_at,
+            end_at: windowItem.end_at,
+            departments: safeDepartments,
+          }
+        })
+
+      setUserWindowCards(cards)
+    } catch (error) {
+      console.error('Error loading user window cards:', error)
+      setUserWindowCards([])
+    } finally {
+      setUserWindowLoading(false)
+    }
+  }
 
   const fetchDashboardStats = async () => {
     try {
@@ -227,6 +366,87 @@ function Dashboard() {
             ))}
           </div>
         </div>
+
+        {(userWindowLoading || userWindowCards.length > 0) && (
+          <div className="bg-white rounded-2xl shadow-soft border border-primary_dim overflow-hidden">
+            <div className="px-6 py-4 border-b border-primary_dim" style={{ background: 'linear-gradient(120deg, rgba(125, 83, 246, 0.12), rgba(125, 83, 246, 0.04))' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">My Mark Entry Windows</h2>
+                  <p className="text-sm text-gray-600 mt-1">User-scope windows assigned to your account</p>
+                </div>
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-primary_dim text-primary">
+                  {userWindowCards.length} Active
+                </span>
+              </div>
+            </div>
+            <div className="p-4 space-y-4">
+              {userWindowLoading && (
+                <p className="text-sm text-gray-600">Loading mark entry windows...</p>
+              )}
+
+              {!userWindowLoading && userWindowCards.length === 0 && (
+                <p className="text-sm text-gray-600">No active user-scoped mark entry windows assigned.</p>
+              )}
+
+              {!userWindowLoading && userWindowCards.map((windowCard) => (
+                <div key={windowCard.id} className="border border-primary_dim rounded-xl bg-white shadow-card overflow-hidden">
+                  <div className="px-4 py-3 border-b border-primary_dim flex flex-wrap items-center justify-between gap-3" style={{ background: 'linear-gradient(100deg, rgba(125, 83, 246, 0.10), rgba(125, 83, 246, 0.03))' }}>
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-primary" />
+                        <p className="text-sm font-semibold text-gray-900">{windowCard.window_name}</p>
+                      </div>
+                      <p className="text-xs text-gray-600">
+                        {windowCard.start_at ? new Date(windowCard.start_at).toLocaleString() : '—'} to {windowCard.end_at ? new Date(windowCard.end_at).toLocaleString() : '—'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/mark-entry', {
+                        state: {
+                          selectedWindowId: windowCard.id,
+                          selectedWindowName: windowCard.window_name,
+                          source: 'dashboard-user-window-card',
+                        },
+                      })}
+                      className="px-3 py-1.5 rounded-md text-xs font-semibold text-white"
+                      style={{ backgroundColor: '#7D53F6' }}
+                    >
+                      Open Mark Entry
+                    </button>
+                  </div>
+
+                  <div className="p-3 space-y-2">
+                    {windowCard.departments.map((departmentItem) => (
+                      <div key={`${windowCard.id}-${departmentItem.department}`}>
+                        <div className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold uppercase tracking-wide mb-2 bg-primary_light text-primary border border-primary_dim">
+                          {departmentItem.department}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {departmentItem.courses.length === 0 ? (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs border border-gray-200 bg-gray-50 text-gray-500">
+                              No specific course mapping in this window.
+                            </span>
+                          ) : (
+                            departmentItem.courses.map((courseItem) => (
+                              <span
+                                key={`${windowCard.id}-${departmentItem.department}-${courseItem.course_id}`}
+                                className="inline-flex items-center px-2.5 py-1 rounded-md text-xs border border-primary_light bg-primary_light text-gray-700"
+                              >
+                                {courseItem.course_code} - {courseItem.course_name}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Welcome Message */}
         <div className="card-custom p-8 text-white" style={{background: 'linear-gradient(to bottom right, rgb(67, 113, 229), rgb(47, 93, 209))'}}>

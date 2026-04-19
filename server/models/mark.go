@@ -99,6 +99,7 @@ type MarkEntryPermissionUpdateRequest struct {
 // MarkEntryWindow represents a mark entry open window rule.
 type MarkEntryWindow struct {
 	ID           int     `json:"id"`
+	ScopeType    string  `json:"scope_type,omitempty"`
 	TeacherID    *string `json:"teacher_id,omitempty"`
 	DepartmentID *int    `json:"department_id,omitempty"`
 	Semester     *int    `json:"semester,omitempty"`
@@ -112,6 +113,7 @@ type MarkEntryWindow struct {
 
 // MarkEntryWindowRequest represents a create/update window request.
 type MarkEntryWindowRequest struct {
+	ScopeType     string  `json:"scope_type,omitempty"`
 	TeacherID     *string `json:"teacher_id,omitempty"`
 	UserID        *string `json:"user_id,omitempty"` // For user-based windows
 	DepartmentID  *int    `json:"department_id,omitempty"`
@@ -138,17 +140,18 @@ type StudentMarkPermission struct {
 
 // CreateUserStudentWindowRequest represents a request to create a user-student mark entry window
 type CreateUserStudentWindowRequest struct {
-	UserID        string `json:"user_id"`
-	DepartmentID  *int   `json:"department_id,omitempty"`
-	DepartmentIDs []int  `json:"department_ids,omitempty"`
-	Semester      *int   `json:"semester,omitempty"`
-	CourseID      *int   `json:"course_id,omitempty"`
-	StudentIDs    []int  `json:"student_ids"` // Specific students for this window
-	StartAt       string `json:"start_at"`
-	EndAt         string `json:"end_at"`
-	ComponentIDs  []int  `json:"component_ids,omitempty"` // PBL/UAL components
-	CreatedBy     string `json:"created_by,omitempty"`
-	WindowName    string `json:"window_name,omitempty"`
+	UserID        string   `json:"user_id"`
+	UserIDs       []string `json:"user_ids,omitempty"`
+	DepartmentID  *int     `json:"department_id,omitempty"`
+	DepartmentIDs []int    `json:"department_ids,omitempty"`
+	Semester      *int     `json:"semester,omitempty"`
+	CourseID      *int     `json:"course_id,omitempty"`
+	StudentIDs    []int    `json:"student_ids"` // Specific students for this window
+	StartAt       string   `json:"start_at"`
+	EndAt         string   `json:"end_at"`
+	ComponentIDs  []int    `json:"component_ids,omitempty"` // PBL/UAL components
+	CreatedBy     string   `json:"created_by,omitempty"`
+	WindowName    string   `json:"window_name,omitempty"`
 }
 
 // CreateUserStudentWindowResponse represents the response after creating user-student window

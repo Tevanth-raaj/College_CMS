@@ -33,7 +33,7 @@ module.exports = {
     themes: [
       {
         light: {
-          primary: "rgb(143 121 250)",
+          primary: "#7D53F6",
           secondary: "#ffffff",
           accent: "#0369a1",
           neutral: "#1f2937",

@@ -925,7 +925,10 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 	if numericUserID.Valid {
 		userIDValue = numericUserID.Int64
 	}
-	queryArgs = append(queryArgs, facultyID, userIDValue, courseID)
+	if err := ensureWindowUsersTable(db.DB); err != nil {
+		log.Printf("[resolveExpired] ensure mark_entry_window_users failed: %v", err)
+	}
+	queryArgs = append(queryArgs, facultyID, userIDValue, userIDValue, courseID)
 
 	var deptClause string
 	if len(allDeptIDs) == 0 {
@@ -972,7 +975,14 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 	baseSQL := fmt.Sprintf(`
 		SELECT w.id, w.start_at, w.end_at
 		FROM mark_entry_windows w
-		WHERE ((w.teacher_id IS NULL AND w.user_id IS NULL) OR w.teacher_id = ? OR w.user_id = ?)
+		WHERE ((w.scope_type = 'global')
+			OR (w.scope_type = 'teacher' AND w.teacher_id = ?)
+			OR (w.scope_type = 'user_single' AND w.user_id = ?)
+			OR (w.scope_type = 'user_multi' AND EXISTS (
+				SELECT 1 FROM mark_entry_window_users mwu
+				WHERE mwu.window_id = w.id AND mwu.user_id = ?
+			))
+		)
 		  AND (w.course_id IS NULL OR w.course_id = ?)
 		  AND %s
 		  AND %s
@@ -988,7 +998,14 @@ func resolveExpiredMarkEntryWindows(courseID int, facultyID string) (*MarkEntryW
 		SELECT w.id, w.start_at, w.end_at, ms.submitted_at
 		FROM mark_submissions ms
 		JOIN mark_entry_windows w ON w.id = ms.window_id
-		WHERE ((w.teacher_id IS NULL AND w.user_id IS NULL) OR w.teacher_id = ? OR w.user_id = ?)
+		WHERE ((w.scope_type = 'global')
+			OR (w.scope_type = 'teacher' AND w.teacher_id = ?)
+			OR (w.scope_type = 'user_single' AND w.user_id = ?)
+			OR (w.scope_type = 'user_multi' AND EXISTS (
+				SELECT 1 FROM mark_entry_window_users mwu
+				WHERE mwu.window_id = w.id AND mwu.user_id = ?
+			))
+		)
 		  AND (w.course_id IS NULL OR w.course_id = ?)
 		  AND %s
 		  AND %s

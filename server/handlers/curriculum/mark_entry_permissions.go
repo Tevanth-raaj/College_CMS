@@ -113,6 +113,11 @@ func GetMarkEntryPermissions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("GetMarkEntryPermissions: Error ensuring mark_entry_window_users table: %v", err)
+		http.Error(w, "Failed to initialize shared window-user mapping support", http.StatusInternalServerError)
+		return
+	}
 
 	if err := ensureWindowDepartmentsTable(database); err != nil {
 		log.Printf("Error ensuring mark_entry_window_departments table in CreateUserStudentWindow: %v", err)
@@ -252,6 +257,11 @@ func SaveMarkEntryPermissions(w http.ResponseWriter, r *http.Request) {
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("UpdateMarkEntryPermissions: Error ensuring mark_entry_window_users table: %v", err)
+		http.Error(w, "Failed to initialize shared window-user mapping support", http.StatusInternalServerError)
 		return
 	}
 
@@ -682,8 +692,27 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.UserID == "" || len(req.StudentIDs) == 0 || req.StartAt == "" || req.EndAt == "" {
-		http.Error(w, "UserID, student IDs, start_at, and end_at are required", http.StatusBadRequest)
+	requestedUserIDs := make([]string, 0, len(req.UserIDs)+1)
+	seenUserIDs := make(map[string]struct{})
+	for _, userID := range req.UserIDs {
+		trimmed := strings.TrimSpace(userID)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seenUserIDs[trimmed]; exists {
+			continue
+		}
+		seenUserIDs[trimmed] = struct{}{}
+		requestedUserIDs = append(requestedUserIDs, trimmed)
+	}
+	if trimmed := strings.TrimSpace(req.UserID); trimmed != "" {
+		if _, exists := seenUserIDs[trimmed]; !exists {
+			requestedUserIDs = append(requestedUserIDs, trimmed)
+		}
+	}
+
+	if len(requestedUserIDs) == 0 || len(req.StudentIDs) == 0 || req.StartAt == "" || req.EndAt == "" {
+		http.Error(w, "At least one user, student IDs, start_at, and end_at are required", http.StatusBadRequest)
 		return
 	}
 
@@ -710,16 +739,27 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lookup numeric user ID from username
-	var numericUserID int
-	err = database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, req.UserID).Scan(&numericUserID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "User not found or inactive", http.StatusBadRequest)
-		} else {
-			log.Printf("Error looking up user ID: %v", err)
-			http.Error(w, "Failed to lookup user", http.StatusInternalServerError)
+	type resolvedUser struct {
+		Identifier string
+		NumericID  int
+	}
+	resolvedUsers := make([]resolvedUser, 0, len(requestedUserIDs))
+	for _, userIdentifier := range requestedUserIDs {
+		numericUserID, resolveErr := resolveNumericUserID(database, userIdentifier)
+		if resolveErr != nil {
+			if resolveErr == sql.ErrNoRows {
+				http.Error(w, fmt.Sprintf("User '%s' not found or inactive", userIdentifier), http.StatusBadRequest)
+			} else {
+				log.Printf("Error resolving user ID for '%s': %v", userIdentifier, resolveErr)
+				http.Error(w, "Failed to lookup users", http.StatusInternalServerError)
+			}
+			return
 		}
+		resolvedUsers = append(resolvedUsers, resolvedUser{Identifier: userIdentifier, NumericID: numericUserID})
+	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("Error ensuring mark_entry_window_users table: %v", err)
+		http.Error(w, "Failed to initialize shared window-user mapping support", http.StatusInternalServerError)
 		return
 	}
 
@@ -779,15 +819,22 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 
 	windowIDs := make([]int, 0, 1)
 	assignmentsCreated := 0
-
+	primaryUserID := resolvedUsers[0].NumericID
+	hasMultiUsers := len(resolvedUsers) > 1
+	windowScopeType := markEntryScopeUserSingle
+	windowUserValue := interface{}(primaryUserID)
+	if hasMultiUsers {
+		windowScopeType = markEntryScopeUserMulti
+		windowUserValue = nil
+	}
 	result, execErr := tx.Exec(`
 		INSERT INTO mark_entry_windows 
-		(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-	`, numericUserID, departmentValue, req.Semester, req.CourseID, startAt, endAt, req.WindowName)
+		(user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name, scope_type)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+	`, windowUserValue, departmentValue, req.Semester, req.CourseID, startAt, endAt, req.WindowName, windowScopeType)
 	if execErr != nil {
 		_ = tx.Rollback()
-		log.Printf("Error creating window: %v", execErr)
+		log.Printf("Error creating shared window: %v", execErr)
 		http.Error(w, "Failed to create window", http.StatusInternalServerError)
 		return
 	}
@@ -795,15 +842,26 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 	windowID, idErr := result.LastInsertId()
 	if idErr != nil {
 		_ = tx.Rollback()
-		log.Printf("Error getting window ID: %v", idErr)
+		log.Printf("Error getting shared window ID: %v", idErr)
 		http.Error(w, "Failed to get window ID", http.StatusInternalServerError)
 		return
 	}
 	windowIDs = append(windowIDs, int(windowID))
 
 	if err := replaceWindowDepartmentsTx(tx, int(windowID), selectedDepartmentIDs); err != nil {
-		// Department mapping is supplementary metadata; do not fail user-window creation.
+		// Department mapping is supplementary metadata; do not fail shared-window creation.
 		log.Printf("Warning: unable to persist selected departments for user window %d (ids=%v): %v", windowID, selectedDepartmentIDs, err)
+	}
+
+	windowUserIDs := make([]int, 0, len(resolvedUsers))
+	for _, user := range resolvedUsers {
+		windowUserIDs = append(windowUserIDs, user.NumericID)
+	}
+	if err := replaceWindowUsersTx(tx, int(windowID), windowUserIDs); err != nil {
+		_ = tx.Rollback()
+		log.Printf("Error mapping users to shared window %d: %v", windowID, err)
+		http.Error(w, "Failed to map users to window", http.StatusInternalServerError)
+		return
 	}
 
 	if len(req.ComponentIDs) > 0 {
@@ -814,35 +872,37 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 			`, windowID, componentID)
 			if componentErr != nil {
 				_ = tx.Rollback()
-				log.Printf("Error adding component %d to window: %v", componentID, componentErr)
+				log.Printf("Error adding component %d to shared window %d: %v", componentID, windowID, componentErr)
 				http.Error(w, "Failed to add components to window", http.StatusInternalServerError)
 				return
 			}
 		}
 	}
 
-	for _, studentID := range req.StudentIDs {
-		if len(allowedDepartmentSet) > 0 {
-			if _, ok := allowedDepartmentSet[studentDepartmentMap[studentID]]; !ok {
-				continue
+	for _, user := range resolvedUsers {
+		for _, studentID := range req.StudentIDs {
+			if len(allowedDepartmentSet) > 0 {
+				if _, ok := allowedDepartmentSet[studentDepartmentMap[studentID]]; !ok {
+					continue
+				}
 			}
-		}
 
-		assignResult, assignErr := tx.Exec(`
-			INSERT INTO mark_entry_student_permissions
-			(window_id, user_id, student_id, created_by)
-			VALUES (?, ?, ?, ?)
-		`, windowID, numericUserID, studentID, req.CreatedBy)
-		if assignErr != nil {
-			_ = tx.Rollback()
-			log.Printf("ERROR assigning student %d to window %d: %v", studentID, windowID, assignErr)
-			http.Error(w, fmt.Sprintf("Failed to assign student %d: %v", studentID, assignErr), http.StatusInternalServerError)
-			return
-		}
+			assignResult, assignErr := tx.Exec(`
+				INSERT INTO mark_entry_student_permissions
+				(window_id, user_id, student_id, created_by)
+				VALUES (?, ?, ?, ?)
+			`, windowID, user.NumericID, studentID, req.CreatedBy)
+			if assignErr != nil {
+				_ = tx.Rollback()
+				log.Printf("ERROR assigning student %d to shared window %d (user %s): %v", studentID, windowID, user.Identifier, assignErr)
+				http.Error(w, fmt.Sprintf("Failed to assign student %d: %v", studentID, assignErr), http.StatusInternalServerError)
+				return
+			}
 
-		rowsAffected, _ := assignResult.RowsAffected()
-		if rowsAffected > 0 {
-			assignmentsCreated++
+			rowsAffected, _ := assignResult.RowsAffected()
+			if rowsAffected > 0 {
+				assignmentsCreated++
+			}
 		}
 	}
 
@@ -852,7 +912,7 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Transaction committed successfully! Windows %v created with %d student assignments", windowIDs, assignmentsCreated)
+	log.Printf("Transaction committed successfully! Shared window %v created for %d users with %d student assignments", windowIDs, len(resolvedUsers), assignmentsCreated)
 
 	// Verify assignments for the first created window for debugging parity.
 	if len(windowIDs) > 0 {
@@ -863,7 +923,7 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 
 	response := models.CreateUserStudentWindowResponse{
 		Success: true,
-		Message: fmt.Sprintf("Successfully created %d window(s) and assigned %d students", len(windowIDs), assignmentsCreated),
+		Message: fmt.Sprintf("Successfully created shared window and mapped %d users with %d student assignments", len(resolvedUsers), assignmentsCreated),
 		WindowID: func() int {
 			if len(windowIDs) > 0 {
 				return windowIDs[0]
@@ -871,7 +931,7 @@ func CreateUserStudentWindow(w http.ResponseWriter, r *http.Request) {
 			return 0
 		}(),
 		WindowIDs:          windowIDs,
-		WindowsCreated:     len(windowIDs),
+		WindowsCreated:     1,
 		AssignmentsCreated: assignmentsCreated,
 	}
 
@@ -921,6 +981,11 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("GetUserAssignedStudents: Error ensuring mark_entry_window_users table: %v", err)
+		http.Error(w, "Failed to initialize shared window-user mapping support", http.StatusInternalServerError)
 		return
 	}
 
@@ -988,16 +1053,26 @@ func GetUserAssignedStudents(w http.ResponseWriter, r *http.Request) {
 	// Check windows before executing main query
 	var windowCount int
 	err = database.QueryRow(`
-		SELECT COUNT(*) FROM mark_entry_windows 
-		WHERE user_id = ? AND enabled = 1 AND start_at <= ? AND end_at > ?
-	`, numericUserID, now, now).Scan(&windowCount)
+		SELECT COUNT(*)
+		FROM mark_entry_windows w
+		WHERE ((w.scope_type = 'user_single' AND w.user_id = ?) OR (w.scope_type = 'user_multi' AND EXISTS (
+			SELECT 1 FROM mark_entry_window_users mwu WHERE mwu.window_id = w.id AND mwu.user_id = ?
+		)))
+		AND w.enabled = 1 AND w.start_at <= ? AND w.end_at > ?
+	`, numericUserID, numericUserID, now, now).Scan(&windowCount)
 	if err == nil {
 		log.Printf("[DEBUG] GetUserAssignedStudents: Active windows for user_id=%d: %d", numericUserID, windowCount)
 	}
 
 	// Check all windows for this user (even inactive/expired)
 	var totalWindowCount int
-	err = database.QueryRow(`SELECT COUNT(*) FROM mark_entry_windows WHERE user_id = ?`, numericUserID).Scan(&totalWindowCount)
+	err = database.QueryRow(`
+		SELECT COUNT(*)
+		FROM mark_entry_windows w
+		WHERE (w.scope_type = 'user_single' AND w.user_id = ?) OR (w.scope_type = 'user_multi' AND EXISTS (
+			SELECT 1 FROM mark_entry_window_users mwu WHERE mwu.window_id = w.id AND mwu.user_id = ?
+		))
+	`, numericUserID, numericUserID).Scan(&totalWindowCount)
 	if err == nil {
 		log.Printf("[DEBUG] GetUserAssignedStudents: Total windows (all statuses) for user_id=%d: %d", numericUserID, totalWindowCount)
 	}
@@ -1223,6 +1298,11 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("GetUserCourses: Error ensuring mark_entry_window_users table: %v", err)
+		http.Error(w, "Failed to initialize shared window-user mapping support", http.StatusInternalServerError)
+		return
+	}
 
 	// Resolve numeric user ID from username/user_id/teacher mapping
 	numericUserID, err := resolveNumericUserID(database, userIdentifier)
@@ -1256,7 +1336,9 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN academic_calendar ac ON ac.id = s.year
 		INNER JOIN student_courses sce ON mesp.student_id = sce.student_id
 		INNER JOIN courses c ON sce.course_id = c.id
-		WHERE w.user_id = ?
+		WHERE ((w.scope_type = 'user_single' AND w.user_id = ?) OR (w.scope_type = 'user_multi' AND EXISTS (
+			SELECT 1 FROM mark_entry_window_users mwu WHERE mwu.window_id = w.id AND mwu.user_id = ?
+		)))
 		  AND mesp.user_id = ?
 		  AND w.enabled = 1
 		AND w.start_at <= ?
@@ -1283,7 +1365,7 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 	`
 
 	log.Printf("GetUserCourses: Executing query with user_id=%d, now=%s", numericUserID, now.Format("2006-01-02 15:04:05"))
-	rows, err := database.Query(query, numericUserID, numericUserID, now, now)
+	rows, err := database.Query(query, numericUserID, numericUserID, numericUserID, now, now)
 	if err != nil {
 		log.Printf("Error fetching user courses: %v", err)
 		http.Error(w, "Failed to fetch courses", http.StatusInternalServerError)
@@ -1342,10 +1424,13 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 
 	// Include courses from active user windows (course_id, dept+semester windows)
 	windowRows, err := database.Query(`
-		SELECT id, course_id, department_id, semester
-		FROM mark_entry_windows
-		WHERE user_id = ? AND enabled = 1 AND start_at <= ? AND end_at >= ?
-	`, numericUserID, now, now)
+		SELECT w.id, w.course_id, w.department_id, w.semester
+		FROM mark_entry_windows w
+		WHERE ((w.scope_type = 'user_single' AND w.user_id = ?) OR (w.scope_type = 'user_multi' AND EXISTS (
+			SELECT 1 FROM mark_entry_window_users mwu WHERE mwu.window_id = w.id AND mwu.user_id = ?
+		)))
+		AND w.enabled = 1 AND w.start_at <= ? AND w.end_at >= ?
+	`, numericUserID, numericUserID, now, now)
 	if err == nil {
 		defer windowRows.Close()
 		for windowRows.Next() {

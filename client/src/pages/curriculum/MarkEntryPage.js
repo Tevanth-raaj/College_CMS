@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
 
 function MarkEntryPage() {
+  const location = useLocation()
   const [courses, setCourses] = useState([])
   const [selectedCourse, setSelectedCourse] = useState(null)
   const [markCategories, setMarkCategories] = useState([])
@@ -65,10 +67,102 @@ function MarkEntryPage() {
   const userRole = localStorage.getItem('userRole') || localStorage.getItem('role')
   const isTeacher = userRole === 'teacher' && !!teacherId
   const facultyIdentifier = username || teacherId
+  const selectedWindowFromCard = Number(location?.state?.selectedWindowId || 0)
 
   const getCourseDisplayLabel = (course) => {
     if (!course) return ''
     return `${course.course_code} - ${course.course_name}`
+  }
+
+  const sortCoursesForWindowPreference = (courseList = []) => {
+    if (!Array.isArray(courseList)) return []
+    const preferredWindowId = Number(selectedWindowFromCard)
+    if (!Number.isFinite(preferredWindowId) || preferredWindowId <= 0) {
+      return [...courseList]
+    }
+
+    const sorted = [...courseList]
+    sorted.sort((left, right) => {
+      const leftPreferred = Number(left?.window_id) === preferredWindowId ? 1 : 0
+      const rightPreferred = Number(right?.window_id) === preferredWindowId ? 1 : 0
+      if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred
+
+      const leftCode = String(left?.course_code || '')
+      const rightCode = String(right?.course_code || '')
+      return leftCode.localeCompare(rightCode)
+    })
+    return sorted
+  }
+
+  const mergeCoursesByWindow = (...courseGroups) => {
+    const merged = new Map()
+
+    courseGroups.forEach((group) => {
+      if (!Array.isArray(group)) return
+      group.forEach((course) => {
+        const courseId = Number(course?.course_id || 0)
+        if (!courseId) return
+        const windowId = Number(course?.window_id || 0)
+        const key = `${courseId}|${windowId}`
+
+        if (!merged.has(key)) {
+          merged.set(key, {
+            course_id: courseId,
+            course_code: course?.course_code || `COURSE-${courseId}`,
+            course_name: course?.course_name || 'Unnamed Course',
+            category: course?.category || '',
+            semester: course?.semester || null,
+            window_id: windowId || undefined,
+            enrollments: Array.isArray(course?.enrollments) ? course.enrollments : [],
+          })
+          return
+        }
+
+        const existing = merged.get(key)
+        if ((!existing.course_name || existing.course_name === 'Unnamed Course') && course?.course_name) {
+          existing.course_name = course.course_name
+        }
+        if ((!existing.course_code || existing.course_code.startsWith('COURSE-')) && course?.course_code) {
+          existing.course_code = course.course_code
+        }
+        if (!existing.category && course?.category) {
+          existing.category = course.category
+        }
+        if (!existing.semester && course?.semester) {
+          existing.semester = course.semester
+        }
+      })
+    })
+
+    return Array.from(merged.values())
+  }
+
+  const fetchAssignedWindowCourses = async (userIdentifier) => {
+    if (!userIdentifier) return []
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/mark-entry/user-assigned-students?user_id=${encodeURIComponent(userIdentifier)}`
+      )
+      if (!response.ok) return []
+
+      const assignedRows = await response.json()
+      const rows = Array.isArray(assignedRows) ? assignedRows : []
+      return mergeCoursesByWindow(
+        rows.map((row) => ({
+          course_id: row.course_id,
+          course_code: row.course_code,
+          course_name: row.course_name,
+          window_id: row.window_id,
+          category: '',
+          semester: null,
+          enrollments: [],
+        }))
+      )
+    } catch (error) {
+      console.warn('Failed to fetch assigned-window course list:', error)
+      return []
+    }
   }
 
   const selectedCourseLabel = getCourseDisplayLabel(selectedCourse)
@@ -96,7 +190,7 @@ function MarkEntryPage() {
 
   useEffect(() => {
     setCourseSearchQuery(getCourseDisplayLabel(selectedCourse))
-  }, [selectedCourse?.course_id])
+  }, [selectedCourse?.course_id, selectedCourse?.window_id])
 
   useEffect(() => {
     const handleOutsideClick = (event) => {
@@ -135,9 +229,13 @@ function MarkEntryPage() {
                 }))
               : []
 
-            if (userWindowCourses.length > 0) {
-              setCourses(userWindowCourses)
-              setSelectedCourse(userWindowCourses[0])
+            const assignedWindowCourses = await fetchAssignedWindowCourses(username)
+            const mergedUserWindowCourses = mergeCoursesByWindow(userWindowCourses, assignedWindowCourses)
+
+            if (mergedUserWindowCourses.length > 0) {
+              const sortedCourses = sortCoursesForWindowPreference(mergedUserWindowCourses)
+              setCourses(sortedCourses)
+              setSelectedCourse(sortedCourses[0])
               setMessage({ type: '', text: '' })
               return
             }
@@ -180,22 +278,18 @@ function MarkEntryPage() {
                 }))
               : []
 
-            // Add only non-duplicated courses
-            const existingCourseIds = new Set(mergedCourses.map((course) => course.course_id))
-            formattedUserCourses.forEach((course) => {
-              if (!existingCourseIds.has(course.course_id)) {
-                mergedCourses.push(course)
-              }
-            })
+            const assignedWindowCourses = await fetchAssignedWindowCourses(userIdForFallback)
+            mergedCourses = mergeCoursesByWindow(mergedCourses, formattedUserCourses, assignedWindowCourses)
           }
         } catch (userErr) {
           console.warn('Error fetching user courses fallback:', userErr)
         }
       }
 
-      setCourses(mergedCourses)
-      if (mergedCourses.length > 0) {
-        setSelectedCourse(mergedCourses[0])
+      const sortedCourses = sortCoursesForWindowPreference(mergedCourses)
+      setCourses(sortedCourses)
+      if (sortedCourses.length > 0) {
+        setSelectedCourse(sortedCourses[0])
       }
 
       if (mergedCourses.length === 0) {
@@ -228,12 +322,16 @@ function MarkEntryPage() {
         window_id: course.window_id,
         enrollments: [] // Will be populated when fetching students
       }))
+
+      const assignedWindowCourses = await fetchAssignedWindowCourses(username)
+      const mergedCourses = mergeCoursesByWindow(formattedCourses, assignedWindowCourses)
       
-      setCourses(formattedCourses)
+      const sortedCourses = sortCoursesForWindowPreference(mergedCourses)
+      setCourses(sortedCourses)
       
       // Select first course if available
-      if (formattedCourses.length > 0) {
-        setSelectedCourse(formattedCourses[0])
+      if (sortedCourses.length > 0) {
+        setSelectedCourse(sortedCourses[0])
       }
       setMessage({ type: '', text: '' })
     } catch (error) {
@@ -595,18 +693,21 @@ function MarkEntryPage() {
       return
     }
 
-    if (assignedCourseRef.current === selectedCourse.course_id && allStudents.length > 0) {
+    const selectedCourseWindowKey = `${selectedCourse.course_id}|${selectedCourse.window_id || 0}`
+    if (assignedCourseRef.current === selectedCourseWindowKey && allStudents.length > 0) {
       console.debug('Skipping assigned students fetch; already loaded for course', selectedCourse.course_id)
       return
     }
 
     setIsFetchingAssigned(true)
-    assignedCourseRef.current = selectedCourse.course_id
+    assignedCourseRef.current = selectedCourseWindowKey
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/mark-entry/user-assigned-students?user_id=${username}&course_id=${selectedCourse.course_id}`
-      )
+      const params = new URLSearchParams()
+      params.set('user_id', username)
+      params.set('course_id', selectedCourse.course_id)
+      if (selectedCourse?.window_id) params.set('window_id', selectedCourse.window_id)
+      const response = await fetch(`${API_BASE_URL}/mark-entry/user-assigned-students?${params.toString()}`)
       if (!response.ok) throw new Error('Failed to fetch assigned students')
       const data = await response.json()
       
@@ -1253,7 +1354,7 @@ function MarkEntryPage() {
                     ) : (
                       filteredCourses.map((course) => (
                         <button
-                          key={course.course_id}
+                          key={`${course.course_id}-${course.window_id || 0}`}
                           type="button"
                           onClick={() => {
                             setSelectedCourse(course)
@@ -1261,7 +1362,9 @@ function MarkEntryPage() {
                             setIsCourseDropdownOpen(false)
                           }}
                           className={`w-full text-left px-4 py-2 text-sm hover:bg-blue-50 transition-colors ${
-                            selectedCourse?.course_id === course.course_id ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+                            selectedCourse?.course_id === course.course_id && Number(selectedCourse?.window_id || 0) === Number(course?.window_id || 0)
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'text-gray-700'
                           }`}
                         >
                           {getCourseDisplayLabel(course)}

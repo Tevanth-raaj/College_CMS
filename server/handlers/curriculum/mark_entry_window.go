@@ -17,6 +17,47 @@ import (
 
 const markEntryTimeLayout = "2006-01-02T15:04"
 
+const (
+	markEntryScopeGlobal     = "global"
+	markEntryScopeTeacher    = "teacher"
+	markEntryScopeUserSingle = "user_single"
+	markEntryScopeUserMulti  = "user_multi"
+)
+
+func deriveWindowScopeType(teacherValue interface{}, userValue interface{}, hasMappedUsers bool) string {
+	if hasWindowScopeValue(teacherValue) {
+		return markEntryScopeTeacher
+	}
+	if hasMappedUsers {
+		return markEntryScopeUserMulti
+	}
+	if hasWindowScopeValue(userValue) {
+		return markEntryScopeUserSingle
+	}
+	return markEntryScopeGlobal
+}
+
+func hasWindowScopeValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case *string:
+		return typed != nil && strings.TrimSpace(*typed) != ""
+	case int:
+		return typed > 0
+	case int64:
+		return typed > 0
+	case sql.NullString:
+		return typed.Valid && strings.TrimSpace(typed.String) != ""
+	case sql.NullInt64:
+		return typed.Valid && typed.Int64 > 0
+	default:
+		return true
+	}
+}
+
 func sanitizeDepartmentIDs(ids []int) []int {
 	seen := make(map[int]struct{})
 	cleaned := make([]int, 0, len(ids))
@@ -48,6 +89,128 @@ func ensureWindowDepartmentsTable(database *sql.DB) error {
 		)
 	`)
 	return err
+}
+
+func ensureWindowUsersTable(database *sql.DB) error {
+	tableExists, err := schemaTableExists(database, "mark_entry_window_users")
+	if err != nil {
+		return err
+	}
+
+	if !tableExists {
+		_, err = database.Exec(`
+			CREATE TABLE mark_entry_window_users (
+				id INT AUTO_INCREMENT PRIMARY KEY,
+				window_id INT NOT NULL,
+				user_id INT NOT NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE KEY uq_window_user (window_id, user_id),
+				KEY idx_window_id (window_id),
+				KEY idx_user_id (user_id),
+				CONSTRAINT fk_mewu_window FOREIGN KEY (window_id) REFERENCES mark_entry_windows(id) ON DELETE CASCADE,
+				CONSTRAINT fk_mewu_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			)
+		`)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := ensureWindowScopeTypeColumn(database); err != nil {
+		return err
+	}
+
+	return err
+}
+
+func ensureWindowScopeTypeColumn(database *sql.DB) error {
+	columnExists, err := schemaColumnExists(database, "mark_entry_windows", "scope_type")
+	if err != nil {
+		return err
+	}
+	if !columnExists {
+		if _, err := database.Exec(`
+			ALTER TABLE mark_entry_windows
+			ADD COLUMN scope_type VARCHAR(20) NOT NULL DEFAULT 'global'
+		`); err != nil {
+			return err
+		}
+	}
+
+	_, err = database.Exec(`
+		UPDATE mark_entry_windows w
+		LEFT JOIN (
+			SELECT window_id, COUNT(*) AS user_count
+			FROM mark_entry_window_users
+			GROUP BY window_id
+		) mwu ON mwu.window_id = w.id
+		SET w.scope_type = CASE
+			WHEN w.teacher_id IS NOT NULL THEN 'teacher'
+			WHEN COALESCE(mwu.user_count, 0) > 1 THEN 'user_multi'
+			WHEN COALESCE(mwu.user_count, 0) = 1 THEN CASE WHEN w.user_id IS NULL THEN 'user_multi' ELSE 'user_single' END
+			WHEN w.user_id IS NOT NULL THEN 'user_single'
+			ELSE 'global'
+		END
+		WHERE w.scope_type IS NULL
+			OR w.scope_type = ''
+			OR w.scope_type NOT IN ('teacher', 'global', 'user_single', 'user_multi')
+	`)
+	return err
+}
+
+func schemaTableExists(database *sql.DB, tableName string) (bool, error) {
+	var count int
+	err := database.QueryRow(`
+		SELECT COUNT(*)
+		FROM INFORMATION_SCHEMA.TABLES
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = ?
+	`, tableName).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func schemaColumnExists(database *sql.DB, tableName string, columnName string) (bool, error) {
+	var count int
+	err := database.QueryRow(`
+		SELECT COUNT(*)
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = ?
+		  AND COLUMN_NAME = ?
+	`, tableName, columnName).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func replaceWindowUsersTx(tx *sql.Tx, windowID int, userIDs []int) error {
+	if _, err := tx.Exec(`DELETE FROM mark_entry_window_users WHERE window_id = ?`, windowID); err != nil {
+		return err
+	}
+
+	seen := make(map[int]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID <= 0 {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+
+		if _, err := tx.Exec(`
+			INSERT INTO mark_entry_window_users (window_id, user_id)
+			VALUES (?, ?)
+		`, windowID, userID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func replaceWindowDepartmentsTx(tx *sql.Tx, windowID int, departmentIDs []int) error {
@@ -199,6 +362,21 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("[GetAllMarkEntryWindows] Error ensuring scope schema: %v", err)
+		http.Error(w, "Failed to initialize mark entry window schema", http.StatusInternalServerError)
+		return
+	}
+	if err := ensureWindowDepartmentsTable(database); err != nil {
+		log.Printf("[GetAllMarkEntryWindows] Error ensuring department scope schema: %v", err)
+		http.Error(w, "Failed to initialize mark entry window schema", http.StatusInternalServerError)
+		return
+	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("[GetAllMarkEntryWindows] Error ensuring scope schema: %v", err)
+		http.Error(w, "Failed to initialize mark entry window schema", http.StatusInternalServerError)
+		return
+	}
 
 	if err := ensureWindowDepartmentsTable(database); err != nil {
 		log.Printf("[GetAllMarkEntryWindows] Error ensuring mark_entry_window_departments table: %v", err)
@@ -206,14 +384,8 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ensureWindowDepartmentsTable(database); err != nil {
-		log.Printf("Error ensuring mark_entry_window_departments table: %v", err)
-		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
-		return
-	}
-
 	query := `
-		SELECT id, teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name
+		SELECT id, scope_type, teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name
 		FROM mark_entry_windows
 		WHERE 1 = 1`
 	args := []interface{}{}
@@ -252,6 +424,7 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	var startAt time.Time
 	var endAt time.Time
 	var enabledInt int
+	var scopeType sql.NullString
 	var teacherIDNull sql.NullString
 	var departmentIDNull sql.NullInt64
 	var semesterNull sql.NullInt64
@@ -261,6 +434,7 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 
 	err := database.QueryRow(query, args...).Scan(
 		&window.ID,
+		&scopeType,
 		&teacherIDNull,
 		&departmentIDNull,
 		&semesterNull,
@@ -283,6 +457,9 @@ func GetMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	if teacherIDNull.Valid {
 		value := teacherIDNull.String
 		window.TeacherID = &value
+	}
+	if scopeType.Valid {
+		window.ScopeType = scopeType.String
 	}
 	if departmentIDNull.Valid {
 		value := int(departmentIDNull.Int64)
@@ -369,6 +546,16 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
 		return
 	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("[PendingSubmissions] Error ensuring scope schema: %v", err)
+		http.Error(w, "Failed to initialize mark entry window schema", http.StatusInternalServerError)
+		return
+	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("Error ensuring mark entry scope schema: %v", err)
+		http.Error(w, "Failed to save mark entry window", http.StatusInternalServerError)
+		return
+	}
 
 	// No longer deleting existing windows for the same scope
 	// Multiple windows can coexist and their components get merged by resolveMarkEntryWindow
@@ -410,11 +597,13 @@ func SaveMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scopeType := deriveWindowScopeType(teacherValue, nil, false)
+
 	result, execErr := tx.Exec(`
 		INSERT INTO mark_entry_windows
-		(teacher_id, department_id, semester, course_id, start_at, end_at, enabled, window_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, teacherValue, departmentValue, semesterValue, courseValue, startAt, endAt, enabledValue, req.WindowName)
+		(teacher_id, user_id, department_id, semester, course_id, start_at, end_at, enabled, window_name, scope_type)
+		VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, teacherValue, departmentValue, semesterValue, courseValue, startAt, endAt, enabledValue, req.WindowName, scopeType)
 	if execErr != nil {
 		_ = tx.Rollback()
 		log.Printf("Error saving mark entry window: %v", execErr)
@@ -680,6 +869,9 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 	if numericUserID.Valid {
 		userIDValue = numericUserID.Int64
 	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		return false, nil, nil, err
+	}
 
 	// Build the query dynamically for both department and semester matching.
 	// This ensures a course shared across curricula (different depts/semesters) can match
@@ -688,7 +880,7 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 	var semClause string
 	var queryArgs []interface{}
 
-	queryArgs = append(queryArgs, facultyID, userIDValue, courseID)
+	queryArgs = append(queryArgs, facultyID, userIDValue, userIDValue, courseID)
 
 	// Department clause
 	// For semester courses, keep existing dept-scope behavior.
@@ -769,13 +961,21 @@ func resolveMarkEntryWindow(courseID int, teacherID string) (bool, []int, []int,
 	query := fmt.Sprintf(`
 		SELECT id, start_at, end_at, enabled
 		FROM mark_entry_windows w
-		WHERE ((w.teacher_id IS NULL AND w.user_id IS NULL) OR w.teacher_id = ? OR w.user_id = ?)
+		WHERE (
+			(w.scope_type = 'global')
+			OR (w.scope_type = 'teacher' AND w.teacher_id = ?)
+			OR (w.scope_type = 'user_single' AND w.user_id = ?)
+			OR (w.scope_type = 'user_multi' AND EXISTS (
+				SELECT 1 FROM mark_entry_window_users mwu
+				WHERE mwu.window_id = w.id AND mwu.user_id = ?
+			))
+		)
 		  AND (w.course_id IS NULL OR w.course_id = ?)
 		  AND %s
 		  AND %s
 		ORDER BY
-		  (w.teacher_id IS NOT NULL) DESC,
-		  (w.user_id IS NOT NULL) DESC,
+		  (w.scope_type = 'teacher') DESC,
+		  (w.scope_type IN ('user_single','user_multi')) DESC,
 		  (w.course_id IS NOT NULL) DESC,
 		  (w.department_id IS NOT NULL) DESC,
 		  (w.semester IS NOT NULL) DESC,
@@ -947,6 +1147,11 @@ func GetApplicableMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 	database := db.DB
 	if database == nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("[PendingSubmissions] Error ensuring scope schema: %v", err)
+		http.Error(w, "Failed to initialize mark entry window schema", http.StatusInternalServerError)
 		return
 	}
 
@@ -1134,8 +1339,9 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 		query = `
 			SELECT 
 				w.id,
+				ANY_VALUE(w.scope_type) as scope_type,
 				w.user_id,
-				COALESCE(u.username, '') as user_username,
+				COALESCE(GROUP_CONCAT(DISTINCT uw.username ORDER BY uw.username SEPARATOR ', '), COALESCE(u.username, '')) as user_username,
 				w.department_id,
 				COALESCE(d.department_name, '') as department_name,
 				w.semester,
@@ -1149,10 +1355,12 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 				COUNT(DISTINCT mesp.student_id) as student_count
 			FROM mark_entry_windows w
 			LEFT JOIN users u ON w.user_id = u.id
+			LEFT JOIN mark_entry_window_users mwu ON w.id = mwu.window_id
+			LEFT JOIN users uw ON mwu.user_id = uw.id
 			LEFT JOIN departments d ON w.department_id = d.id
 			LEFT JOIN courses c ON w.course_id = c.id
 			LEFT JOIN mark_entry_student_permissions mesp ON w.id = mesp.window_id
-			WHERE w.user_id IS NOT NULL
+			WHERE w.scope_type IN ('user_single', 'user_multi')
 			GROUP BY w.id
 			ORDER BY 
 				CASE WHEN w.end_at > NOW() THEN 0 ELSE 1 END,
@@ -1164,6 +1372,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 		query = `
 			SELECT DISTINCT
 				w.id,
+				w.scope_type,
 				w.teacher_id,
 				COALESCE(t.name, '') as teacher_name,
 				w.department_id,
@@ -1182,11 +1391,11 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN courses c ON w.course_id = c.id
 			WHERE w.enabled = 1 
 			AND (
-				w.teacher_id = ?
+				(w.scope_type = 'teacher' AND w.teacher_id = ?)
 				OR w.course_id IN (
 					SELECT course_id FROM teacher_course_history WHERE teacher_id = ? AND record_type = 'course' AND archived_at IS NULL
 				)
-				OR w.teacher_id IS NULL
+				OR w.scope_type = 'global'
 			)
 			ORDER BY 
 				CASE WHEN w.end_at > NOW() THEN 0 ELSE 1 END,
@@ -1197,6 +1406,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 		query = `
 			SELECT 
 				w.id,
+				w.scope_type,
 				w.teacher_id,
 				COALESCE(t.name, '') as teacher_name,
 				w.department_id,
@@ -1237,6 +1447,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 
 	type WindowWithDetails struct {
 		ID             int       `json:"id"`
+		ScopeType      string    `json:"scope_type,omitempty"`
 		TeacherID      *string   `json:"teacher_id,omitempty"`
 		TeacherName    string    `json:"teacher_name,omitempty"`
 		UserID         *int      `json:"user_id,omitempty"`
@@ -1260,6 +1471,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 	var windows []WindowWithDetails
 	for rows.Next() {
 		var window WindowWithDetails
+		var scopeType sql.NullString
 
 		if userOnly {
 			var userID, studentCount sql.NullInt64
@@ -1268,6 +1480,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 
 			err := rows.Scan(
 				&window.ID,
+				&scopeType,
 				&userID,
 				&userUsername,
 				&deptID,
@@ -1291,6 +1504,9 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 				id := int(userID.Int64)
 				window.UserID = &id
 				window.UserUsername = userUsername.String
+			}
+			if scopeType.Valid {
+				window.ScopeType = scopeType.String
 			}
 			if studentCount.Valid {
 				count := int(studentCount.Int64)
@@ -1317,6 +1533,7 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 
 			err := rows.Scan(
 				&window.ID,
+				&scopeType,
 				&teacherID,
 				&teacherName,
 				&deptID,
@@ -1338,6 +1555,9 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			if teacherID.Valid {
 				window.TeacherID = &teacherID.String
 				window.TeacherName = teacherName.String
+			}
+			if scopeType.Valid {
+				window.ScopeType = scopeType.String
 			}
 			if deptID.Valid {
 				id := int(deptID.Int64)
@@ -1483,6 +1703,12 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := ensureWindowScopeTypeColumn(database); err != nil {
+		log.Printf("Error ensuring scope_type column: %v", err)
+		http.Error(w, "Failed to update window", http.StatusInternalServerError)
+		return
+	}
+
 	departmentIDs := sanitizeDepartmentIDs(request.DepartmentIDs)
 	if len(departmentIDs) == 0 && request.DepartmentID != nil && *request.DepartmentID > 0 {
 		departmentIDs = []int{*request.DepartmentID}
@@ -1549,10 +1775,11 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update window
+	scopeType := deriveWindowScopeType(teacherIDValue, userIDValue, false)
 	updateQuery := `
 		UPDATE mark_entry_windows
 		SET teacher_id = ?, user_id = ?, department_id = ?, semester = ?, course_id = ?,
-		    start_at = ?, end_at = ?, enabled = ?, window_name = ?
+		    start_at = ?, end_at = ?, enabled = ?, window_name = ?, scope_type = ?
 		WHERE id = ?
 	`
 
@@ -1566,6 +1793,7 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		endAt,
 		request.Enabled,
 		request.WindowName,
+		scopeType,
 		windowID,
 	)
 	if err != nil {
@@ -1987,7 +2215,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 	// Build WHERE first, then append ORDER BY so optional filters don't break SQL syntax.
 	windowQuery := `
 		SELECT
-			w.id, w.teacher_id, w.user_id, w.department_id, w.semester, w.course_id,
+			w.id, w.scope_type, w.teacher_id, w.user_id, w.department_id, w.semester, w.course_id,
 			w.start_at, w.end_at, w.enabled,
 			COALESCE(d.department_name, '') as department_name,
 			COALESCE(c.course_code, '') as course_code,
@@ -2037,6 +2265,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 	type WindowWithPending struct {
 		WindowID       int              `json:"window_id"`
 		WindowName     string           `json:"window_name"`
+		ScopeType      string           `json:"scope_type,omitempty"`
 		UserID         *int             `json:"user_id,omitempty"`
 		UserName       string           `json:"user_name,omitempty"`
 		DepartmentID   *int             `json:"department_id"`
@@ -2059,6 +2288,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var windowID int
+		var scopeType sql.NullString
 		var teacherID sql.NullString
 		var userID sql.NullInt64
 		var deptID, semester, courseID sql.NullInt64
@@ -2068,6 +2298,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 
 		err := rows.Scan(
 			&windowID,
+			&scopeType,
 			&teacherID,
 			&userID,
 			&deptID,
@@ -2108,6 +2339,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		windowData := WindowWithPending{
 			WindowID:       windowID,
 			WindowName:     windowName.String,
+			ScopeType:      strings.TrimSpace(scopeType.String),
 			UserName:       strings.TrimSpace(userName.String),
 			DepartmentName: deptName.String,
 			CourseCode:     courseCode.String,
@@ -2198,7 +2430,7 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		hasCourse := courseID.Valid && courseID.Int64 != 0
 		hasDepartment := len(windowData.DepartmentIDs) > 0
 		hasSemester := semester.Valid && semester.Int64 != 0
-		isUserScoped := windowData.UserID != nil && *windowData.UserID > 0
+		isUserScoped := windowData.ScopeType == markEntryScopeUserSingle || windowData.ScopeType == markEntryScopeUserMulti
 
 		if isUserScoped {
 			// User-scoped windows are handled by dedicated user details API.
@@ -2467,6 +2699,7 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 	type userWindowSummaryRow struct {
 		WindowID     int
 		WindowName   sql.NullString
+		ScopeType    sql.NullString
 		UserID       sql.NullInt64
 		DepartmentID sql.NullInt64
 		Semester     sql.NullInt64
@@ -2478,12 +2711,13 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 
 	var summary userWindowSummaryRow
 	err = database.QueryRow(`
-		SELECT id, COALESCE(window_name, ''), user_id, department_id, semester, course_id, start_at, end_at, enabled
+		SELECT id, COALESCE(window_name, ''), COALESCE(scope_type, ''), user_id, department_id, semester, course_id, start_at, end_at, enabled
 		FROM mark_entry_windows
 		WHERE id = ?
 	`, windowID).Scan(
 		&summary.WindowID,
 		&summary.WindowName,
+		&summary.ScopeType,
 		&summary.UserID,
 		&summary.DepartmentID,
 		&summary.Semester,
@@ -2502,14 +2736,65 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !summary.UserID.Valid || summary.UserID.Int64 <= 0 {
+	scopeType := strings.TrimSpace(summary.ScopeType.String)
+	userScoped := scopeType == markEntryScopeUserSingle || scopeType == markEntryScopeUserMulti
+	if !userScoped && summary.UserID.Valid && summary.UserID.Int64 > 0 {
+		// Backward compatibility for legacy rows without scope_type.
+		userScoped = true
+	}
+	if !userScoped {
 		http.Error(w, "Window is not user-scoped", http.StatusBadRequest)
 		return
 	}
 
-	numericUserID := int(summary.UserID.Int64)
-	var username sql.NullString
-	_ = database.QueryRow(`SELECT username FROM users WHERE id = ? LIMIT 1`, numericUserID).Scan(&username)
+	type userTarget struct {
+		NumericUserID int
+		Username      string
+	}
+	userTargets := make([]userTarget, 0)
+	seenUser := make(map[int]struct{})
+
+	if summary.UserID.Valid && summary.UserID.Int64 > 0 {
+		numericUserID := int(summary.UserID.Int64)
+		var username sql.NullString
+		_ = database.QueryRow(`SELECT username FROM users WHERE id = ? LIMIT 1`, numericUserID).Scan(&username)
+		userTargets = append(userTargets, userTarget{NumericUserID: numericUserID, Username: strings.TrimSpace(username.String)})
+		seenUser[numericUserID] = struct{}{}
+	}
+
+	if scopeType == markEntryScopeUserMulti {
+		mappedRows, mappedErr := database.Query(`
+			SELECT u.id, COALESCE(u.username, '')
+			FROM mark_entry_window_users mwu
+			INNER JOIN users u ON u.id = mwu.user_id
+			WHERE mwu.window_id = ?
+			ORDER BY u.username
+		`, windowID)
+		if mappedErr != nil {
+			log.Printf("Error fetching mapped users for window %d: %v", windowID, mappedErr)
+			http.Error(w, "Failed to fetch window users", http.StatusInternalServerError)
+			return
+		}
+		defer mappedRows.Close()
+
+		for mappedRows.Next() {
+			var numericUserID int
+			var username sql.NullString
+			if scanErr := mappedRows.Scan(&numericUserID, &username); scanErr != nil {
+				continue
+			}
+			if _, exists := seenUser[numericUserID]; exists {
+				continue
+			}
+			seenUser[numericUserID] = struct{}{}
+			userTargets = append(userTargets, userTarget{NumericUserID: numericUserID, Username: strings.TrimSpace(username.String)})
+		}
+	}
+
+	if len(userTargets) == 0 {
+		http.Error(w, "Window has no mapped users", http.StatusBadRequest)
+		return
+	}
 
 	departmentIDs, departmentNames := getWindowDepartments(database, windowID, nil)
 	if len(departmentIDs) == 0 {
@@ -2538,11 +2823,18 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(departmentIDs) > 0 && !match {
+			responseUserID := 0
+			responseUserName := ""
+			if len(userTargets) == 1 {
+				responseUserID = userTargets[0].NumericUserID
+				responseUserName = strings.TrimSpace(userTargets[0].Username)
+			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"window_id":          windowID,
 				"window_name":        summary.WindowName.String,
-				"user_id":            numericUserID,
-				"user_name":          strings.TrimSpace(username.String),
+				"scope_type":         scopeType,
+				"user_id":            responseUserID,
+				"user_name":          responseUserName,
 				"department_options": []map[string]interface{}{},
 				"pending_users":      []map[string]interface{}{},
 				"completed_users":    []map[string]interface{}{},
@@ -2557,11 +2849,6 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	aliases := getUserIdentifierAliases(database, numericUserID, strings.TrimSpace(username.String))
-	if len(aliases) == 0 {
-		aliases = []string{strings.TrimSpace(username.String), strconv.Itoa(numericUserID)}
-	}
-
 	allowedComponentIDs := make([]int, 0)
 	allowedRows, allowedErr := database.Query(`SELECT assessment_component_id FROM mark_entry_window_components WHERE window_id = ?`, windowID)
 	if allowedErr == nil {
@@ -2574,154 +2861,162 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 		allowedRows.Close()
 	}
 
-	courseArgs := []interface{}{windowID, numericUserID}
-	whereClauses := []string{"mesp.window_id = ?", "mesp.user_id = ?", "s.status = 1"}
-	if summary.CourseID.Valid && summary.CourseID.Int64 > 0 {
-		whereClauses = append(whereClauses, "sc.course_id = ?")
-		courseArgs = append(courseArgs, summary.CourseID.Int64)
-	}
-	if summary.Semester.Valid && summary.Semester.Int64 > 0 {
-		whereClauses = append(whereClauses, "ac.current_semester = ?")
-		courseArgs = append(courseArgs, summary.Semester.Int64)
-	}
-	if len(selectedDepartmentIDs) > 0 {
-		deptPlaceholders := make([]string, 0, len(selectedDepartmentIDs))
-		for _, depID := range selectedDepartmentIDs {
-			deptPlaceholders = append(deptPlaceholders, "?")
-			courseArgs = append(courseArgs, depID)
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("s.department_id IN (%s)", strings.Join(deptPlaceholders, ",")))
-	}
-
-	courseQuery := fmt.Sprintf(`
-		SELECT
-			sc.course_id,
-			COALESCE(c.course_code, ''),
-			COALESCE(c.course_name, ''),
-			COUNT(DISTINCT s.id) AS assigned_students,
-			GROUP_CONCAT(DISTINCT s.learning_mode_id ORDER BY s.learning_mode_id) AS learning_modes
-		FROM mark_entry_student_permissions mesp
-		INNER JOIN students s ON s.id = mesp.student_id
-		LEFT JOIN academic_calendar ac ON ac.id = s.year
-		INNER JOIN student_courses sc ON sc.student_id = s.id
-		LEFT JOIN courses c ON c.id = sc.course_id
-		WHERE %s
-		GROUP BY sc.course_id, c.course_code, c.course_name
-		ORDER BY c.course_code
-	`, strings.Join(whereClauses, " AND "))
-
-	courseRows, err := database.Query(courseQuery, courseArgs...)
-	if err != nil {
-		log.Printf("Error fetching user submission courses: %v", err)
-		http.Error(w, "Failed to fetch user submission summary", http.StatusInternalServerError)
-		return
-	}
-	defer courseRows.Close()
-
 	pendingUsers := make([]map[string]interface{}, 0)
 	completedUsers := make([]map[string]interface{}, 0)
 
-	for courseRows.Next() {
-		var courseID int
-		var courseCode, courseName string
-		var assignedStudents int
-		var learningModesRaw sql.NullString
-		if scanErr := courseRows.Scan(&courseID, &courseCode, &courseName, &assignedStudents, &learningModesRaw); scanErr != nil {
-			continue
+	for _, targetUser := range userTargets {
+		numericUserID := targetUser.NumericUserID
+		userName := strings.TrimSpace(targetUser.Username)
+		aliases := getUserIdentifierAliases(database, numericUserID, userName)
+		if len(aliases) == 0 {
+			aliases = []string{userName, strconv.Itoa(numericUserID)}
 		}
 
-		updatedArgs := []interface{}{windowID, numericUserID, courseID}
-		updatedWhere := []string{"mesp.window_id = ?", "mesp.user_id = ?", "sc.course_id = ?", "s.status = 1"}
+		courseArgs := []interface{}{windowID, numericUserID}
+		whereClauses := []string{"mesp.window_id = ?", "mesp.user_id = ?", "s.status = 1"}
+		if summary.CourseID.Valid && summary.CourseID.Int64 > 0 {
+			whereClauses = append(whereClauses, "sc.course_id = ?")
+			courseArgs = append(courseArgs, summary.CourseID.Int64)
+		}
 		if summary.Semester.Valid && summary.Semester.Int64 > 0 {
-			updatedWhere = append(updatedWhere, "ac.current_semester = ?")
-			updatedArgs = append(updatedArgs, summary.Semester.Int64)
+			whereClauses = append(whereClauses, "ac.current_semester = ?")
+			courseArgs = append(courseArgs, summary.Semester.Int64)
 		}
 		if len(selectedDepartmentIDs) > 0 {
 			deptPlaceholders := make([]string, 0, len(selectedDepartmentIDs))
 			for _, depID := range selectedDepartmentIDs {
 				deptPlaceholders = append(deptPlaceholders, "?")
-				updatedArgs = append(updatedArgs, depID)
+				courseArgs = append(courseArgs, depID)
 			}
-			updatedWhere = append(updatedWhere, fmt.Sprintf("s.department_id IN (%s)", strings.Join(deptPlaceholders, ",")))
+			whereClauses = append(whereClauses, fmt.Sprintf("s.department_id IN (%s)", strings.Join(deptPlaceholders, ",")))
 		}
 
-		aliasPlaceholders := make([]string, 0, len(aliases))
-		for _, alias := range aliases {
-			aliasPlaceholders = append(aliasPlaceholders, "?")
-			updatedArgs = append(updatedArgs, strings.ToLower(strings.TrimSpace(alias)))
-		}
-		updatedWhere = append(updatedWhere, fmt.Sprintf("LOWER(TRIM(COALESCE(sm.faculty_id, ''))) IN (%s)", strings.Join(aliasPlaceholders, ",")))
-
-		if len(allowedComponentIDs) > 0 {
-			componentPlaceholders := make([]string, 0, len(allowedComponentIDs))
-			for _, componentID := range allowedComponentIDs {
-				componentPlaceholders = append(componentPlaceholders, "?")
-				updatedArgs = append(updatedArgs, componentID)
-			}
-			updatedWhere = append(updatedWhere, fmt.Sprintf("sm.assessment_component_id IN (%s)", strings.Join(componentPlaceholders, ",")))
-		}
-
-		updatedQuery := fmt.Sprintf(`
-			SELECT COUNT(DISTINCT s.id)
+		courseQuery := fmt.Sprintf(`
+			SELECT
+				sc.course_id,
+				COALESCE(c.course_code, ''),
+				COALESCE(c.course_name, ''),
+				COUNT(DISTINCT s.id) AS assigned_students,
+				GROUP_CONCAT(DISTINCT s.learning_mode_id ORDER BY s.learning_mode_id) AS learning_modes
 			FROM mark_entry_student_permissions mesp
 			INNER JOIN students s ON s.id = mesp.student_id
 			LEFT JOIN academic_calendar ac ON ac.id = s.year
 			INNER JOIN student_courses sc ON sc.student_id = s.id
-			INNER JOIN student_marks sm ON sm.student_id = s.id AND sm.course_id = sc.course_id AND sm.status = 1
+			LEFT JOIN courses c ON c.id = sc.course_id
 			WHERE %s
-		`, strings.Join(updatedWhere, " AND "))
+			GROUP BY sc.course_id, c.course_code, c.course_name
+			ORDER BY c.course_code
+		`, strings.Join(whereClauses, " AND "))
 
-		updatedStudents := 0
-		if err := database.QueryRow(updatedQuery, updatedArgs...).Scan(&updatedStudents); err != nil {
-			updatedStudents = 0
+		courseRows, courseErr := database.Query(courseQuery, courseArgs...)
+		if courseErr != nil {
+			log.Printf("Error fetching user submission courses for user %d: %v", numericUserID, courseErr)
+			continue
 		}
 
-		submittedArgs := make([]interface{}, 0, len(aliases)+2)
-		submittedArgs = append(submittedArgs, windowID, courseID)
-		submittedPlaceholders := make([]string, 0, len(aliases))
-		for _, alias := range aliases {
-			submittedPlaceholders = append(submittedPlaceholders, "?")
-			submittedArgs = append(submittedArgs, strings.TrimSpace(alias))
-		}
+		for courseRows.Next() {
+			var courseID int
+			var courseCode, courseName string
+			var assignedStudents int
+			var learningModesRaw sql.NullString
+			if scanErr := courseRows.Scan(&courseID, &courseCode, &courseName, &assignedStudents, &learningModesRaw); scanErr != nil {
+				continue
+			}
 
-		submittedQuery := fmt.Sprintf(`
-			SELECT COUNT(*) > 0
-			FROM mark_submissions
-			WHERE window_id = ? AND course_id = ? AND teacher_id IN (%s)
-		`, strings.Join(submittedPlaceholders, ","))
+			updatedArgs := []interface{}{windowID, numericUserID, courseID}
+			updatedWhere := []string{"mesp.window_id = ?", "mesp.user_id = ?", "sc.course_id = ?", "s.status = 1"}
+			if summary.Semester.Valid && summary.Semester.Int64 > 0 {
+				updatedWhere = append(updatedWhere, "ac.current_semester = ?")
+				updatedArgs = append(updatedArgs, summary.Semester.Int64)
+			}
+			if len(selectedDepartmentIDs) > 0 {
+				deptPlaceholders := make([]string, 0, len(selectedDepartmentIDs))
+				for _, depID := range selectedDepartmentIDs {
+					deptPlaceholders = append(deptPlaceholders, "?")
+					updatedArgs = append(updatedArgs, depID)
+				}
+				updatedWhere = append(updatedWhere, fmt.Sprintf("s.department_id IN (%s)", strings.Join(deptPlaceholders, ",")))
+			}
 
-		isSubmitted := false
-		_ = database.QueryRow(submittedQuery, submittedArgs...).Scan(&isSubmitted)
+			aliasPlaceholders := make([]string, 0, len(aliases))
+			for _, alias := range aliases {
+				aliasPlaceholders = append(aliasPlaceholders, "?")
+				updatedArgs = append(updatedArgs, strings.ToLower(strings.TrimSpace(alias)))
+			}
+			updatedWhere = append(updatedWhere, fmt.Sprintf("LOWER(TRIM(COALESCE(sm.faculty_id, ''))) IN (%s)", strings.Join(aliasPlaceholders, ",")))
 
-		learningModes := make([]string, 0)
-		if learningModesRaw.Valid {
-			for _, value := range strings.Split(learningModesRaw.String, ",") {
-				trimmed := strings.TrimSpace(value)
-				if trimmed == "1" {
-					learningModes = append(learningModes, "UAL")
-				} else if trimmed == "2" {
-					learningModes = append(learningModes, "PBL")
+			if len(allowedComponentIDs) > 0 {
+				componentPlaceholders := make([]string, 0, len(allowedComponentIDs))
+				for _, componentID := range allowedComponentIDs {
+					componentPlaceholders = append(componentPlaceholders, "?")
+					updatedArgs = append(updatedArgs, componentID)
+				}
+				updatedWhere = append(updatedWhere, fmt.Sprintf("sm.assessment_component_id IN (%s)", strings.Join(componentPlaceholders, ",")))
+			}
+
+			updatedQuery := fmt.Sprintf(`
+				SELECT COUNT(DISTINCT s.id)
+				FROM mark_entry_student_permissions mesp
+				INNER JOIN students s ON s.id = mesp.student_id
+				LEFT JOIN academic_calendar ac ON ac.id = s.year
+				INNER JOIN student_courses sc ON sc.student_id = s.id
+				INNER JOIN student_marks sm ON sm.student_id = s.id AND sm.course_id = sc.course_id AND sm.status = 1
+				WHERE %s
+			`, strings.Join(updatedWhere, " AND "))
+
+			updatedStudents := 0
+			if err := database.QueryRow(updatedQuery, updatedArgs...).Scan(&updatedStudents); err != nil {
+				updatedStudents = 0
+			}
+
+			submittedArgs := make([]interface{}, 0, len(aliases)+2)
+			submittedArgs = append(submittedArgs, windowID, courseID)
+			submittedPlaceholders := make([]string, 0, len(aliases))
+			for _, alias := range aliases {
+				submittedPlaceholders = append(submittedPlaceholders, "?")
+				submittedArgs = append(submittedArgs, strings.TrimSpace(alias))
+			}
+
+			submittedQuery := fmt.Sprintf(`
+				SELECT COUNT(*) > 0
+				FROM mark_submissions
+				WHERE window_id = ? AND course_id = ? AND teacher_id IN (%s)
+			`, strings.Join(submittedPlaceholders, ","))
+
+			isSubmitted := false
+			_ = database.QueryRow(submittedQuery, submittedArgs...).Scan(&isSubmitted)
+
+			learningModes := make([]string, 0)
+			if learningModesRaw.Valid {
+				for _, value := range strings.Split(learningModesRaw.String, ",") {
+					trimmed := strings.TrimSpace(value)
+					if trimmed == "1" {
+						learningModes = append(learningModes, "UAL")
+					} else if trimmed == "2" {
+						learningModes = append(learningModes, "PBL")
+					}
 				}
 			}
-		}
 
-		item := map[string]interface{}{
-			"user_id":           numericUserID,
-			"user_name":         strings.TrimSpace(username.String),
-			"course_id":         courseID,
-			"course_code":       courseCode,
-			"course_name":       courseName,
-			"submitted":         isSubmitted,
-			"learning_modes":    learningModes,
-			"assigned_students": assignedStudents,
-			"updated_students":  updatedStudents,
-		}
+			item := map[string]interface{}{
+				"user_id":           numericUserID,
+				"user_name":         userName,
+				"course_id":         courseID,
+				"course_code":       courseCode,
+				"course_name":       courseName,
+				"submitted":         isSubmitted,
+				"learning_modes":    learningModes,
+				"assigned_students": assignedStudents,
+				"updated_students":  updatedStudents,
+			}
 
-		if isSubmitted {
-			completedUsers = append(completedUsers, item)
-		} else {
-			pendingUsers = append(pendingUsers, item)
+			if isSubmitted {
+				completedUsers = append(completedUsers, item)
+			} else {
+				pendingUsers = append(pendingUsers, item)
+			}
 		}
+		courseRows.Close()
 	}
 
 	departmentOptions := make([]map[string]interface{}, 0, len(departmentIDs))
@@ -2736,11 +3031,19 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	responseUserID := 0
+	responseUserName := ""
+	if len(userTargets) == 1 {
+		responseUserID = userTargets[0].NumericUserID
+		responseUserName = strings.TrimSpace(userTargets[0].Username)
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"window_id":          windowID,
 		"window_name":        summary.WindowName.String,
-		"user_id":            numericUserID,
-		"user_name":          strings.TrimSpace(username.String),
+		"scope_type":         scopeType,
+		"user_id":            responseUserID,
+		"user_name":          responseUserName,
 		"department_ids":     selectedDepartmentIDs,
 		"department_names":   selectedDepartmentNames,
 		"department_options": departmentOptions,
