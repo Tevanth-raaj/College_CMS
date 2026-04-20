@@ -96,6 +96,11 @@ function MarkEntryPage() {
     return `Window #${windowItem?.id}`
   }
 
+  const isUserScopeWindow = (windowItem) => {
+    const scopeType = String(windowItem?.scope_type || '').trim().toLowerCase()
+    return scopeType === 'user_single' || scopeType === 'user_multi'
+  }
+
   const getCourseDisplayLabel = (course) => {
     if (!course) return ''
     return `${course.course_code} - ${course.course_name}`
@@ -213,12 +218,16 @@ function MarkEntryPage() {
       return courses.filter((course) => Number(course?.course_id || 0) === contextCourseId)
     }
 
-    // Teacher/global windows can apply broadly without explicit per-course window mapping.
-    // Keep the page usable by falling back to loaded teacher courses.
-    if (isTeacher) return courses
+    // Semester-scoped windows can be mapped by semester when explicit window/course IDs are absent.
+    const contextSemester = Number(selectedWindowContext?.semester || 0)
+    if (contextSemester > 0) {
+      const bySemester = courses.filter((course) => Number(course?.semester || 0) === contextSemester)
+      if (bySemester.length > 0) return bySemester
+    }
 
+    // No deterministic mapping for this context; do not reuse unrelated courses.
     return []
-  }, [courses, selectedWindowContextId, selectedWindowContext, isTeacher])
+  }, [courses, selectedWindowContextId, selectedWindowContext])
 
   const effectiveWindowId = Number(selectedWindowContextId || selectedCourse?.window_id || 0)
   const normalizedCourseQuery = courseSearchQuery.trim().toLowerCase()
@@ -274,8 +283,10 @@ function MarkEntryPage() {
         contextsById.set(windowId, {
           ...existing,
           id: windowId,
+          scope_type: windowItem?.scope_type || existing.scope_type || '',
           window_name: windowItem?.window_name || existing.window_name || '',
           course_id: Number(windowItem?.course_id || existing.course_id || 0) || null,
+          semester: Number(windowItem?.semester || existing.semester || 0) || null,
         })
       }
 
@@ -340,6 +351,7 @@ function MarkEntryPage() {
       const getMatchingCoursesForContext = (windowItem) => {
         const windowId = Number(windowItem?.id || 0)
         const windowCourseId = Number(windowItem?.course_id || 0)
+        const windowSemester = Number(windowItem?.semester || 0)
         const byWindowId = (Array.isArray(courses) ? courses : []).filter(
           (course) => Number(course?.window_id || 0) === windowId
         )
@@ -350,9 +362,11 @@ function MarkEntryPage() {
           )
         }
 
-        // Teacher/global windows may not expose explicit course binding in context rows.
-        if (isTeacher) {
-          return Array.isArray(courses) ? courses : []
+        if (windowSemester > 0) {
+          const bySemester = (Array.isArray(courses) ? courses : []).filter(
+            (course) => Number(course?.semester || 0) === windowSemester
+          )
+          if (bySemester.length > 0) return bySemester
         }
 
         return []
@@ -365,9 +379,14 @@ function MarkEntryPage() {
         .filter((windowItem) => {
           const windowId = Number(windowItem?.id || 0)
           const windowCourseId = Number(windowItem?.course_id || 0)
+          const windowSemester = Number(windowItem?.semester || 0)
           if (scopedCourseWindowIds.has(windowId)) return true
           if (windowCourseId > 0 && scopedCourseIds.has(windowCourseId)) return true
-          if (isTeacher) return true
+          if (windowSemester > 0) {
+            return (Array.isArray(courses) ? courses : []).some(
+              (course) => Number(course?.semester || 0) === windowSemester
+            )
+          }
           return false
         })
         .map((windowItem) => ({
@@ -386,9 +405,9 @@ function MarkEntryPage() {
           )
           if (hasStudentsInCourseRows) return windowItem
 
-          // Do not probe user-assigned endpoint for normal teacher/global windows.
-          // Those contexts are validated by teacher course rows only.
-          if (isTeacher) return null
+          // For teacher/global windows, keep strict mapping by course/window/semester only.
+          // If mapped courses have no students, do not surface this context.
+          if (!isUserScopeWindow(windowItem)) return null
 
           if (!facultyIdentifier) return null
 
