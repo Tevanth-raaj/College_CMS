@@ -490,7 +490,15 @@ function MarkEntryPermissionsPage() {
       setWindowComponents(sorted)
     } catch (error) {
       console.error('Error fetching mark categories for course:', error)
-      setWindowComponents([])
+      // Fallback: keep edit flow usable even when a course lookup fails.
+      try {
+        const learningModeId = learningMode === 'UAL' ? 1 : 2
+        const fallbackCategories = await fetchMarkCategoriesAcrossCourseTypes([learningModeId])
+        setWindowComponents(fallbackCategories)
+      } catch (fallbackError) {
+        console.error('Fallback mark category load failed:', fallbackError)
+        setWindowComponents([])
+      }
     }
   }
 
@@ -1010,6 +1018,7 @@ function MarkEntryPermissionsPage() {
         if (fullMatch) {
           const userComponentIds = normalizeIdList(windowData.component_ids)
           const fallbackComponentIds = normalizeIdList(fullMatch.component_ids)
+          const listCardComponentIds = normalizeIdList(win.component_ids)
           const userDepartmentIds = normalizeIdList(windowData.department_ids)
           const fallbackDepartmentIds = normalizeIdList(fullMatch.department_ids)
 
@@ -1019,7 +1028,7 @@ function MarkEntryPermissionsPage() {
             component_ids:
               userComponentIds.length > 0
                 ? userComponentIds
-                : fallbackComponentIds,
+                : (fallbackComponentIds.length > 0 ? fallbackComponentIds : listCardComponentIds),
             department_ids:
               userDepartmentIds.length > 0
                 ? userDepartmentIds
@@ -1099,8 +1108,12 @@ function MarkEntryPermissionsPage() {
 
     // Load saved components irrespective of course scope (course can be null for all-course/all-department windows)
     const selectedComponentIDs = normalizeIdList(windowData.component_ids)
+    const fallbackListComponentIDs = normalizeIdList(win.component_ids)
+    const resolvedSelectedComponentIDs = selectedComponentIDs.length > 0
+      ? selectedComponentIDs
+      : fallbackListComponentIDs
 
-    if (selectedComponentIDs.length > 0) {
+    if (resolvedSelectedComponentIDs.length > 0) {
       try {
         // Fetch all components to check their learning modes
         const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
@@ -1108,7 +1121,7 @@ function MarkEntryPermissionsPage() {
         const allPBL = []
         const allUAL = []
 
-        for (const compId of selectedComponentIDs) {
+        for (const compId of resolvedSelectedComponentIDs) {
           const comp = allComponents.find((c) => Number(c.id) === compId)
           if (comp) {
             if (Number(comp.learning_mode_id) === 2) {
@@ -1117,6 +1130,14 @@ function MarkEntryPermissionsPage() {
               allUAL.push(compId)
             }
           }
+        }
+
+        const unresolvedComponentIDs = resolvedSelectedComponentIDs.filter(
+          (compId) => !allPBL.includes(compId) && !allUAL.includes(compId)
+        )
+        if (unresolvedComponentIDs.length > 0) {
+          allPBL.push(...unresolvedComponentIDs)
+          allUAL.push(...unresolvedComponentIDs)
         }
 
         const pblComponents = allComponents.filter(c => Number(c.learning_mode_id) === 2)
@@ -1163,7 +1184,7 @@ function MarkEntryPermissionsPage() {
     setWindowEnabled(latestWindow.enabled)
 
     // Directly separate window's component_ids into PBL and UAL
-    const selectedComponentIds = normalizeIdList(win.component_ids)
+    const selectedComponentIds = normalizeIdList(latestWindow.component_ids)
     if (selectedComponentIds.length > 0) {
       try {
         const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
@@ -1177,6 +1198,13 @@ function MarkEntryPermissionsPage() {
             else if (Number(comp.learning_mode_id) === 1) ualIds.push(id)
           }
         })
+        const unresolvedComponentIds = selectedComponentIds.filter(
+          (id) => !pblIds.includes(id) && !ualIds.includes(id)
+        )
+        if (unresolvedComponentIds.length > 0) {
+          pblIds.push(...unresolvedComponentIds)
+          ualIds.push(...unresolvedComponentIds)
+        }
         const pblComponents = allComponents.filter(c => Number(c.learning_mode_id) === 2)
         const ualComponents = allComponents.filter(c => Number(c.learning_mode_id) === 1)
         setSelectedPBLComponents(normalizeInnovativePracticeSelections(pblIds, pblComponents))

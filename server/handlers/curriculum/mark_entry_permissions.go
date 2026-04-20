@@ -1346,7 +1346,7 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		  AND mesp.user_id = ?
 		  AND w.enabled = 1
 		AND w.start_at <= ?
-		AND w.end_at >= ?
+		  AND w.end_at > ?
 		  AND s.status = 1
 		  AND (
 			COALESCE(w.semester, 0) = 0
@@ -1433,7 +1433,7 @@ func GetUserCourses(w http.ResponseWriter, r *http.Request) {
 		WHERE ((w.scope_type = 'user_single' AND w.user_id = ?) OR (w.scope_type = 'user_multi' AND EXISTS (
 			SELECT 1 FROM mark_entry_window_users mwu WHERE mwu.window_id = w.id AND mwu.user_id = ?
 		)))
-		AND w.enabled = 1 AND w.start_at <= ? AND w.end_at >= ?
+		AND w.enabled = 1 AND w.start_at <= ? AND w.end_at > ?
 	`, numericUserID, numericUserID, now, now)
 	if err == nil {
 		defer windowRows.Close()

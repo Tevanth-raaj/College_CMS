@@ -312,7 +312,16 @@ function MarkEntryPage() {
         console.warn('Failed to load window contexts:', error)
       }
 
+      const scopedCourseWindowIds = new Set(
+        (Array.isArray(courses) ? courses : [])
+          .map((course) => Number(course?.window_id || 0))
+          .filter((windowId) => windowId > 0)
+      )
+
       const contexts = Array.from(contextsById.values())
+        // Window context selector should only show windows that are actually assigned
+        // to this user/teacher via their currently loaded course-window rows.
+        .filter((windowItem) => scopedCourseWindowIds.has(Number(windowItem?.id || 0)))
         .map((windowItem) => ({
           ...windowItem,
           window_name: String(windowItem?.window_name || '').trim() || `Window #${windowItem?.id}`,
