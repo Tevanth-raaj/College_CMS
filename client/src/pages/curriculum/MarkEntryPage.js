@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
@@ -30,6 +30,8 @@ function MarkEntryPage() {
   const [autoSaveStatus, setAutoSaveStatus] = useState('') // '', 'saving', 'saved', 'error'
   const [courseSearchQuery, setCourseSearchQuery] = useState('')
   const [isCourseDropdownOpen, setIsCourseDropdownOpen] = useState(false)
+  const [windowContexts, setWindowContexts] = useState([])
+  const [selectedWindowContextId, setSelectedWindowContextId] = useState(0)
   const autoSaveTimerRef = useRef(null)
   const pendingMarksRef = useRef({})
   const courseDropdownRef = useRef(null)
@@ -64,10 +66,35 @@ function MarkEntryPage() {
 
   const teacherId = localStorage.getItem('teacher_id') || localStorage.getItem('teacherId')
   const username = localStorage.getItem('username') // Username is needed for users with mark entry permissions
+  const storedUserId = Number(localStorage.getItem('userId') || localStorage.getItem('id') || 0)
   const userRole = localStorage.getItem('userRole') || localStorage.getItem('role')
   const isTeacher = userRole === 'teacher' && !!teacherId
   const facultyIdentifier = username || teacherId
   const selectedWindowFromCard = Number(location?.state?.selectedWindowId || 0)
+
+  const normalizeUsernames = (value) => {
+    if (value === undefined || value === null) return []
+    return String(value)
+      .split(',')
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter((item) => item && !['undefined', 'null', 'nan'].includes(item))
+  }
+
+  const isUserMappedToWindow = (windowItem) => {
+    const mappedUsernames = normalizeUsernames(windowItem?.user_username)
+    if (username && mappedUsernames.includes(String(username).trim().toLowerCase())) {
+      return true
+    }
+
+    const numericUserId = Number(windowItem?.user_id || 0)
+    return Boolean(storedUserId > 0 && numericUserId > 0 && numericUserId === storedUserId)
+  }
+
+  const getWindowContextLabel = (windowItem) => {
+    const baseName = String(windowItem?.window_name || '').trim()
+    if (baseName) return baseName
+    return `Window #${windowItem?.id}`
+  }
 
   const getCourseDisplayLabel = (course) => {
     if (!course) return ''
@@ -166,9 +193,24 @@ function MarkEntryPage() {
   }
 
   const selectedCourseLabel = getCourseDisplayLabel(selectedCourse)
+  const selectedWindowContext = useMemo(
+    () => windowContexts.find((windowItem) => Number(windowItem.id) === Number(selectedWindowContextId)) || null,
+    [windowContexts, selectedWindowContextId]
+  )
+
+  const coursesForSelectedWindowContext = useMemo(() => {
+    if (!Array.isArray(courses)) return []
+    const contextId = Number(selectedWindowContextId || 0)
+    if (contextId <= 0) return []
+
+    const byWindowId = courses.filter((course) => Number(course?.window_id || 0) === contextId)
+    return byWindowId
+  }, [courses, selectedWindowContextId, selectedWindowContext])
+
+  const effectiveWindowId = Number(selectedWindowContextId || selectedCourse?.window_id || 0)
   const normalizedCourseQuery = courseSearchQuery.trim().toLowerCase()
   const normalizedSelectedCourseLabel = selectedCourseLabel.trim().toLowerCase()
-  const filteredCourses = courses.filter((course) => {
+  const filteredCourses = coursesForSelectedWindowContext.filter((course) => {
     if (!normalizedCourseQuery || normalizedCourseQuery === normalizedSelectedCourseLabel) return true
     const code = String(course.course_code || '').toLowerCase()
     const name = String(course.course_name || '').toLowerCase()
@@ -202,6 +244,116 @@ function MarkEntryPage() {
     document.addEventListener('mousedown', handleOutsideClick)
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [])
+
+  useEffect(() => {
+    if (!Array.isArray(courses) || courses.length === 0) {
+      setWindowContexts([])
+      setSelectedWindowContextId(0)
+      return
+    }
+
+    const fetchWindowContexts = async () => {
+      const contextsById = new Map()
+      const upsertContextWindow = (windowItem) => {
+        const windowId = Number(windowItem?.id || 0)
+        if (windowId <= 0) return
+        const existing = contextsById.get(windowId) || { id: windowId }
+        contextsById.set(windowId, {
+          ...existing,
+          id: windowId,
+          window_name: windowItem?.window_name || existing.window_name || '',
+          course_id: Number(windowItem?.course_id || existing.course_id || 0) || null,
+        })
+      }
+
+      try {
+        if (isTeacher && teacherId) {
+          const res = await fetch(`${API_BASE_URL}/mark-entry-windows?teacher_id=${encodeURIComponent(teacherId)}`)
+          if (res.ok) {
+            const rows = await res.json()
+            ;(Array.isArray(rows) ? rows : []).forEach(upsertContextWindow)
+          }
+
+          // Teacher users can also have user-scoped windows (single/multi-user); include them too.
+          if (username) {
+            const userOnlyRes = await fetch(`${API_BASE_URL}/mark-entry-windows?user_only=true`)
+            if (userOnlyRes.ok) {
+              const userOnlyRows = await userOnlyRes.json()
+              ;(Array.isArray(userOnlyRows) ? userOnlyRows : [])
+                .filter((windowItem) => isUserMappedToWindow(windowItem))
+                .forEach(upsertContextWindow)
+            }
+          }
+            // Enrich API windows with course-scoped metadata when available.
+            if (contextsById.size > 0) {
+              courses.forEach((course) => {
+                const windowId = Number(course?.window_id || 0)
+                if (windowId <= 0) return
+                const existing = contextsById.get(windowId)
+                if (!existing) return
+
+                contextsById.set(windowId, {
+                  ...existing,
+                  course_id: existing.course_id || Number(course?.course_id || 0) || null,
+                })
+              })
+            }
+
+        } else if (username) {
+          const res = await fetch(`${API_BASE_URL}/mark-entry-windows?user_only=true`)
+          if (res.ok) {
+            const rows = await res.json()
+            ;(Array.isArray(rows) ? rows : [])
+              .filter((windowItem) => isUserMappedToWindow(windowItem))
+              .forEach(upsertContextWindow)
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load window contexts:', error)
+      }
+
+      const contexts = Array.from(contextsById.values())
+        .map((windowItem) => ({
+          ...windowItem,
+          window_name: String(windowItem?.window_name || '').trim() || `Window #${windowItem?.id}`,
+        }))
+        .sort((left, right) => Number(left.id) - Number(right.id))
+
+      setWindowContexts(contexts)
+      setSelectedWindowContextId((current) => {
+        if (current > 0 && contexts.some((windowItem) => Number(windowItem.id) === Number(current))) {
+          return current
+        }
+        if (selectedWindowFromCard > 0 && contexts.some((windowItem) => Number(windowItem.id) === Number(selectedWindowFromCard))) {
+          return selectedWindowFromCard
+        }
+        if (contexts.length > 0) {
+          return Number(contexts[0].id)
+        }
+        return 0
+      })
+    }
+
+    fetchWindowContexts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courses, isTeacher, teacherId, username, storedUserId])
+
+  useEffect(() => {
+    if (coursesForSelectedWindowContext.length === 0) {
+      setSelectedCourse(null)
+      return
+    }
+
+    const hasSelection = coursesForSelectedWindowContext.some(
+      (course) =>
+        Number(course?.course_id || 0) === Number(selectedCourse?.course_id || 0) &&
+        Number(course?.window_id || 0) === Number(selectedCourse?.window_id || 0)
+    )
+
+    if (!hasSelection) {
+      setSelectedCourse(coursesForSelectedWindowContext[0])
+    }
+  }, [coursesForSelectedWindowContext, selectedCourse?.course_id, selectedCourse?.window_id])
 
   const fetchTeacherCourses = async () => {
     try {
@@ -399,7 +551,7 @@ function MarkEntryPage() {
   useEffect(() => {
     markCategoriesFetchKeyRef.current = ''
     existingMarksFetchKeyRef.current = ''
-  }, [selectedCourse?.course_id, selectedCourse?.window_id, facultyIdentifier])
+  }, [selectedCourse?.course_id, selectedCourse?.window_id, selectedWindowContextId, facultyIdentifier])
 
   // Fetch mark categories when course is selected or learning mode changes
   useEffect(() => {
@@ -413,7 +565,7 @@ function MarkEntryPage() {
   const fetchMarkCategories = async () => {
     if (!selectedCourse || !learningMode || !facultyIdentifier) return
 
-    const fetchKey = `${selectedCourse.course_id}|${learningMode}|${hasActiveWindow}|${userRole}|${facultyIdentifier}`
+    const fetchKey = `${selectedCourse.course_id}|${effectiveWindowId || ''}|${learningMode}|${hasActiveWindow}|${userRole}|${facultyIdentifier}`
     if (markCategoriesFetchKeyRef.current === fetchKey) {
       console.debug('Skipping duplicate mark categories request', fetchKey)
       return
@@ -430,8 +582,15 @@ function MarkEntryPage() {
       const learningModesParam = learningMode === 'UAL' ? 1 : 2
       
       console.log('Requesting mark categories for learning modes:', learningModesParam)
+      const params = new URLSearchParams()
+      params.set('teacher_id', facultyIdentifier)
+      params.set('learning_modes', String(learningModesParam))
+      if (effectiveWindowId > 0) {
+        params.set('window_id', String(effectiveWindowId))
+      }
+
       const response = await fetch(
-        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?teacher_id=${facultyIdentifier}&learning_modes=${learningModesParam}`
+        `${API_BASE_URL}/course/${selectedCourse.course_id}/mark-categories?${params.toString()}`
       )
       if (response.status === 403) {
         setMarkCategories([])
@@ -452,7 +611,7 @@ function MarkEntryPage() {
     try {
       const params = new URLSearchParams()
       if (facultyIdentifier) params.set('teacher_id', facultyIdentifier)
-      if (selectedCourse?.window_id) params.set('window_id', selectedCourse.window_id)
+      if (effectiveWindowId > 0) params.set('window_id', String(effectiveWindowId))
       const query = params.toString()
       const url = `${API_BASE_URL}/course/${selectedCourse.course_id}/exam-absentees${query ? `?${query}` : ''}`
       const res = await fetch(url)
@@ -480,7 +639,7 @@ function MarkEntryPage() {
 
   // helper: is a given (studentId, categoryId) cell absent?
   const isCellAbsent = (studentId, categoryId) => {
-    const selectedWindowId = Number(selectedCourse?.window_id || 0)
+    const selectedWindowId = Number(effectiveWindowId || 0)
     const normalizedComponentName = normalizeCategoryName(getCategoryNameForComponentId(categoryId))
 
     return absentees.some((a) => {
@@ -583,7 +742,7 @@ function MarkEntryPage() {
   const loadExistingMarks = async () => {
     if (!selectedCourse || !learningMode || !facultyIdentifier) return
 
-    const fetchKey = `${selectedCourse.course_id}|${selectedCourse.window_id || ''}|${learningMode}|${hasActiveWindow}|${userRole}|${facultyIdentifier}`
+    const fetchKey = `${selectedCourse.course_id}|${effectiveWindowId || ''}|${learningMode}|${hasActiveWindow}|${userRole}|${facultyIdentifier}`
     if (existingMarksFetchKeyRef.current === fetchKey) {
       console.debug('Skipping duplicate existing marks request', fetchKey)
       return
@@ -693,7 +852,7 @@ function MarkEntryPage() {
       return
     }
 
-    const selectedCourseWindowKey = `${selectedCourse.course_id}|${selectedCourse.window_id || 0}`
+    const selectedCourseWindowKey = `${selectedCourse.course_id}|${effectiveWindowId || 0}`
     if (assignedCourseRef.current === selectedCourseWindowKey && allStudents.length > 0) {
       console.debug('Skipping assigned students fetch; already loaded for course', selectedCourse.course_id)
       return
@@ -706,7 +865,7 @@ function MarkEntryPage() {
       const params = new URLSearchParams()
       params.set('user_id', username)
       params.set('course_id', selectedCourse.course_id)
-      if (selectedCourse?.window_id) params.set('window_id', selectedCourse.window_id)
+      if (effectiveWindowId > 0) params.set('window_id', String(effectiveWindowId))
       const response = await fetch(`${API_BASE_URL}/mark-entry/user-assigned-students?${params.toString()}`)
       if (!response.ok) throw new Error('Failed to fetch assigned students')
       const data = await response.json()
@@ -828,7 +987,7 @@ function MarkEntryPage() {
             body: JSON.stringify({
               course_id: selectedCourse.course_id,
               faculty_id: facultyId,
-              window_id: selectedCourse.window_id,
+              window_id: effectiveWindowId || undefined,
               mark_entries: markEntries,
               delete_entries: deleteEntries,
             }),
@@ -1192,7 +1351,7 @@ function MarkEntryPage() {
         body: JSON.stringify({
           course_id: selectedCourse.course_id,
           faculty_id: facultyId,
-          window_id: selectedCourse.window_id,
+          window_id: effectiveWindowId || undefined,
           mark_entries: markEntries,
           delete_entries: deleteEntries,
         }),
@@ -1315,6 +1474,32 @@ function MarkEntryPage() {
           </div>
         )}
 
+        {windowContexts.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+            <div className="border-b border-gray-200 px-6 py-3">
+              <h3 className="text-sm font-semibold text-gray-700">Select Window Context</h3>
+            </div>
+            <div className="p-6">
+              <div className="flex flex-wrap gap-2">
+                {windowContexts.map((windowItem) => (
+                  <button
+                    key={windowItem.id}
+                    type="button"
+                    onClick={() => setSelectedWindowContextId(Number(windowItem.id))}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                      Number(selectedWindowContextId) === Number(windowItem.id)
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {getWindowContextLabel(windowItem)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Course Selection Card */}
         {courses.length > 0 ? (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100">
@@ -1350,7 +1535,11 @@ function MarkEntryPage() {
                 {isCourseDropdownOpen && (
                   <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-auto">
                     {filteredCourses.length === 0 ? (
-                      <div className="px-4 py-2 text-sm text-gray-500">No matching courses</div>
+                      <div className="px-4 py-2 text-sm text-gray-500">
+                        {selectedWindowContext
+                          ? 'No courses available for the selected window.'
+                          : 'Select a window context to view courses.'}
+                      </div>
                     ) : (
                       filteredCourses.map((course) => (
                         <button
@@ -1376,6 +1565,11 @@ function MarkEntryPage() {
               </div>
               {selectedCourse && (
                 <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
+                  {selectedWindowContext && (
+                    <div>
+                      <span className="font-medium text-gray-700">Window:</span> {getWindowContextLabel(selectedWindowContext)}
+                    </div>
+                  )}
                   <div>
                     <span className="font-medium text-gray-700">Category:</span> {selectedCourse.category}
                   </div>

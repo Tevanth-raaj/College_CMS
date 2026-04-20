@@ -213,6 +213,32 @@ func replaceWindowUsersTx(tx *sql.Tx, windowID int, userIDs []int) error {
 	return nil
 }
 
+func replaceWindowUsers(database *sql.DB, windowID int, userIDs []int) error {
+	if _, err := database.Exec(`DELETE FROM mark_entry_window_users WHERE window_id = ?`, windowID); err != nil {
+		return err
+	}
+
+	seen := make(map[int]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID <= 0 {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+
+		if _, err := database.Exec(`
+			INSERT INTO mark_entry_window_users (window_id, user_id)
+			VALUES (?, ?)
+		`, windowID, userID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func replaceWindowDepartmentsTx(tx *sql.Tx, windowID int, departmentIDs []int) error {
 	if _, err := tx.Exec(`DELETE FROM mark_entry_window_departments WHERE window_id = ?`, windowID); err != nil {
 		return err
@@ -1341,7 +1367,20 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 				w.id,
 				ANY_VALUE(w.scope_type) as scope_type,
 				w.user_id,
-				COALESCE(GROUP_CONCAT(DISTINCT uw.username ORDER BY uw.username SEPARATOR ', '), COALESCE(u.username, '')) as user_username,
+				COALESCE(
+					NULLIF(GROUP_CONCAT(DISTINCT CASE
+						WHEN uw.username IS NULL OR LOWER(TRIM(uw.username)) IN ('', 'undefined', 'null') THEN NULL
+						ELSE TRIM(uw.username)
+					END ORDER BY uw.username SEPARATOR ', '), ''),
+					NULLIF(GROUP_CONCAT(DISTINCT CASE
+						WHEN up.username IS NULL OR LOWER(TRIM(up.username)) IN ('', 'undefined', 'null') THEN NULL
+						ELSE TRIM(up.username)
+					END ORDER BY up.username SEPARATOR ', '), ''),
+					CASE
+						WHEN u.username IS NULL OR LOWER(TRIM(u.username)) IN ('', 'undefined', 'null') THEN ''
+						ELSE TRIM(u.username)
+					END
+				) as user_username,
 				w.department_id,
 				COALESCE(d.department_name, '') as department_name,
 				w.semester,
@@ -1360,7 +1399,11 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN departments d ON w.department_id = d.id
 			LEFT JOIN courses c ON w.course_id = c.id
 			LEFT JOIN mark_entry_student_permissions mesp ON w.id = mesp.window_id
+			LEFT JOIN users up ON mesp.user_id = up.id
 			WHERE w.scope_type IN ('user_single', 'user_multi')
+				AND w.enabled = 1
+				AND w.start_at <= NOW()
+				AND w.end_at > NOW()
 			GROUP BY w.id
 			ORDER BY 
 				CASE WHEN w.end_at > NOW() THEN 0 ELSE 1 END,
@@ -1390,6 +1433,8 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN departments d ON w.department_id = d.id
 			LEFT JOIN courses c ON w.course_id = c.id
 			WHERE w.enabled = 1 
+			AND w.start_at <= NOW()
+			AND w.end_at > NOW()
 			AND (
 				(w.scope_type = 'teacher' AND w.teacher_id = ?)
 				OR w.course_id IN (
@@ -1503,7 +1548,9 @@ func GetAllMarkEntryWindows(w http.ResponseWriter, r *http.Request) {
 			if userID.Valid {
 				id := int(userID.Int64)
 				window.UserID = &id
-				window.UserUsername = userUsername.String
+			}
+			if userUsername.Valid {
+				window.UserUsername = strings.TrimSpace(userUsername.String)
 			}
 			if scopeType.Valid {
 				window.ScopeType = scopeType.String
@@ -1670,6 +1717,11 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to update window", http.StatusInternalServerError)
 		return
 	}
+	if err := ensureWindowUsersTable(database); err != nil {
+		log.Printf("Error ensuring mark_entry_window_users table: %v", err)
+		http.Error(w, "Failed to update window", http.StatusInternalServerError)
+		return
+	}
 
 	// Parse times
 	startAt, err := parseDateTime(request.StartAt)
@@ -1701,6 +1753,67 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 		} else {
 			userIDValue = trimmedUserID
 		}
+	}
+
+	requestedUserIDs := make([]string, 0, len(request.UserIDs)+1)
+	seenRequestedUserIDs := make(map[string]struct{})
+	for _, rawUserID := range request.UserIDs {
+		trimmed := strings.TrimSpace(rawUserID)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seenRequestedUserIDs[trimmed]; exists {
+			continue
+		}
+		seenRequestedUserIDs[trimmed] = struct{}{}
+		requestedUserIDs = append(requestedUserIDs, trimmed)
+	}
+	if request.UserID != nil {
+		trimmed := strings.TrimSpace(*request.UserID)
+		if trimmed != "" {
+			if _, exists := seenRequestedUserIDs[trimmed]; !exists {
+				requestedUserIDs = append(requestedUserIDs, trimmed)
+			}
+		}
+	}
+
+	resolvedWindowUserIDs := make([]int, 0, len(requestedUserIDs))
+	for _, userIdentifier := range requestedUserIDs {
+		numericUserID, resolveErr := resolveNumericUserID(database, userIdentifier)
+		if resolveErr != nil {
+			if resolveErr == sql.ErrNoRows {
+				http.Error(w, fmt.Sprintf("User '%s' not found or inactive", userIdentifier), http.StatusBadRequest)
+			} else {
+				log.Printf("Error resolving user ID for '%s': %v", userIdentifier, resolveErr)
+				http.Error(w, "Failed to lookup users", http.StatusInternalServerError)
+			}
+			return
+		}
+		resolvedWindowUserIDs = append(resolvedWindowUserIDs, numericUserID)
+	}
+
+	requestedUserScopeUpdate := len(requestedUserIDs) > 0
+	if !requestedUserScopeUpdate {
+		rows, queryErr := database.Query(`SELECT user_id FROM mark_entry_window_users WHERE window_id = ?`, windowID)
+		if queryErr == nil {
+			defer rows.Close()
+			seenMappedUsers := make(map[int]struct{})
+			for rows.Next() {
+				var mappedUserID int
+				if scanErr := rows.Scan(&mappedUserID); scanErr == nil && mappedUserID > 0 {
+					if _, exists := seenMappedUsers[mappedUserID]; !exists {
+						seenMappedUsers[mappedUserID] = struct{}{}
+						resolvedWindowUserIDs = append(resolvedWindowUserIDs, mappedUserID)
+					}
+				}
+			}
+		}
+	}
+
+	if len(resolvedWindowUserIDs) > 1 {
+		userIDValue = nil
+	} else if len(resolvedWindowUserIDs) == 1 {
+		userIDValue = resolvedWindowUserIDs[0]
 	}
 
 	if err := ensureWindowScopeTypeColumn(database); err != nil {
@@ -1775,7 +1888,7 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update window
-	scopeType := deriveWindowScopeType(teacherIDValue, userIDValue, false)
+	scopeType := deriveWindowScopeType(teacherIDValue, userIDValue, len(resolvedWindowUserIDs) > 1)
 	updateQuery := `
 		UPDATE mark_entry_windows
 		SET teacher_id = ?, user_id = ?, department_id = ?, semester = ?, course_id = ?,
@@ -1805,6 +1918,29 @@ func UpdateMarkEntryWindow(w http.ResponseWriter, r *http.Request) {
 	if err := replaceWindowDepartments(database, windowID, departmentIDs); err != nil {
 		// Department mapping is supplementary metadata; do not fail core window updates.
 		log.Printf("Warning: unable to update selected departments for window %d (ids=%v): %v", windowID, departmentIDs, err)
+	}
+
+	if requestedUserScopeUpdate {
+		if err := replaceWindowUsers(database, windowID, resolvedWindowUserIDs); err != nil {
+			log.Printf("Error: unable to update selected users for window %d (ids=%v): %v", windowID, resolvedWindowUserIDs, err)
+			http.Error(w, "Failed to update window users", http.StatusInternalServerError)
+			return
+		}
+
+		if len(resolvedWindowUserIDs) > 0 {
+			placeholders := make([]string, len(resolvedWindowUserIDs))
+			cleanupArgs := make([]interface{}, 0, len(resolvedWindowUserIDs)+1)
+			cleanupArgs = append(cleanupArgs, windowID)
+			for index, userID := range resolvedWindowUserIDs {
+				placeholders[index] = "?"
+				cleanupArgs = append(cleanupArgs, userID)
+			}
+
+			cleanupQuery := `DELETE FROM mark_entry_student_permissions WHERE window_id = ? AND user_id NOT IN (` + strings.Join(placeholders, ",") + `)`
+			if _, cleanupErr := database.Exec(cleanupQuery, cleanupArgs...); cleanupErr != nil {
+				log.Printf("Warning: unable to cleanup removed-user permissions for window %d: %v", windowID, cleanupErr)
+			}
+		}
 	}
 
 	log.Printf("[UpdateMarkEntryWindow] saved id=%d teacher=%v user=%v dept=%v sem=%v course=%v",

@@ -411,6 +411,7 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 	semester := r.URL.Query().Get("semester")
 	learningMode := strings.TrimSpace(strings.ToUpper(r.URL.Query().Get("learning_mode"))) // UAL / PBL / UAL&PBL
 	limitStr := r.URL.Query().Get("limit")
+	calendarYearExpr := "COALESCE(ac.year_level, CASE WHEN ad.year BETWEEN 1 AND 8 THEN ad.year WHEN ad.semester BETWEEN 1 AND 8 THEN CEIL(ad.semester / 2) ELSE ad.year END)"
 
 	query := `
 		SELECT 
@@ -419,11 +420,12 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 			s.student_name,
 			COALESCE(s.learning_mode_id, 2) AS learning_mode_id,
 			ad.department,
-			ad.year,
+			` + calendarYearExpr + ` AS year,
 			ad.semester,
 			ad.batch
 		FROM students s
 		LEFT JOIN academic_details ad ON s.id = ad.student_id
+		LEFT JOIN academic_calendar ac ON ac.id = s.year
 		WHERE s.status = 1`
 
 	args := []interface{}{}
@@ -468,15 +470,17 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 
 	if yearStr != "" {
 		year, err := strconv.Atoi(yearStr)
-		if err == nil {
-			query += " AND ad.year = ?"
+		if err == nil && year > 0 {
+			query += " AND ac.year_level = ?"
 			args = append(args, year)
 		}
 	}
 
 	if semester != "" {
-		query += " AND ad.semester = ?"
-		args = append(args, semester)
+		if semesterInt, err := strconv.Atoi(strings.TrimSpace(semester)); err == nil && semesterInt > 0 {
+			query += " AND ad.semester = ?"
+			args = append(args, semesterInt)
+		}
 	}
 
 	if learningMode != "" && learningMode != "ALL" && learningMode != "UAL&PBL" {

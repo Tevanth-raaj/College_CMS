@@ -50,12 +50,17 @@ const buildDisplayComponents = (components = []) => {
   const groupedIndex = new Map()
 
   components.forEach((component) => {
+    const normalizedComponentId = parseInt(component.id, 10)
+    const componentId = Number.isInteger(normalizedComponentId) && normalizedComponentId > 0
+      ? normalizedComponentId
+      : component.id
+
     const baseName = getInnovativePracticeBaseName(component.name)
     if (!baseName) {
       display.push({
         ...component,
         display_name: component.name,
-        component_ids: [component.id],
+        component_ids: [componentId],
       })
       return
     }
@@ -65,14 +70,14 @@ const buildDisplayComponents = (components = []) => {
       const item = {
         ...component,
         display_name: baseName,
-        component_ids: [component.id],
+        component_ids: [componentId],
       }
       groupedIndex.set(key, item)
       display.push(item)
       return
     }
 
-    groupedIndex.get(key).component_ids.push(component.id)
+    groupedIndex.get(key).component_ids.push(componentId)
   })
 
   return display
@@ -98,6 +103,35 @@ const normalizeIdList = (value) => {
 
   return []
 }
+
+const normalizeUsernames = (value) => {
+  if (value === undefined || value === null) return []
+
+  const source = Array.isArray(value) ? value : String(value).split(',')
+  return source
+    .map((item) => String(item || '').trim())
+    .filter((item) => item && item.toLowerCase() !== 'undefined' && item.toLowerCase() !== 'null')
+}
+
+const getWindowUserLabel = (window) => {
+  const usernames = normalizeUsernames(window?.user_username)
+  if (usernames.length > 0) return usernames.join(', ')
+
+  const normalizedUserId = String(window?.user_id ?? '').trim()
+  if (normalizedUserId && !['undefined', 'null', 'nan'].includes(normalizedUserId.toLowerCase())) {
+    return `ID: ${normalizedUserId}`
+  }
+
+  return 'Unassigned'
+}
+
+const createDefaultStudentFilters = () => ({
+  department: '',
+  year: '',
+  semester: '',
+  search: '',
+  learning_mode: 'UAL&PBL'
+})
 
 function MarkEntryPermissionsPage() {
   const navigate = useNavigate()
@@ -141,13 +175,7 @@ function MarkEntryPermissionsPage() {
   const [userRoleFilter, setUserRoleFilter] = useState('all')
   const [students, setStudents] = useState([])
   const [selectedStudents, setSelectedStudents] = useState([])
-  const [studentFilters, setStudentFilters] = useState({
-    department: '',
-    year: '',
-    semester: '',
-    search: '',
-    learning_mode: 'UAL&PBL'
-  })
+  const [studentFilters, setStudentFilters] = useState(createDefaultStudentFilters)
   const [assignmentLoading, setAssignmentLoading] = useState(false)
   const [userAssignedWindows, setUserAssignedWindows] = useState([])
 
@@ -658,22 +686,23 @@ function MarkEntryPermissionsPage() {
       setWindowEnabled(data.enabled !== false)
 
       // Separate components by learning mode
-      if (data.component_ids && data.component_ids.length > 0) {
+      const selectedComponentIds = normalizeIdList(data.component_ids)
+      if (selectedComponentIds.length > 0) {
         // Fetch all components to check their learning modes
         const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
 
         const pblIds = []
         const ualIds = []
-        data.component_ids.forEach(id => {
-          const comp = allComponents.find(c => c.id === id)
+        selectedComponentIds.forEach(id => {
+          const comp = allComponents.find(c => Number(c.id) === id)
           if (comp) {
-            if (comp.learning_mode_id === 2) pblIds.push(id)
-            else if (comp.learning_mode_id === 1) ualIds.push(id)
+            if (Number(comp.learning_mode_id) === 2) pblIds.push(id)
+            else if (Number(comp.learning_mode_id) === 1) ualIds.push(id)
           }
         })
 
-        const pblComponents = allComponents.filter(c => c.learning_mode_id === 2)
-        const ualComponents = allComponents.filter(c => c.learning_mode_id === 1)
+        const pblComponents = allComponents.filter(c => Number(c.learning_mode_id) === 2)
+        const ualComponents = allComponents.filter(c => Number(c.learning_mode_id) === 1)
         setSelectedPBLComponents(normalizeInnovativePracticeSelections(pblIds, pblComponents))
         setSelectedUALComponents(normalizeInnovativePracticeSelections(ualIds, ualComponents))
       } else {
@@ -1014,20 +1043,40 @@ function MarkEntryPermissionsPage() {
     setWindowEndAt(formatDateTimeLocal(windowData.end_at))
     setWindowEnabled(windowData.enabled)
 
-    // Set user; prefer username from window payload to avoid extra dependency.
-    if (windowData.user_username) {
-      const resolvedUsernames = String(windowData.user_username)
-        .split(',')
-        .map((name) => name.trim())
-        .filter(Boolean)
-      setSelectedUserId(resolvedUsernames[0] || '')
-      setSelectedUserIds(resolvedUsernames)
-    } else if (windowData.user_id) {
-      const matchedUser = availableUsers.find((user) => String(user.id) === String(windowData.user_id))
-      const resolvedUsername = matchedUser?.username || ''
-      setSelectedUserId(resolvedUsername)
-      setSelectedUserIds(resolvedUsername ? [resolvedUsername] : [])
+    // Set user(s): prefer usernames from payload, otherwise resolve by numeric user_id.
+    let resolvedUsernames = normalizeUsernames(windowData.user_username)
+
+    if (resolvedUsernames.length === 0 && windowData.user_id) {
+      const userIdValue = String(windowData.user_id).trim()
+      const userIdAsNumber = Number(userIdValue)
+
+      if (Number.isInteger(userIdAsNumber) && userIdAsNumber > 0) {
+        let usersPool = availableUsers
+
+        if (!Array.isArray(usersPool) || usersPool.length === 0) {
+          try {
+            const usersRes = await fetch(`${API_BASE_URL}/mark-entry/available-users?search=`)
+            if (usersRes.ok) {
+              const usersData = await usersRes.json()
+              usersPool = Array.isArray(usersData) ? usersData : []
+            }
+          } catch (error) {
+            console.warn('Unable to fetch users while resolving user-scope edit usernames:', error)
+          }
+        }
+
+        const matchedUser = (usersPool || []).find((user) => Number(user.id) === userIdAsNumber)
+        if (matchedUser?.username) {
+          resolvedUsernames = [matchedUser.username]
+        }
+      } else if (userIdValue) {
+        // Backward compatibility: some legacy rows may carry username directly in user_id payload.
+        resolvedUsernames = [userIdValue]
+      }
     }
+
+    setSelectedUserId(resolvedUsernames[0] || '')
+    setSelectedUserIds(resolvedUsernames)
 
     // Set scope fields
     const userWindowDeptIds = Array.isArray(windowData.department_ids) && windowData.department_ids.length > 0
@@ -1043,8 +1092,10 @@ function MarkEntryPermissionsPage() {
 
     setWindowDepartmentId(userWindowDeptIds.length > 0 ? userWindowDeptIds[0] : '')
     setWindowDepartmentIds(userWindowDeptIds)
-    setWindowSemester(windowData.semester ? String(windowData.semester) : '')
+    const windowSemesterValue = windowData.semester ? String(windowData.semester) : ''
+    setWindowSemester(windowSemesterValue)
     setWindowCourseId(windowData.course_id ? String(windowData.course_id) : '')
+    setStudentFilters(createDefaultStudentFilters())
 
     // Load saved components irrespective of course scope (course can be null for all-course/all-department windows)
     const selectedComponentIDs = normalizeIdList(windowData.component_ids)
@@ -1060,16 +1111,16 @@ function MarkEntryPermissionsPage() {
         for (const compId of selectedComponentIDs) {
           const comp = allComponents.find((c) => Number(c.id) === compId)
           if (comp) {
-            if (comp.learning_mode_id === 2) {
+            if (Number(comp.learning_mode_id) === 2) {
               allPBL.push(compId)
-            } else if (comp.learning_mode_id === 1) {
+            } else if (Number(comp.learning_mode_id) === 1) {
               allUAL.push(compId)
             }
           }
         }
 
-        const pblComponents = allComponents.filter(c => c.learning_mode_id === 2)
-        const ualComponents = allComponents.filter(c => c.learning_mode_id === 1)
+        const pblComponents = allComponents.filter(c => Number(c.learning_mode_id) === 2)
+        const ualComponents = allComponents.filter(c => Number(c.learning_mode_id) === 1)
         setSelectedPBLComponents(normalizeInnovativePracticeSelections(allPBL, pblComponents))
         setSelectedUALComponents(normalizeInnovativePracticeSelections(allUAL, ualComponents))
 
@@ -1112,21 +1163,22 @@ function MarkEntryPermissionsPage() {
     setWindowEnabled(latestWindow.enabled)
 
     // Directly separate window's component_ids into PBL and UAL
-    if (win.component_ids && win.component_ids.length > 0) {
+    const selectedComponentIds = normalizeIdList(win.component_ids)
+    if (selectedComponentIds.length > 0) {
       try {
         const allComponents = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
 
         const pblIds = []
         const ualIds = []
-        win.component_ids.forEach(id => {
-          const comp = allComponents.find(c => c.id === id)
+        selectedComponentIds.forEach(id => {
+          const comp = allComponents.find(c => Number(c.id) === id)
           if (comp) {
-            if (comp.learning_mode_id === 2) pblIds.push(id)
-            else if (comp.learning_mode_id === 1) ualIds.push(id)
+            if (Number(comp.learning_mode_id) === 2) pblIds.push(id)
+            else if (Number(comp.learning_mode_id) === 1) ualIds.push(id)
           }
         })
-        const pblComponents = allComponents.filter(c => c.learning_mode_id === 2)
-        const ualComponents = allComponents.filter(c => c.learning_mode_id === 1)
+        const pblComponents = allComponents.filter(c => Number(c.learning_mode_id) === 2)
+        const ualComponents = allComponents.filter(c => Number(c.learning_mode_id) === 1)
         setSelectedPBLComponents(normalizeInnovativePracticeSelections(pblIds, pblComponents))
         setSelectedUALComponents(normalizeInnovativePracticeSelections(ualIds, ualComponents))
       } catch (err) {
@@ -1191,7 +1243,7 @@ function MarkEntryPermissionsPage() {
     }
 
     const originalTeacherID = editingWindow.teacher_id || null
-    const originalUserID = editingWindow.user_username || null
+    const originalUserID = normalizeUsernames(editingWindow.user_username)[0] || null
     const originalDepartmentID = editingWindow.department_id ?? null
     const originalSemester = editingWindow.semester ?? null
     const originalCourseID = editingWindow.course_id ?? null
@@ -1297,7 +1349,7 @@ function MarkEntryPermissionsPage() {
     if (scopeType === 'teacher' && window.course_id) {
       return `${window.teacher_name} - ${window.course_code} (Most Specific)`
     } else if ((scopeType === 'user_single' || scopeType === 'user_multi') && window.course_id) {
-      return `${window.user_username || 'User'} - ${window.course_code}`
+      return `${getWindowUserLabel(window)} - ${window.course_code}`
     } else if (window.department_id && window.semester && window.course_id) {
       return `${departmentLabel} - Sem ${window.semester} - ${window.course_code}`
     } else if (window.department_id && window.semester) {
@@ -1310,7 +1362,10 @@ function MarkEntryPermissionsPage() {
 
     const parts = []
     if (scopeType === 'teacher' && window.teacher_name) parts.push(window.teacher_name)
-    if ((scopeType === 'user_single' || scopeType === 'user_multi') && window.user_username) parts.push(window.user_username)
+    if (scopeType === 'user_single' || scopeType === 'user_multi') {
+      const userLabel = getWindowUserLabel(window)
+      if (userLabel && userLabel !== 'Unassigned') parts.push(userLabel)
+    }
     if (departmentLabel) parts.push(departmentLabel)
     if (window.semester) parts.push(`Sem ${window.semester}`)
     if (window.course_code) parts.push(window.course_code)
@@ -1476,9 +1531,7 @@ function MarkEntryPermissionsPage() {
   }
 
   const assignStudentsToUser = async () => {
-    const selectedUsers = editingWindow
-      ? (selectedUserId ? [selectedUserId] : [])
-      : selectedUserIds
+    const selectedUsers = Array.from(new Set((selectedUserIds || []).filter(Boolean)))
 
     if (!windowName.trim()) {
       setMessage({ type: 'error', text: 'Window name is required.' })
@@ -1507,6 +1560,7 @@ function MarkEntryPermissionsPage() {
             component_ids: allComponents.length > 0 ? allComponents : null,
             teacher_id: null,
             user_id: selectedUsers[0] || null,
+            user_ids: selectedUsers,
             department_id: windowDepartmentId && windowDepartmentId !== '0' ? parseInt(windowDepartmentId, 10) : null,
             department_ids: getSelectedDepartmentIds(),
             semester: windowSemester ? parseInt(windowSemester, 10) : null,
@@ -1519,20 +1573,22 @@ function MarkEntryPermissionsPage() {
           throw new Error(error || 'Failed to update window')
         }
 
-        // Update student assignments by re-assigning
-        const assignRes = await fetch(`${API_BASE_URL}/mark-entry/assign-students`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            window_id: editingWindow.id,
-            user_id: selectedUsers[0],
-            student_ids: selectedStudents
+        // Update student assignments for all selected users.
+        for (const username of selectedUsers) {
+          const assignRes = await fetch(`${API_BASE_URL}/mark-entry/assign-students`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              window_id: editingWindow.id,
+              user_id: username,
+              student_ids: selectedStudents
+            })
           })
-        })
 
-        if (!assignRes.ok) {
-          const error = await assignRes.text()
-          throw new Error(error || 'Failed to update student assignments')
+          if (!assignRes.ok) {
+            const error = await assignRes.text()
+            throw new Error(error || `Failed to update student assignments for ${username}`)
+          }
         }
 
         setMessage({
@@ -1593,6 +1649,7 @@ function MarkEntryPermissionsPage() {
       setWindowCourseId('')
       setSelectedPBLComponents([])
       setSelectedUALComponents([])
+      setStudentFilters(createDefaultStudentFilters())
       setEditingWindow(null)
     } catch (error) {
       console.error('Error creating/updating window:', error)
@@ -2118,13 +2175,6 @@ function MarkEntryPermissionsPage() {
                       onFocus={handleUserSearchFocus}
                       items={filteredAvailableUsers}
                       onSelect={(user) => {
-                        if (editingWindow) {
-                          setSelectedUserId(user.username)
-                          setSelectedUserIds([user.username])
-                          setUserSearchTerm(user.username)
-                          return
-                        }
-
                         setSelectedUserId(user.username)
                         setSelectedUserIds((prev) => {
                           if (prev.includes(user.username)) return prev
@@ -2452,6 +2502,7 @@ function MarkEntryPermissionsPage() {
                           setWindowName(''); setWindowDepartmentId(''); setWindowDepartmentIds([]); setWindowSemester(''); setWindowCourseId('')
                           setWindowStartAt(''); setWindowEndAt(''); setWindowEnabled(true)
                           setSelectedPBLComponents([]); setSelectedUALComponents([])
+                          setStudentFilters(createDefaultStudentFilters()); setStudents([])
                         }}
                         className="px-4 py-2 bg-gray-500 text-white text-sm font-medium rounded-lg hover:bg-gray-600 transition-colors">
                         Cancel
@@ -2459,7 +2510,7 @@ function MarkEntryPermissionsPage() {
                     )}
                     <button
                       onClick={assignStudentsToUser}
-                      disabled={((editingWindow ? !selectedUserId : selectedUserIds.length === 0) || selectedStudents.length === 0 || !windowStartAt || !windowEndAt || assignmentLoading)}
+                      disabled={(selectedUserIds.length === 0 || selectedStudents.length === 0 || !windowStartAt || !windowEndAt || assignmentLoading)}
                       className="px-6 py-3 bg-primary text-white font-semibold rounded-lg disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors">
                       {assignmentLoading ? 'Creating Window...' : editingWindow ? 'Update Window & Assignments' : 'Create Window & Assign Students'}
                     </button>
@@ -2639,7 +2690,7 @@ function MarkEntryPermissionsPage() {
                               <p className="font-semibold text-gray-800 text-sm">
                                 {win.window_name || (
                                   <>
-                                    <span>User:</span> {win.user_username || `ID: ${win.user_id}`}
+                                    <span>User:</span> {getWindowUserLabel(win)}
                                     {win.course_name && <span className="text-gray-600"> • {win.course_name}</span>}
                                     {win.department_name && <span className="text-gray-600"> • {win.department_name}</span>}
                                     {win.semester && <span className="text-gray-600"> • Sem {win.semester}</span>}
@@ -2648,7 +2699,7 @@ function MarkEntryPermissionsPage() {
                               </p>
                               {win.window_name && (
                                 <p className="text-xs text-gray-500 mb-1">
-                                  <span>User:</span> {win.user_username || `ID: ${win.user_id}`}
+                                  <span>User:</span> {getWindowUserLabel(win)}
                                   {win.course_name && <span> • {win.course_name}</span>}
                                   {win.department_name && <span> • {win.department_name}</span>}
                                   {win.semester && <span> • Sem {win.semester}</span>}
