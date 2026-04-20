@@ -106,6 +106,32 @@ function MarkEntryPage() {
     return `${course.course_code} - ${course.course_name}`
   }
 
+  const doesCourseMatchSemester = (course, semester) => {
+    const targetSemester = Number(semester || 0)
+    if (targetSemester <= 0) return false
+
+    const directSemester = Number(course?.semester || 0)
+    if (directSemester > 0 && directSemester === targetSemester) {
+      return true
+    }
+
+    const mappedSemesters = Array.isArray(course?.mapped_semesters)
+      ? course.mapped_semesters
+          .map((value) => Number(value || 0))
+          .filter((value) => value > 0)
+      : []
+
+    if (mappedSemesters.includes(targetSemester)) {
+      return true
+    }
+
+    const labels = Array.isArray(course?.mapped_semester_labels) ? course.mapped_semester_labels : []
+    return labels.some((label) => {
+      const match = String(label || '').trim().match(/^Sem\s+(\d+)$/i)
+      return Boolean(match && Number(match[1]) === targetSemester)
+    })
+  }
+
   const sortCoursesForWindowPreference = (courseList = []) => {
     if (!Array.isArray(courseList)) return []
     const preferredWindowId = Number(selectedWindowFromCard)
@@ -163,6 +189,12 @@ function MarkEntryPage() {
         if (!existing.semester && course?.semester) {
           existing.semester = course.semester
         }
+
+        const existingEnrollmentCount = Array.isArray(existing.enrollments) ? existing.enrollments.length : 0
+        const candidateEnrollments = Array.isArray(course?.enrollments) ? course.enrollments : []
+        if (candidateEnrollments.length > existingEnrollmentCount) {
+          existing.enrollments = candidateEnrollments
+        }
       })
     })
 
@@ -215,14 +247,27 @@ function MarkEntryPage() {
     // in that case, bind the context using its course_id.
     const contextCourseId = Number(selectedWindowContext?.course_id || 0)
     if (contextCourseId > 0) {
-      return courses.filter((course) => Number(course?.course_id || 0) === contextCourseId)
+      const byCourseId = courses.filter((course) => Number(course?.course_id || 0) === contextCourseId)
+      return [...byCourseId].sort((left, right) => {
+        const leftCount = Array.isArray(left?.enrollments) ? left.enrollments.length : 0
+        const rightCount = Array.isArray(right?.enrollments) ? right.enrollments.length : 0
+        if (leftCount !== rightCount) return rightCount - leftCount
+        return Number(left?.window_id || 0) - Number(right?.window_id || 0)
+      })
     }
 
     // Semester-scoped windows can be mapped by semester when explicit window/course IDs are absent.
     const contextSemester = Number(selectedWindowContext?.semester || 0)
     if (contextSemester > 0) {
-      const bySemester = courses.filter((course) => Number(course?.semester || 0) === contextSemester)
-      if (bySemester.length > 0) return bySemester
+      const bySemester = courses.filter((course) => doesCourseMatchSemester(course, contextSemester))
+      if (bySemester.length > 0) {
+        return [...bySemester].sort((left, right) => {
+          const leftCount = Array.isArray(left?.enrollments) ? left.enrollments.length : 0
+          const rightCount = Array.isArray(right?.enrollments) ? right.enrollments.length : 0
+          if (leftCount !== rightCount) return rightCount - leftCount
+          return Number(left?.window_id || 0) - Number(right?.window_id || 0)
+        })
+      }
     }
 
     // No deterministic mapping for this context; do not reuse unrelated courses.
@@ -363,8 +408,8 @@ function MarkEntryPage() {
         }
 
         if (windowSemester > 0) {
-          const bySemester = (Array.isArray(courses) ? courses : []).filter(
-            (course) => Number(course?.semester || 0) === windowSemester
+          const bySemester = (Array.isArray(courses) ? courses : []).filter((course) =>
+            doesCourseMatchSemester(course, windowSemester)
           )
           if (bySemester.length > 0) return bySemester
         }
@@ -383,8 +428,8 @@ function MarkEntryPage() {
           if (scopedCourseWindowIds.has(windowId)) return true
           if (windowCourseId > 0 && scopedCourseIds.has(windowCourseId)) return true
           if (windowSemester > 0) {
-            return (Array.isArray(courses) ? courses : []).some(
-              (course) => Number(course?.semester || 0) === windowSemester
+            return (Array.isArray(courses) ? courses : []).some((course) =>
+              doesCourseMatchSemester(course, windowSemester)
             )
           }
           return false
@@ -484,7 +529,9 @@ function MarkEntryPage() {
       console.log('localStorage.teacherId:', localStorage.getItem('teacherId'))
       console.log('Using teacherId value:', teacherId)
 
-      // Prefer user-assigned mark entry window courses (e.g., user-semester-scoped windows)
+      let preferredUserWindowCourses = []
+
+      // Collect user-assigned mark entry window courses (e.g., user-semester-scoped windows)
       if (username) {
         try {
           const userResponse = await fetch(`${API_BASE_URL}/users/${username}/courses`)
@@ -503,15 +550,7 @@ function MarkEntryPage() {
               : []
 
             const assignedWindowCourses = await fetchAssignedWindowCourses(username)
-            const mergedUserWindowCourses = mergeCoursesByWindow(userWindowCourses, assignedWindowCourses)
-
-            if (mergedUserWindowCourses.length > 0) {
-              const sortedCourses = sortCoursesForWindowPreference(mergedUserWindowCourses)
-              setCourses(sortedCourses)
-              setSelectedCourse(sortedCourses[0])
-              setMessage({ type: '', text: '' })
-              return
-            }
+            preferredUserWindowCourses = mergeCoursesByWindow(userWindowCourses, assignedWindowCourses)
           }
         } catch (userErr) {
           console.warn('Error fetching user courses in teacher path:', userErr)
@@ -532,7 +571,13 @@ function MarkEntryPage() {
       })
       console.log('Teacher courses with active/entered windows:', mergedCourses)
 
-      // If user account is available, include user-assigned courses from window permissions
+      // Include user-window courses so teacher accounts can also work on user-scoped windows.
+      // Keep teacher course rows as the primary source for global/teacher windows.
+      if (preferredUserWindowCourses.length > 0) {
+        mergedCourses = mergeCoursesByWindow(mergedCourses, preferredUserWindowCourses)
+      }
+
+      // If user account is available, include additional user-assigned courses from window permissions
       const userIdForFallback = username || teacherId
       if (userIdForFallback) {
         try {
@@ -934,10 +979,18 @@ function MarkEntryPage() {
     if (!selectedCourse) return
 
     const hasEnrollments = Array.isArray(selectedCourse.enrollments) && selectedCourse.enrollments.length > 0
+    const shouldUseAssignedStudents = !isTeacher || isUserScopeWindow(selectedWindowContext)
 
-    if (!hasEnrollments && username) {
+    if (!hasEnrollments && username && shouldUseAssignedStudents) {
       // For user-based window selections (including teacher user-student windows), fetch assigned students
       fetchUserAssignedStudents()
+      return
+    }
+
+    if (!hasEnrollments && !shouldUseAssignedStudents) {
+      setAllStudents([])
+      setStudents([])
+      setStudentMarks({})
       return
     }
 
@@ -963,7 +1016,7 @@ function MarkEntryPage() {
       })
       assignedCourseRef.current = selectedCourse.course_id
     }
-  }, [selectedCourse, username, teacherId, learningMode])
+  }, [selectedCourse, username, teacherId, learningMode, isTeacher, selectedWindowContext])
 
   const fetchUserAssignedStudents = async () => {
     if (!selectedCourse || !username) return
