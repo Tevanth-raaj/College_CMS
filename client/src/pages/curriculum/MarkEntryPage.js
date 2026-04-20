@@ -204,8 +204,21 @@ function MarkEntryPage() {
     if (contextId <= 0) return []
 
     const byWindowId = courses.filter((course) => Number(course?.window_id || 0) === contextId)
-    return byWindowId
-  }, [courses, selectedWindowContextId, selectedWindowContext])
+    if (byWindowId.length > 0) return byWindowId
+
+    // Fallback: some teacher/global rows do not carry course.window_id;
+    // in that case, bind the context using its course_id.
+    const contextCourseId = Number(selectedWindowContext?.course_id || 0)
+    if (contextCourseId > 0) {
+      return courses.filter((course) => Number(course?.course_id || 0) === contextCourseId)
+    }
+
+    // Teacher/global windows can apply broadly without explicit per-course window mapping.
+    // Keep the page usable by falling back to loaded teacher courses.
+    if (isTeacher) return courses
+
+    return []
+  }, [courses, selectedWindowContextId, selectedWindowContext, isTeacher])
 
   const effectiveWindowId = Number(selectedWindowContextId || selectedCourse?.window_id || 0)
   const normalizedCourseQuery = courseSearchQuery.trim().toLowerCase()
@@ -318,14 +331,94 @@ function MarkEntryPage() {
           .filter((windowId) => windowId > 0)
       )
 
-      const contexts = Array.from(contextsById.values())
+      const scopedCourseIds = new Set(
+        (Array.isArray(courses) ? courses : [])
+          .map((course) => Number(course?.course_id || 0))
+          .filter((courseId) => courseId > 0)
+      )
+
+      const getMatchingCoursesForContext = (windowItem) => {
+        const windowId = Number(windowItem?.id || 0)
+        const windowCourseId = Number(windowItem?.course_id || 0)
+        const byWindowId = (Array.isArray(courses) ? courses : []).filter(
+          (course) => Number(course?.window_id || 0) === windowId
+        )
+        if (byWindowId.length > 0) return byWindowId
+        if (windowCourseId > 0) {
+          return (Array.isArray(courses) ? courses : []).filter(
+            (course) => Number(course?.course_id || 0) === windowCourseId
+          )
+        }
+
+        // Teacher/global windows may not expose explicit course binding in context rows.
+        if (isTeacher) {
+          return Array.isArray(courses) ? courses : []
+        }
+
+        return []
+      }
+
+      const scopedContexts = Array.from(contextsById.values())
         // Window context selector should only show windows that are actually assigned
         // to this user/teacher via their currently loaded course-window rows.
-        .filter((windowItem) => scopedCourseWindowIds.has(Number(windowItem?.id || 0)))
+        // For rows lacking window_id (common in teacher/global scope), fallback to course_id match.
+        .filter((windowItem) => {
+          const windowId = Number(windowItem?.id || 0)
+          const windowCourseId = Number(windowItem?.course_id || 0)
+          if (scopedCourseWindowIds.has(windowId)) return true
+          if (windowCourseId > 0 && scopedCourseIds.has(windowCourseId)) return true
+          if (isTeacher) return true
+          return false
+        })
         .map((windowItem) => ({
           ...windowItem,
           window_name: String(windowItem?.window_name || '').trim() || `Window #${windowItem?.id}`,
         }))
+
+      // Show context only when it has at least one mapped course and at least one student.
+      const contextsWithStudents = await Promise.all(
+        scopedContexts.map(async (windowItem) => {
+          const matchedCourses = getMatchingCoursesForContext(windowItem)
+          if (matchedCourses.length === 0) return null
+
+          const hasStudentsInCourseRows = matchedCourses.some(
+            (course) => Array.isArray(course?.enrollments) && course.enrollments.length > 0
+          )
+          if (hasStudentsInCourseRows) return windowItem
+
+          // Do not probe user-assigned endpoint for normal teacher/global windows.
+          // Those contexts are validated by teacher course rows only.
+          if (isTeacher) return null
+
+          if (!facultyIdentifier) return null
+
+          try {
+            const params = new URLSearchParams()
+            params.set('user_id', facultyIdentifier)
+            params.set('window_id', String(windowItem.id))
+
+            const contextCourseId = Number(windowItem?.course_id || 0)
+            if (contextCourseId > 0) {
+              params.set('course_id', String(contextCourseId))
+            }
+
+            const response = await fetch(`${API_BASE_URL}/mark-entry/user-assigned-students?${params.toString()}`)
+            if (!response.ok) return null
+
+            const assignedRows = await response.json()
+            if (Array.isArray(assignedRows) && assignedRows.length > 0) {
+              return windowItem
+            }
+          } catch (error) {
+            console.warn('Failed to validate context students for window:', windowItem?.id, error)
+          }
+
+          return null
+        })
+      )
+
+      const contexts = contextsWithStudents
+        .filter(Boolean)
         .sort((left, right) => Number(left.id) - Number(right.id))
 
       setWindowContexts(contexts)
@@ -345,7 +438,7 @@ function MarkEntryPage() {
 
     fetchWindowContexts()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courses, isTeacher, teacherId, username, storedUserId])
+  }, [courses, isTeacher, teacherId, username, storedUserId, facultyIdentifier])
 
   useEffect(() => {
     if (coursesForSelectedWindowContext.length === 0) {
