@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
 import { API_BASE_URL } from '../../config'
@@ -17,28 +17,6 @@ function TeacherDashboardPage() {
   const [userWindowLoading, setUserWindowLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-
-
-  useEffect(() => {
-    // If we have teacherID, fetch courses directly
-    if (teacherID) {
-      fetchTeacherCourses()
-    } 
-    // If teacher role but no teacherID, try to fetch from backend using email
-    else if ((userRole === 'teacher' || userRole === 'hod') && userEmail) {
-      fetchTeacherIdByEmail()
-    } 
-    // Otherwise show error
-    else {
-      setError('Unable to load teacher information. Please login again.')
-      setLoading(false)
-    }
-  }, [teacherID, userRole, userEmail])
-
-  useEffect(() => {
-    fetchUserScopedWindowCards()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [username, teacherID, storedUserId])
 
   const isWindowActiveNow = (windowItem) => {
     if (!windowItem?.enabled) return false
@@ -251,42 +229,20 @@ function TeacherDashboardPage() {
     }
   }
 
-  const fetchTeacherIdByEmail = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/teachers?email=${encodeURIComponent(userEmail)}`)
-      if (response.ok) {
-        const teachers = await response.json()
-        if (teachers && teachers.length > 0) {
-          const teacher = teachers[0]
-          // Store the teacher ID in localStorage
-          localStorage.setItem('teacherId', teacher.id)
-          localStorage.setItem('teacher_id', teacher.id)
-          localStorage.setItem('teacher_name', teacher.name || '')
-          localStorage.setItem('faculty_id', teacher.faculty_id || '')
-          console.log('Retrieved teacher data from email:', teacher)
-          // Now fetch courses
-          fetchTeacherCourses()
-        } else {
-          setError('Teacher profile not found. Please contact administrator.')
-          setLoading(false)
-        }
-      } else {
-        setError('Unable to load teacher profile. Please try again.')
-        setLoading(false)
-      }
-    } catch (err) {
-      console.error('Error fetching teacher ID:', err)
-      setError('Failed to load teacher information.')
-      setLoading(false)
-    }
-  }
+  useEffect(() => {
+    fetchUserScopedWindowCards()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username, teacherID, storedUserId])
 
-  const fetchTeacherCourses = async () => {
+  const fetchTeacherCourses = useCallback(async () => {
     setLoading(true)
     setError('')
 
     try {
-      const currentTeacherId = localStorage.getItem('teacherId') || localStorage.getItem('teacher_id')
+      const currentTeacherId =
+        localStorage.getItem('teacherId') ||
+        localStorage.getItem('teacher_id') ||
+        localStorage.getItem('faculty_id')
       if (!currentTeacherId) {
         setError('Teacher ID not available')
         setLoading(false)
@@ -342,23 +298,56 @@ function TeacherDashboardPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
+  const fetchTeacherIdByEmail = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/teachers/by-email?email=${encodeURIComponent(userEmail)}`)
+      if (response.ok) {
+        const data = await response.json()
+        const teacher = data?.teacher
+        if (data?.success && teacher) {
+          const teacherIdentifier = teacher.faculty_id || String(teacher.id)
 
-
-  const getCategoryColor = (category) => {
-    const colors = {
-      'Core': '#3b82f6',
-      'Language Elective': '#8b5cf6',
-      'Open': '#ec4899',
-      'Foundation': '#10b981',
-      'Lab': '#f59e0b',
-      'Project': '#ef4444',
-      'Seminar': '#06b6d4',
-      'General': '#6b7280'
+          // Store the teacher ID in localStorage
+          localStorage.setItem('teacherId', teacherIdentifier)
+          localStorage.setItem('teacher_id', teacherIdentifier)
+          localStorage.setItem('teacher_db_id', String(teacher.id))
+          localStorage.setItem('teacher_name', teacher.name || '')
+          localStorage.setItem('faculty_id', teacher.faculty_id || '')
+          console.log('Retrieved teacher data from email:', teacher)
+          // Now fetch courses
+          fetchTeacherCourses()
+        } else {
+          setError('Teacher profile not found. Please contact administrator.')
+          setLoading(false)
+        }
+      } else {
+        setError('Unable to load teacher profile. Please try again.')
+        setLoading(false)
+      }
+    } catch (err) {
+      console.error('Error fetching teacher ID:', err)
+      setError('Failed to load teacher information.')
+      setLoading(false)
     }
-    return colors[category] || '#6b7280'
-  }
+  }, [fetchTeacherCourses, userEmail])
+
+  useEffect(() => {
+    // If we have teacherID, fetch courses directly
+    if (teacherID) {
+      fetchTeacherCourses()
+    }
+    // If teacher role but no teacherID, try to fetch from backend using email
+    else if ((userRole === 'teacher' || userRole === 'hod') && userEmail) {
+      fetchTeacherIdByEmail()
+    }
+    // Otherwise show error
+    else {
+      setError('Unable to load teacher information. Please login again.')
+      setLoading(false)
+    }
+  }, [teacherID, userRole, userEmail, fetchTeacherCourses, fetchTeacherIdByEmail])
 
   const getActiveWindowCount = () => {
     let count = 0
@@ -675,12 +664,12 @@ function TeacherDashboardPage() {
                             </td>
                             <td className="px-4 py-4 text-center">
                               <div className="text-xs text-gray-700 font-medium">
-                                {course.academic_year || '—'}
+                                {course.academic_year || '-'}
                               </div>
                               <div className="text-xs text-gray-500 mt-0.5">
                                 {getSemesterDisplay(course)}
-                                {' · '}
-                                {course.semester_type ? String(course.semester_type).toUpperCase() : '—'}
+                                {' | '}
+                                {course.semester_type ? String(course.semester_type).toUpperCase() : '-'}
                               </div>
                             </td>
                             <td className="px-4 py-4 text-center">

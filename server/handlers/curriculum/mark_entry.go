@@ -70,6 +70,26 @@ func normalizeFacultyIdentifier(raw string) string {
 	return identifier
 }
 
+func studentMarksHasWindowColumn(database *sql.DB) bool {
+	if database == nil {
+		return false
+	}
+
+	var count int
+	err := database.QueryRow(`
+		SELECT COUNT(*)
+		FROM information_schema.columns
+		WHERE table_schema = DATABASE()
+		  AND table_name = 'student_marks'
+		  AND column_name = 'window_id'
+	`).Scan(&count)
+	if err != nil {
+		return false
+	}
+
+	return count > 0
+}
+
 // GetMarkCategoriesByType fetches all mark categories for a specific course type
 func GetMarkCategoriesByType(w http.ResponseWriter, r *http.Request) {
 	// Enable CORS
@@ -481,6 +501,7 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 			allowedByWindow[componentID] = true
 		}
 	}
+	hasStudentMarksWindow := studentMarksHasWindowColumn(database)
 
 	var courseCategory string
 	experimentCountTheoryWithLab := 0
@@ -531,10 +552,18 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		_, err = database.Exec(`
-			DELETE FROM student_marks
-			WHERE student_id = ? AND course_id = ? AND assessment_component_id = ?
-		`, entry.StudentID, entry.CourseID, entry.AssessmentComponentID)
+		if hasStudentMarksWindow {
+			_, err = database.Exec(`
+				DELETE FROM student_marks
+				WHERE student_id = ? AND course_id = ? AND assessment_component_id = ?
+				  AND (window_id = ? OR window_id = 0)
+			`, entry.StudentID, entry.CourseID, entry.AssessmentComponentID, windowID)
+		} else {
+			_, err = database.Exec(`
+				DELETE FROM student_marks
+				WHERE student_id = ? AND course_id = ? AND assessment_component_id = ?
+			`, entry.StudentID, entry.CourseID, entry.AssessmentComponentID)
+		}
 		if err != nil {
 			log.Printf("Error deleting student mark: %v", err)
 			errors = append(errors, fmt.Sprintf("Student %d: database error during delete", entry.StudentID))
@@ -629,24 +658,49 @@ func SaveStudentMarks(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Upsert mark entry
-		query := `
-			INSERT INTO student_marks 
-			(student_id, course_id, faculty_id, assessment_component_id, obtained_marks, converted_marks, status)
-			VALUES (?, ?, ?, ?, ?, ?, 1)
-			ON DUPLICATE KEY UPDATE 
-			obtained_marks = VALUES(obtained_marks),
-			converted_marks = VALUES(converted_marks),
-			status = 1
-		`
+		var query string
+		var queryArgs []interface{}
+		if hasStudentMarksWindow {
+			query = `
+				INSERT INTO student_marks 
+				(student_id, course_id, faculty_id, assessment_component_id, window_id, obtained_marks, converted_marks, status)
+				VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+				ON DUPLICATE KEY UPDATE 
+				window_id = VALUES(window_id),
+				obtained_marks = VALUES(obtained_marks),
+				converted_marks = VALUES(converted_marks),
+				status = 1
+			`
+			queryArgs = []interface{}{
+				entry.StudentID,
+				entry.CourseID,
+				normalizedFacultyID,
+				entry.AssessmentComponentID,
+				windowID,
+				entry.ObtainedMarks,
+				convertedMarks,
+			}
+		} else {
+			query = `
+				INSERT INTO student_marks 
+				(student_id, course_id, faculty_id, assessment_component_id, obtained_marks, converted_marks, status)
+				VALUES (?, ?, ?, ?, ?, ?, 1)
+				ON DUPLICATE KEY UPDATE 
+				obtained_marks = VALUES(obtained_marks),
+				converted_marks = VALUES(converted_marks),
+				status = 1
+			`
+			queryArgs = []interface{}{
+				entry.StudentID,
+				entry.CourseID,
+				normalizedFacultyID,
+				entry.AssessmentComponentID,
+				entry.ObtainedMarks,
+				convertedMarks,
+			}
+		}
 
-		_, err = database.Exec(query,
-			entry.StudentID,
-			entry.CourseID,
-			normalizedFacultyID,
-			entry.AssessmentComponentID,
-			entry.ObtainedMarks,
-			convertedMarks,
-		)
+		_, err = database.Exec(query, queryArgs...)
 		if err != nil {
 			log.Printf("Error saving student mark: %v", err)
 			errors = append(errors, fmt.Sprintf("Student %d: database error", entry.StudentID))
@@ -740,6 +794,11 @@ func GetStudentMarks(w http.ResponseWriter, r *http.Request) {
 	// Query marks - filter by assigned students if restrictions exist
 	var query string
 	var args []interface{}
+	hasStudentMarksWindow := studentMarksHasWindowColumn(database)
+	windowFilter := ""
+	if hasStudentMarksWindow && selectedWindowID > 0 {
+		windowFilter = " AND (window_id = ? OR window_id = 0)"
+	}
 
 	if len(assignedStudents) > 0 {
 		// Build IN clause for assigned students
@@ -756,9 +815,12 @@ func GetStudentMarks(w http.ResponseWriter, r *http.Request) {
 				id, student_id, course_id, faculty_id, assessment_component_id,
 				obtained_marks, converted_marks, status
 			FROM student_marks
-			WHERE course_id = ? AND student_id IN (%s) AND status = 1
+			WHERE course_id = ? AND student_id IN (%s) AND status = 1 %s
 			ORDER BY student_id, assessment_component_id
-		`, strings.Join(placeholders, ","))
+		`, strings.Join(placeholders, ","), windowFilter)
+		if hasStudentMarksWindow && selectedWindowID > 0 {
+			args = append(args, selectedWindowID)
+		}
 	} else {
 		// No student restrictions - show all marks for the course
 		query = `
@@ -767,9 +829,13 @@ func GetStudentMarks(w http.ResponseWriter, r *http.Request) {
 				obtained_marks, converted_marks, status
 			FROM student_marks
 			WHERE course_id = ? AND status = 1
+		` + windowFilter + `
 			ORDER BY student_id, assessment_component_id
 		`
 		args = []interface{}{courseID}
+		if hasStudentMarksWindow && selectedWindowID > 0 {
+			args = append(args, selectedWindowID)
+		}
 	}
 
 	rows, err := database.Query(query, args...)

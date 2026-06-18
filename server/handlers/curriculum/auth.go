@@ -224,7 +224,8 @@ func writeLoginSuccessResponse(w http.ResponseWriter, user *models.User) {
 			)
 		}
 
-		if err == nil {
+		switch err {
+case nil:
 			// Teacher found, add teacher data to response
 			teacherData = map[string]interface{}{
 				"teacher_id":  teacherID,
@@ -238,9 +239,9 @@ func writeLoginSuccessResponse(w http.ResponseWriter, user *models.User) {
 				"status":      nullIntToInt(status),
 			}
 			log.Printf("Teacher data found: ID=%d, Name=%s, FacultyID=%s", teacherID, nullStringToString(name), nullStringToString(facultyID))
-		} else if err == sql.ErrNoRows {
+		case sql.ErrNoRows:
 			log.Printf("Warning: User is teacher role but not found in teachers table by faculty_id or email: %s / %s", user.Username, user.Email)
-		} else {
+		default:
 			log.Printf("Error fetching teacher data: %v", err)
 		}
 	}

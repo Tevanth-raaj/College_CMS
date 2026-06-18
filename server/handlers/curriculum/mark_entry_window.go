@@ -2196,9 +2196,10 @@ func getTeacherLearningModes(database *sql.DB, teacherID string, courseID int) [
 	for rows.Next() {
 		var lmID sql.NullInt64
 		if err := rows.Scan(&lmID); err == nil && lmID.Valid {
-			if lmID.Int64 == 1 {
+			switch lmID.Int64 {
+			case 1:
 				hasUAL = true
-			} else if lmID.Int64 == 2 {
+			case 2:
 				hasPBL = true
 			}
 		}
@@ -2297,6 +2298,72 @@ func buildTeacherQuery(isUAL bool, isPBL bool) string {
 	}
 
 	return baseQuery + " ORDER BY t.name"
+}
+
+func getWindowAssessmentComponentNames(database *sql.DB, windowID int) []string {
+	rows, err := database.Query(`
+		SELECT COALESCE(mct.name, '')
+		FROM mark_entry_window_components wc
+		INNER JOIN mark_category_types mct ON mct.id = wc.assessment_component_id
+		WHERE wc.window_id = ?
+		ORDER BY mct.position ASC, mct.id ASC
+	`, windowID)
+	if err != nil {
+		log.Printf("Error fetching assessment components for window %d: %v", windowID, err)
+		return []string{}
+	}
+	defer rows.Close()
+
+	componentNames := make([]string, 0)
+	seen := make(map[string]bool)
+	seenPT1 := false
+	seenPT2 := false
+
+	for rows.Next() {
+		var rawName string
+		if err := rows.Scan(&rawName); err != nil {
+			continue
+		}
+
+		nameUpper := strings.ToUpper(strings.TrimSpace(rawName))
+		normalized := strings.ReplaceAll(nameUpper, " ", "")
+
+		isPT1 := strings.Contains(nameUpper, "PERIODICAL TEST 1") ||
+			strings.Contains(nameUpper, "PERIODICALTEST1") ||
+			(strings.Contains(nameUpper, "PERIODICAL") && strings.Contains(nameUpper, "TEST") && strings.Contains(nameUpper, "1") && !strings.Contains(nameUpper, "2")) ||
+			strings.HasPrefix(normalized, "PT-1") ||
+			strings.HasPrefix(normalized, "PT1")
+		if isPT1 {
+			if !seenPT1 {
+				componentNames = append(componentNames, "PT - 1")
+				seenPT1 = true
+			}
+			continue
+		}
+
+		isPT2 := strings.Contains(nameUpper, "PERIODICAL TEST 2") ||
+			strings.Contains(nameUpper, "PERIODICALTEST2") ||
+			(strings.Contains(nameUpper, "PERIODICAL") && strings.Contains(nameUpper, "TEST") && strings.Contains(nameUpper, "2")) ||
+			strings.HasPrefix(normalized, "PT-2") ||
+			strings.HasPrefix(normalized, "PT2")
+		if isPT2 {
+			if !seenPT2 {
+				componentNames = append(componentNames, "PT - 2")
+				seenPT2 = true
+			}
+			continue
+		}
+
+		displayName := strings.TrimSpace(rawName)
+		if displayName == "" || seen[displayName] {
+			continue
+		}
+
+		seen[displayName] = true
+		componentNames = append(componentNames, displayName)
+	}
+
+	return componentNames
 }
 
 // GetWindowsPendingSubmissions returns active or closed windows with pending submissions.
@@ -2399,25 +2466,26 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type WindowWithPending struct {
-		WindowID       int              `json:"window_id"`
-		WindowName     string           `json:"window_name"`
-		ScopeType      string           `json:"scope_type,omitempty"`
-		UserID         *int             `json:"user_id,omitempty"`
-		UserName       string           `json:"user_name,omitempty"`
-		DepartmentID   *int             `json:"department_id"`
-		DepartmentName string           `json:"department_name"`
-		DepartmentIDs  []int            `json:"department_ids,omitempty"`
-		DepartmentList []string         `json:"department_names,omitempty"`
-		Semester       *int             `json:"semester"`
-		CourseID       *int             `json:"course_id"`
-		CourseCode     string           `json:"course_code"`
-		CourseName     string           `json:"course_name"`
-		StartAt        string           `json:"start_at"`
-		EndAt          string           `json:"end_at"`
-		HasPBL         bool             `json:"has_pbl"` // Window has at least one PBL component
-		HasUAL         bool             `json:"has_ual"` // Window has at least one UAL component
-		Pending        []PendingTeacher `json:"pending_teachers"`
-		Completed      []PendingTeacher `json:"completed_teachers"`
+		WindowID             int              `json:"window_id"`
+		WindowName           string           `json:"window_name"`
+		ScopeType            string           `json:"scope_type,omitempty"`
+		UserID               *int             `json:"user_id,omitempty"`
+		UserName             string           `json:"user_name,omitempty"`
+		DepartmentID         *int             `json:"department_id"`
+		DepartmentName       string           `json:"department_name"`
+		DepartmentIDs        []int            `json:"department_ids,omitempty"`
+		DepartmentList       []string         `json:"department_names,omitempty"`
+		Semester             *int             `json:"semester"`
+		CourseID             *int             `json:"course_id"`
+		CourseCode           string           `json:"course_code"`
+		CourseName           string           `json:"course_name"`
+		StartAt              string           `json:"start_at"`
+		EndAt                string           `json:"end_at"`
+		HasPBL               bool             `json:"has_pbl"` // Window has at least one PBL component
+		HasUAL               bool             `json:"has_ual"` // Window has at least one UAL component
+		AssessmentComponents []string         `json:"assessment_components"`
+		Pending              []PendingTeacher `json:"pending_teachers"`
+		Completed            []PendingTeacher `json:"completed_teachers"`
 	}
 
 	var result []WindowWithPending
@@ -2473,19 +2541,20 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		windowData := WindowWithPending{
-			WindowID:       windowID,
-			WindowName:     windowName.String,
-			ScopeType:      strings.TrimSpace(scopeType.String),
-			UserName:       strings.TrimSpace(userName.String),
-			DepartmentName: deptName.String,
-			CourseCode:     courseCode.String,
-			CourseName:     courseName.String,
-			StartAt:        startAt.Format(time.RFC3339),
-			EndAt:          endAt.Format(time.RFC3339),
-			HasPBL:         false,
-			HasUAL:         false,
-			Pending:        []PendingTeacher{},
-			Completed:      []PendingTeacher{},
+			WindowID:             windowID,
+			WindowName:           windowName.String,
+			ScopeType:            strings.TrimSpace(scopeType.String),
+			UserName:             strings.TrimSpace(userName.String),
+			DepartmentName:       deptName.String,
+			CourseCode:           courseCode.String,
+			CourseName:           courseName.String,
+			StartAt:              startAt.Format(time.RFC3339),
+			EndAt:                endAt.Format(time.RFC3339),
+			HasPBL:               false,
+			HasUAL:               false,
+			AssessmentComponents: getWindowAssessmentComponentNames(database, windowID),
+			Pending:              []PendingTeacher{},
+			Completed:            []PendingTeacher{},
 		}
 
 		// Convert nullable fields to pointers for the response
@@ -2541,9 +2610,10 @@ func GetWindowsPendingSubmissions(w http.ResponseWriter, r *http.Request) {
 				var lmID int
 				if err := componentLearningModes.Scan(&lmID); err == nil {
 					log.Printf("[PendingSubmissions] Window %d found learning_mode_id=%d", windowID, lmID)
-					if lmID == 1 {
+					switch lmID {
+					case 1:
 						windowData.HasUAL = true
-					} else if lmID == 2 {
+					case 2:
 						windowData.HasPBL = true
 					}
 				}
@@ -3126,9 +3196,10 @@ func GetWindowUserSubmissionsSummary(w http.ResponseWriter, r *http.Request) {
 			if learningModesRaw.Valid {
 				for _, value := range strings.Split(learningModesRaw.String, ",") {
 					trimmed := strings.TrimSpace(value)
-					if trimmed == "1" {
+					switch trimmed {
+                 	case "1":
 						learningModes = append(learningModes, "UAL")
-					} else if trimmed == "2" {
+					case "2":
 						learningModes = append(learningModes, "PBL")
 					}
 				}

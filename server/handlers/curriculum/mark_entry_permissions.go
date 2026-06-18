@@ -483,14 +483,13 @@ func GetStudentsForAssignment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if learningMode != "" && learningMode != "ALL" && learningMode != "UAL&PBL" {
-		if learningMode == "UAL" {
-			query += " AND COALESCE(s.learning_mode_id, 2) = ?"
-			args = append(args, 1)
-		} else if learningMode == "PBL" {
-			query += " AND COALESCE(s.learning_mode_id, 2) = ?"
-			args = append(args, 2)
-		}
+	switch learningMode {
+	case "UAL":
+		query += " AND COALESCE(s.learning_mode_id, 2) = ?"
+		args = append(args, 1)
+	case "PBL":
+		query += " AND COALESCE(s.learning_mode_id, 2) = ?"
+		args = append(args, 2)
 	}
 
 	if searchQuery != "" {
@@ -600,9 +599,8 @@ func AssignStudentsToUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lookup numeric user ID from username
-	var numericUserID int
-	err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, req.UserID).Scan(&numericUserID)
+	// Resolve numeric user ID from username, numeric id, email, or teacher mapping.
+	numericUserID, err := resolveNumericUserID(database, req.UserID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "User not found or inactive", http.StatusBadRequest)
@@ -1234,9 +1232,8 @@ func RemoveStudentAssignment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lookup numeric user ID from username
-	var numericUserID int
-	err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, userIdentifier).Scan(&numericUserID)
+	// Resolve numeric user ID from username, numeric id, email, or teacher mapping.
+	numericUserID, err := resolveNumericUserID(database, userIdentifier)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "User not found or inactive", http.StatusBadRequest)
@@ -1559,21 +1556,16 @@ func CheckUserHasAssignedWindows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve numeric user ID (accept numeric ID directly or lookup by username)
-	var numericUserID int
-	if parsedID, err := strconv.Atoi(userIdentifier); err == nil && parsedID > 0 {
-		numericUserID = parsedID
-	} else {
-		err := database.QueryRow(`SELECT id FROM users WHERE username = ? AND is_active = 1`, userIdentifier).Scan(&numericUserID)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				json.NewEncoder(w).Encode(map[string]bool{"has_windows": false})
-				return
-			}
-			log.Printf("Error looking up user ID: %v", err)
-			http.Error(w, "Failed to lookup user", http.StatusInternalServerError)
+	// Resolve numeric user ID from username, numeric id, email, or teacher mapping.
+	numericUserID, err := resolveNumericUserID(database, userIdentifier)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			json.NewEncoder(w).Encode(map[string]bool{"has_windows": false})
 			return
 		}
+		log.Printf("Error looking up user ID: %v", err)
+		http.Error(w, "Failed to lookup user", http.StatusInternalServerError)
+		return
 	}
 
 	// Check if user has any assigned windows with students
@@ -1588,7 +1580,7 @@ func CheckUserHasAssignedWindows(w http.ResponseWriter, r *http.Request) {
 			AND mew.start_at <= ?
 			AND mew.end_at > ?`
 
-	err := database.QueryRow(query, numericUserID, now, now).Scan(&count)
+	err = database.QueryRow(query, numericUserID, now, now).Scan(&count)
 	if err != nil {
 		log.Printf("Error checking user windows: %v", err)
 		http.Error(w, "Failed to check user windows", http.StatusInternalServerError)

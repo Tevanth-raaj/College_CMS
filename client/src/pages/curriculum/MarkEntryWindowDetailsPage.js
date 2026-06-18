@@ -12,6 +12,7 @@ function MarkEntryWindowDetailsPage() {
   const [windowData, setWindowData] = useState(null)
   const [userSummary, setUserSummary] = useState(null)
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
 
   const requestedScope = (searchParams.get('scope') || '').trim().toLowerCase()
   const scopeType = (windowData?.scope_type || '').trim().toLowerCase()
@@ -122,6 +123,29 @@ function MarkEntryWindowDetailsPage() {
     ]
   }, [isUserScope, userSummary])
 
+  const filteredTeachers = useMemo(() => {
+    const sourceRows = isUserScope ? allUserEntries : allTeachers
+    const query = searchTerm.trim().toLowerCase()
+    if (!query) return sourceRows
+
+    return sourceRows.filter((teacher) => {
+      const searchableValues = [
+        teacher.teacher_name,
+        teacher.teacher_id,
+        teacher.user_name,
+        teacher.user_id,
+        teacher.course_code,
+        teacher.course_name,
+      ]
+
+      return searchableValues.some((value) => String(value || '').toLowerCase().includes(query))
+    })
+  }, [allTeachers, allUserEntries, isUserScope, searchTerm])
+
+  const assessmentComponents = useMemo(() => {
+    return Array.isArray(windowData?.assessment_components) ? windowData.assessment_components : []
+  }, [windowData])
+
   const formatDate = (dateStr) => {
     if (!dateStr) return '-'
     return new Date(dateStr).toLocaleString('en-US', {
@@ -213,13 +237,42 @@ function MarkEntryWindowDetailsPage() {
                   </select>
                 </div>
               )}
+
+              <div className="mt-5">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assessment Components</div>
+                {assessmentComponents.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {assessmentComponents.map((component, index) => (
+                      <span
+                        key={`${component}-${index}`}
+                        className="inline-flex items-center rounded-full bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700 border border-purple-500"
+                      >
+                        {component}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-sm text-gray-500">No assessment components available for this window.</div>
+                )}
+              </div>
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="border-b border-gray-200 px-6 py-4">
-                <h4 className="text-sm font-semibold text-gray-700">
-                  {isUserScope ? 'Courses for User Mark Entry' : 'Teachers for Mark Entry'}
-                </h4>
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <h4 className="text-sm font-semibold text-gray-700">
+                    {isUserScope ? 'Courses for User Mark Entry' : 'Teachers for Mark Entry'}
+                  </h4>
+                  <div className="w-full md:w-80">
+                    <input
+                      type="text"
+                      value={searchTerm}
+                      onChange={(event) => setSearchTerm(event.target.value)}
+                      placeholder={isUserScope ? 'Search user or course...' : 'Search teacher or course...'}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
+                    />
+                  </div>
+                </div>
               </div>
 
               {requiresDepartmentSelection && !selectedDepartmentId ? (
@@ -228,6 +281,8 @@ function MarkEntryWindowDetailsPage() {
                 <div className="p-6 text-sm text-gray-500">
                   {isUserScope ? 'No user-course entries found for this window.' : 'No teachers found for this window.'}
                 </div>
+              ) : filteredTeachers.length === 0 ? (
+                <div className="p-6 text-sm text-gray-500">No entries match your search.</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
@@ -241,7 +296,7 @@ function MarkEntryWindowDetailsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {(isUserScope ? allUserEntries : allTeachers).map((teacher, idx) => (
+                      {filteredTeachers.map((teacher, idx) => (
                         <tr
                           key={`${isUserScope ? (teacher.user_id || windowData.user_id || 'user') : (teacher.teacher_id || 'teacher')}|${teacher.course_id}|${idx}`}
                           className="hover:bg-gray-50 cursor-pointer"

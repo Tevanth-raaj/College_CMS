@@ -1,0 +1,16 @@
+./academic_calendar.go
+./allocation.go
+./curriculum.go
+./curriculum_log.go
+./department_overview.go
+./electives.go
+./mapping.go
+./mark.go
+./pdf.go
+./peo_po_mapping.go
+./regulation.go
+./student.go
+./student_teacher_mapping.go
+./syllabus.go
+./syllabus_relational.go
+./user.go

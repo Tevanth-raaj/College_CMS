@@ -2122,7 +2122,7 @@ func updateHonourCardVisibility(cardID int, visibility string, targetDepartments
 }
 
 // shareHonourCardToCluster copies an honour card (with its verticals and courses) to selected or all cluster departments
-func shareHonourCardToCluster(sourceDeptID, sourceRegulationID, cardID, semesterNum int, targetDepartments []int) error {
+func shareHonourCardToCluster(sourceDeptID, sourceRegulationID, cardID, _ int, targetDepartments []int) error {
 	// Get source curriculum template
 	var sourceCurriculumTemplate string
 	err := db.DB.QueryRow(`

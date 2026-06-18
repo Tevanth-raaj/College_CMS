@@ -19,6 +19,7 @@ function LoginPage() {
     // Clear all previous auth data first to avoid stale data
     localStorage.removeItem('teacherId')
     localStorage.removeItem('teacher_id')
+    localStorage.removeItem('teacher_db_id')
     localStorage.removeItem('teacher_name')
     localStorage.removeItem('teacher_email')
     localStorage.removeItem('teacher_dept')
@@ -34,8 +35,11 @@ function LoginPage() {
 
     if ((data.user.role === 'teacher' || data.user.role === 'hod') && data.teacher_data) {
       const teacherData = data.teacher_data
-      localStorage.setItem('teacherId', teacherData.teacher_id)
-      localStorage.setItem('teacher_id', teacherData.teacher_id)
+      const teacherIdentifier = teacherData.faculty_id || teacherData.teacher_id || ''
+
+      localStorage.setItem('teacherId', teacherIdentifier)
+      localStorage.setItem('teacher_id', teacherIdentifier)
+      localStorage.setItem('teacher_db_id', teacherData.teacher_id || '')
       localStorage.setItem('faculty_id', teacherData.faculty_id || '')
       localStorage.setItem('teacher_name', teacherData.name || '')
       localStorage.setItem('teacher_email', teacherData.email || '')
@@ -43,7 +47,7 @@ function LoginPage() {
       localStorage.setItem('teacher_designation', teacherData.designation || '')
       localStorage.setItem('userName', teacherData.name || data.user.username)
     } else {
-      localStorage.setItem('userName', data.user.full_name || data.user.username)
+      localStorage.setItem('userName', data.user.username)
     }
 
     const role = data.user.role
@@ -142,19 +146,19 @@ function LoginPage() {
         body: JSON.stringify({ username, password }),
       })
 
-      const data = await response.json();
+      const data = await response.json()
 
-      if (data.success) {
+      if (response.ok && data.success) {
         setUsername('')
         setPassword('')
         persistLoginAndNavigate(data)
       } else {
         setError(data.message || 'Invalid username or password')
-        setIsLoading(false)
       }
     } catch (err) {
       console.error('Login error:', err)
       setError('Failed to connect to server. Please try again.')
+    } finally {
       setIsLoading(false)
     }
   }
@@ -319,4 +323,4 @@ function LoginPage() {
   )
 }
 
-export default LoginPage;
+export default LoginPage

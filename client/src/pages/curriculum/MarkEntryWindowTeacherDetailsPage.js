@@ -25,6 +25,7 @@ function MarkEntryWindowTeacherDetailsPage() {
   const [error, setError] = useState('')
   const [students, setStudents] = useState([])
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
+  const [assessmentComponents, setAssessmentComponents] = useState([])
 
   const isUserScope = scope === 'user'
   const canFetch = Boolean(windowId && courseId && (isUserScope ? userId : teacherId))
@@ -84,6 +85,36 @@ function MarkEntryWindowTeacherDetailsPage() {
 
     return () => clearInterval(interval)
   }, [canFetch, loadStudents, isUserScope])
+
+  useEffect(() => {
+    const loadWindowComponents = async () => {
+      if (!windowId) {
+        setAssessmentComponents([])
+        return
+      }
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/mark-entry-windows/pending-submissions?window_id=${windowId}`)
+        if (!res.ok) {
+          throw new Error('Failed to fetch window components')
+        }
+
+        const data = await res.json()
+        const details = Array.isArray(data) && data.length > 0 ? data[0] : null
+        const components = Array.isArray(details?.assessment_components) ? details.assessment_components : []
+        setAssessmentComponents(Array.from(new Set(
+          components
+            .map((component) => String(component || '').trim())
+            .filter(Boolean)
+        )))
+      } catch (err) {
+        console.error('Error loading window assessment components:', err)
+        setAssessmentComponents([])
+      }
+    }
+
+    loadWindowComponents()
+  }, [windowId])
 
   const summary = useMemo(() => {
     const totalStudents = students.length
@@ -271,6 +302,24 @@ function MarkEntryWindowTeacherDetailsPage() {
               <div className="text-amber-700">Not Updated</div>
               <div className="font-semibold text-amber-800 mt-0.5">{summary.notUpdatedStudents}</div>
             </div>
+          </div>
+
+          <div className="mt-5">
+            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assessment Components</div>
+            {assessmentComponents.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {assessmentComponents.map((component) => (
+                  <span
+                    key={`${windowId}-${component}`}
+                    className="inline-flex items-center rounded-full border border-purple-500 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700"
+                  >
+                    {component}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-2 text-sm text-gray-500">No assessment components available for this window.</div>
+            )}
           </div>
         </div>
 

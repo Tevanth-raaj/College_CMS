@@ -1123,6 +1123,16 @@ func GetDepartmentSemesterCourses(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if db.DB == nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+
 	vars := mux.Vars(r)
 	departmentID := vars["departmentId"]
 	semester := vars["semester"]
@@ -1145,7 +1155,21 @@ func GetDepartmentSemesterCourses(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	query := `
+	type DepartmentCourse struct {
+		CourseID   int    `json:"course_id"`
+		CourseCode string `json:"course_code"`
+		CourseName string `json:"course_name"`
+	}
+
+	courseMap := make(map[int]DepartmentCourse)
+	addCourse := func(course DepartmentCourse) {
+		if course.CourseID == 0 {
+			return
+		}
+		courseMap[course.CourseID] = course
+	}
+
+	coreQuery := `
 		SELECT DISTINCT c.id, c.course_code, c.course_name
 		FROM teacher_course_history tch
 		JOIN curriculum_courses cc ON tch.course_id = cc.course_id
@@ -1157,7 +1181,32 @@ func GetDepartmentSemesterCourses(w http.ResponseWriter, r *http.Request) {
 			AND nc.semester_number = ?
 			AND tch.record_type = 'course'
 			AND tch.archived_at IS NULL
-		UNION
+	`
+
+	coreRows, err := db.DB.Query(coreQuery, departmentID, semester)
+	if err != nil {
+		log.Printf("Error fetching department core courses: %v", err)
+		http.Error(w, "Failed to fetch courses", http.StatusInternalServerError)
+		return
+	}
+	defer coreRows.Close()
+
+	for coreRows.Next() {
+		var course DepartmentCourse
+		if err := coreRows.Scan(&course.CourseID, &course.CourseCode, &course.CourseName); err != nil {
+			log.Printf("Error scanning department core course: %v", err)
+			continue
+		}
+		addCourse(course)
+	}
+	if err := coreRows.Err(); err != nil {
+		log.Printf("Error iterating department core courses: %v", err)
+		http.Error(w, "Failed to fetch courses", http.StatusInternalServerError)
+		return
+	}
+
+	if academicYear != "" {
+		extraQuery := `
 		SELECT DISTINCT c.id, c.course_code, c.course_name
 		FROM courses c
 		JOIN hod_elective_selections hes ON c.id = hes.course_id
@@ -1167,32 +1216,34 @@ func GetDepartmentSemesterCourses(w http.ResponseWriter, r *http.Request) {
 			AND sec.academic_year = ?
 			AND hes.status = 'ACTIVE'
 			AND (c.status = 1 OR c.status IS NULL)
-		ORDER BY c.course_code
-	`
+		`
 
-	rows, err := db.DB.Query(query, departmentID, semester, departmentID, semester, academicYear)
-	if err != nil {
-		log.Printf("Error fetching department courses: %v", err)
-		http.Error(w, "Failed to fetch courses", http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	type DepartmentCourse struct {
-		CourseID   int    `json:"course_id"`
-		CourseCode string `json:"course_code"`
-		CourseName string `json:"course_name"`
-	}
-
-	var courses []DepartmentCourse
-	for rows.Next() {
-		var course DepartmentCourse
-		if err := rows.Scan(&course.CourseID, &course.CourseCode, &course.CourseName); err != nil {
-			log.Printf("Error scanning department course: %v", err)
-			continue
+		extraRows, extraErr := db.DB.Query(extraQuery, departmentID, semester, academicYear)
+		if extraErr != nil {
+			log.Printf("Warning: could not fetch department extra courses (dept=%s sem=%s year=%s): %v", departmentID, semester, academicYear, extraErr)
+		} else {
+			defer extraRows.Close()
+			for extraRows.Next() {
+				var course DepartmentCourse
+				if err := extraRows.Scan(&course.CourseID, &course.CourseCode, &course.CourseName); err != nil {
+					log.Printf("Error scanning department extra course: %v", err)
+					continue
+				}
+				addCourse(course)
+			}
+			if err := extraRows.Err(); err != nil {
+				log.Printf("Warning: error iterating department extra courses: %v", err)
+			}
 		}
+	}
+
+	courses := make([]DepartmentCourse, 0, len(courseMap))
+	for _, course := range courseMap {
 		courses = append(courses, course)
 	}
+	sort.Slice(courses, func(i, j int) bool {
+		return courses[i].CourseCode < courses[j].CourseCode
+	})
 
 	if courses == nil {
 		courses = []DepartmentCourse{}

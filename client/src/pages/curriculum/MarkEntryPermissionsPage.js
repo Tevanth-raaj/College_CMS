@@ -23,6 +23,33 @@ const getInnovativePracticeBaseName = (name = '') => {
   return match ? match[1] : null
 }
 
+const getNormalizedComponentDisplayName = (name = '') => {
+  const normalized = String(name).replace(/\s+/g, ' ').trim()
+  const upper = normalized.toUpperCase()
+  const compact = upper.replace(/\s+/g, '')
+
+  const isPT1 =
+    upper.includes('PERIODICAL TEST 1') ||
+    upper.includes('PERIODICALTEST1') ||
+    compact.startsWith('PT-1') ||
+    compact.startsWith('PT1')
+  if (isPT1) return 'PT - 1'
+
+  const isPT2 =
+    upper.includes('PERIODICAL TEST 2') ||
+    upper.includes('PERIODICALTEST2') ||
+    compact.startsWith('PT-2') ||
+    compact.startsWith('PT2')
+  if (isPT2) return 'PT - 2'
+
+  const unitTestMatch = normalized.match(/^Unit\s*Test\s*([0-9]+(?:\([A-Z]\)|[A-Z])?)$/i)
+  if (unitTestMatch) {
+    return `Unit Test ${unitTestMatch[1].replace(/\s+/g, '')}`
+  }
+
+  return normalized
+}
+
 const normalizeInnovativePracticeSelections = (selectedIds = [], components = []) => {
   const selected = new Set(selectedIds)
   const groups = new Map()
@@ -57,11 +84,20 @@ const buildDisplayComponents = (components = []) => {
 
     const baseName = getInnovativePracticeBaseName(component.name)
     if (!baseName) {
-      display.push({
+      const displayName = getNormalizedComponentDisplayName(component.name)
+      const key = `${component.course_type_name || 'Other'}|${component.learning_mode_id || 0}|${displayName.toLowerCase()}`
+      if (groupedIndex.has(key)) {
+        groupedIndex.get(key).component_ids.push(component.id)
+        return
+      }
+
+      const item = {
         ...component,
-        display_name: component.name,
+        display_name: displayName,
         component_ids: [componentId],
-      })
+      }
+      groupedIndex.set(key, item)
+      display.push(item)
       return
     }
 
@@ -155,6 +191,7 @@ function MarkEntryPermissionsPage() {
   const [windowLoading, setWindowLoading] = useState(false)
   const [windowName, setWindowName] = useState('')
   const [windowComponents, setWindowComponents] = useState([])
+  const [allMarkComponents, setAllMarkComponents] = useState([])
   const [selectedPBLComponents, setSelectedPBLComponents] = useState([])
   const [selectedUALComponents, setSelectedUALComponents] = useState([])
   const [existingWindows, setExistingWindows] = useState([])
@@ -218,6 +255,7 @@ function MarkEntryPermissionsPage() {
     fetchDepartments()
     fetchExistingWindows()
     fetchUserAssignedWindows()
+    fetchAllComponentCatalog()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -463,6 +501,16 @@ function MarkEntryPermissionsPage() {
     }
   }
 
+  const fetchAllComponentCatalog = async () => {
+    try {
+      const allCategories = await fetchMarkCategoriesAcrossCourseTypes([1, 2])
+      setAllMarkComponents(Array.isArray(allCategories) ? allCategories : [])
+    } catch (error) {
+      console.error('Error fetching all mark components:', error)
+      setAllMarkComponents([])
+    }
+  }
+
   const fetchMarkCategoriesForCourseType = async (courseId) => {
     try {
       // Convert learning mode to ID (UAL=1, PBL=2)
@@ -643,6 +691,57 @@ function MarkEntryPermissionsPage() {
     } finally {
       setWindowLoading(false)
     }
+  }
+
+  const getWindowComponentSummary = (win) => {
+    if (!Array.isArray(win?.component_ids) || win.component_ids.length === 0) {
+      return 'All allowed'
+    }
+
+    if (!Array.isArray(allMarkComponents) || allMarkComponents.length === 0) {
+      return `${win.component_ids.length} selected`
+    }
+
+    const matchedComponents = allMarkComponents.filter((component) => win.component_ids.includes(component.id))
+    const displayNames = buildDisplayComponents(matchedComponents)
+      .map((component) => component.display_name || component.name)
+      .filter(Boolean)
+    const uniqueDisplayNames = Array.from(new Set(displayNames))
+
+    if (uniqueDisplayNames.length === 0) {
+      return `${win.component_ids.length} selected`
+    }
+
+    return uniqueDisplayNames.join(', ')
+  }
+
+  const getWindowComponentList = (win) => {
+    if (!Array.isArray(win?.component_ids) || win.component_ids.length === 0) {
+      return []
+    }
+
+    if (!Array.isArray(allMarkComponents) || allMarkComponents.length === 0) {
+      return []
+    }
+
+    const matchedComponents = allMarkComponents.filter((component) => win.component_ids.includes(component.id))
+    return Array.from(new Set(
+      buildDisplayComponents(matchedComponents)
+        .map((component) => component.display_name || component.name)
+        .filter(Boolean)
+    ))
+  }
+
+  const getAssessmentComponentChips = (window) => {
+    if (!Array.isArray(window?.assessment_components)) {
+      return []
+    }
+
+    return Array.from(new Set(
+      window.assessment_components
+        .map((component) => String(component || '').trim())
+        .filter(Boolean)
+    ))
   }
 
   const buildWindowQuery = () => {
@@ -2675,7 +2774,20 @@ function MarkEntryPermissionsPage() {
                             </div>
                             <div className="bg-white rounded p-2 border border-gray-100">
                               <div className="text-gray-500 mb-1">Components</div>
-                              <div className="font-medium">{win.window_name || (win.component_ids && win.component_ids.length > 0 ? `${win.component_ids.length} selected` : 'All allowed')}</div>
+                              {getWindowComponentList(win).length > 0 ? (
+                                <div className="flex flex-wrap gap-2">
+                                  {getWindowComponentList(win).map((component) => (
+                                    <span
+                                      key={`${win.id}-${component}`}
+                                      className="inline-flex items-center rounded-full border border-purple-500 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700"
+                                    >
+                                      {component}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="font-medium">{getWindowComponentSummary(win)}</div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -2758,7 +2870,20 @@ function MarkEntryPermissionsPage() {
                             </div>
                             <div className="bg-white rounded p-2 border border-purple-100">
                               <div className="text-gray-500 mb-1">Components</div>
-                              <div className="font-medium">{win.window_name || (win.component_ids && win.component_ids.length > 0 ? `${win.component_ids.length} selected` : 'All allowed')}</div>
+                              {getWindowComponentList(win).length > 0 ? (
+                                <div className="flex flex-wrap gap-2">
+                                  {getWindowComponentList(win).map((component) => (
+                                    <span
+                                      key={`${win.id}-${component}`}
+                                      className="inline-flex items-center rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700"
+                                    >
+                                      {component}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="font-medium">{getWindowComponentSummary(win)}</div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -2853,6 +2978,9 @@ function MarkEntryPermissionsPage() {
                         key={window.window_id}
                         className="rounded-xl border border-gray-200 overflow-hidden hover:border-primary transition-colors"
                       >
+                        {(() => {
+                          const componentChips = getAssessmentComponentChips(window)
+                          return (
                         <button
                           onClick={() => setExpandedWindowId(isExpanded ? null : window.window_id)}
                           className="w-full px-5 py-4 flex items-center gap-4 bg-gradient-to-r from-purple-50 to-white hover:from-purple-100 transition-colors"
@@ -2905,6 +3033,18 @@ function MarkEntryPermissionsPage() {
                             <div className="text-xs text-gray-500">
                               {startDate.toLocaleString()} &rarr; {endDate.toLocaleString()}
                             </div>
+                            {componentChips.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {componentChips.map((component) => (
+                                  <span
+                                    key={`${window.window_id}-${component}`}
+                                    className="inline-flex items-center rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-[11px] font-medium text-purple-700"
+                                  >
+                                    {component}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
 
                           <svg
@@ -2917,6 +3057,8 @@ function MarkEntryPermissionsPage() {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                           </svg>
                         </button>
+                          )
+                        })()}
 
                         {isExpanded && (
                           <div className="border-t border-gray-200">
@@ -3158,6 +3300,9 @@ function MarkEntryPermissionsPage() {
                         key={window.window_id}
                         className="rounded-xl border border-amber-200 overflow-hidden hover:border-amber-400 transition-colors"
                       >
+                        {(() => {
+                          const componentChips = getAssessmentComponentChips(window)
+                          return (
                         <button
                           onClick={() => setExpandedClosedWindowId(isExpanded ? null : window.window_id)}
                           className="w-full px-5 py-4 flex items-center gap-4 bg-gradient-to-r from-amber-50 to-white hover:from-amber-100 transition-colors"
@@ -3210,6 +3355,18 @@ function MarkEntryPermissionsPage() {
                             <div className="text-xs text-gray-500">
                               {startDate.toLocaleString()} &rarr; {endDate.toLocaleString()}
                             </div>
+                            {componentChips.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {componentChips.map((component) => (
+                                  <span
+                                    key={`${window.window_id}-${component}`}
+                                    className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-medium text-amber-700"
+                                  >
+                                    {component}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
 
                           <svg
@@ -3222,6 +3379,8 @@ function MarkEntryPermissionsPage() {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                           </svg>
                         </button>
+                          )
+                        })()}
 
                         {isExpanded && (
                           <div className="border-t border-amber-200">

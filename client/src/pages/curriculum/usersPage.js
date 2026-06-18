@@ -14,19 +14,17 @@ function UsersPage() {
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [roleFilter, setRoleFilter] = useState('all')
+  const roleFilter = 'all'
 
   const [newUser, setNewUser] = useState({
     username: '',
     password: '',
-    full_name: '',
     email: '',
     role: 'user',
     is_active: true
   })
 
   const [editUser, setEditUser] = useState({
-    full_name: '',
     email: '',
     role: 'user',
     is_active: true
@@ -89,7 +87,6 @@ function UsersPage() {
       setNewUser({
         username: '',
         password: '',
-        full_name: '',
         email: '',
         role: 'user',
         is_active: true
@@ -104,7 +101,6 @@ function UsersPage() {
   const handleEditUser = (user) => {
     setCurrentUser(user)
     setEditUser({
-      full_name: user.full_name,
       email: user.email,
       role: user.role,
       is_active: user.is_active
@@ -379,16 +375,6 @@ function UsersPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Full Name *</label>
-                <input
-                  type="text"
-                  value={newUser.full_name}
-                  onChange={(e) => setNewUser({ ...newUser, full_name: e.target.value })}
-                  className="input-custom"
-                  required
-                />
-              </div>
-              <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Email *</label>
                 <input
                   type="email"
@@ -438,16 +424,6 @@ function UsersPage() {
               <h3 className="text-xl font-bold text-gray-900">Edit User: {currentUser.username}</h3>
             </div>
             <form onSubmit={handleUpdateUser} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Full Name *</label>
-                <input
-                  type="text"
-                  value={editUser.full_name}
-                  onChange={(e) => setEditUser({ ...editUser, full_name: e.target.value })}
-                  className="input-custom"
-                  required
-                />
-              </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Email *</label>
                 <input

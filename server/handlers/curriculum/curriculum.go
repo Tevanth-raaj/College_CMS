@@ -649,7 +649,6 @@ func AddCourseToSemester(w http.ResponseWriter, r *http.Request) {
 	}
 
 	regCourseID, _ := result.LastInsertId()
-	course.CourseID = courseID
 
 	// Fetch the complete course details including computed fields
 	var fullCourse models.CourseWithDetails

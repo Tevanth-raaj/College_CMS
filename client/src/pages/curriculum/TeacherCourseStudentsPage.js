@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import MainLayout from '../../components/MainLayout'
+import COPOAttainmentSection from '../../components/COPOAttainmentSection'
 import { API_BASE_URL } from '../../config'
 
 const getInnovativePracticeBaseName = (name = '') => {
@@ -339,24 +340,24 @@ function TeacherCourseStudentsPage() {
       }
     >
       <div className="space-y-6">
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-2">
+        <div className="bg-white rounded-xl shadow-sm p-2.5">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <button
               onClick={() => setActiveTab('course-details')}
-              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+              className={`px-4 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
                 activeTab === 'course-details'
-                  ? 'bg-primary text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  ? 'bg-primary text-white border-primary/60'
+                  : 'bg-white text-gray-700 border-primary/30 hover:bg-primary/5 hover:border-primary/45'
               }`}
             >
               Course Details
             </button>
             <button
               onClick={() => setActiveTab('mark-entry')}
-              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors relative flex items-center justify-center ${
+              className={`px-4 py-2.5 rounded-lg text-sm font-semibold border transition-colors relative flex items-center justify-center ${
                 activeTab === 'mark-entry'
-                  ? 'bg-primary text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  ? 'bg-primary text-white border-primary/60'
+                  : 'bg-white text-gray-700 border-primary/30 hover:bg-primary/5 hover:border-primary/45'
               }`}
             >
               <span>Mark Entry</span>
@@ -379,13 +380,13 @@ function TeacherCourseStudentsPage() {
             </button>
             <button
               onClick={() => setActiveTab('co-po-attainment')}
-              className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+              className={`px-4 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
                 activeTab === 'co-po-attainment'
-                  ? 'bg-primary text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  ? 'bg-primary text-white border-primary/60'
+                  : 'bg-white text-gray-700 border-primary/30 hover:bg-primary/5 hover:border-primary/45'
               }`}
             >
-              CO-PO-Attainment
+              CO-PO Attainment
             </button>
           </div>
         </div>
@@ -992,10 +993,7 @@ function TeacherCourseStudentsPage() {
         )}
 
         {activeTab === 'co-po-attainment' && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h3 className="text-lg font-semibold text-gray-900">CO-PO-Attainment</h3>
-            <p className="text-sm text-gray-600 mt-2">This section is reserved for CO-PO-Attainment. Share the exact fields and flow, and I’ll wire it in here.</p>
-          </div>
+          <COPOAttainmentSection course={course} courseId={courseId} />
         )}
       </div>
     </MainLayout>

@@ -26,6 +26,66 @@ type MarkCategoryName struct {
 	Status       int    `json:"status"`
 }
 
+// TestTypeOption represents a selectable assessment component for CO-PO attainment.
+type TestTypeOption struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	MaxMarks int    `json:"max_marks"`
+	Position int    `json:"position"`
+}
+
+// COMarkColumn represents a dynamic CO/component column for the attainment grid.
+type COMarkColumn struct {
+	Key           string `json:"key"`
+	Label         string `json:"label"`
+	ComponentID   int    `json:"component_id"`
+	ComponentName string `json:"component_name"`
+	Position      int    `json:"position"`
+	MaxMarks      int    `json:"max_marks"`
+}
+
+// POAttainmentColumn represents a dynamic PO column for computed attainment.
+type POAttainmentColumn struct {
+	Key     string `json:"key"`
+	Label   string `json:"label"`
+	POIndex int    `json:"po_index"`
+}
+
+// POAttainmentSummary represents aggregate PO attainment across present students.
+type POAttainmentSummary struct {
+	Key               string  `json:"key"`
+	Label             string  `json:"label"`
+	POIndex           int     `json:"po_index"`
+	AttainmentPercent float64 `json:"attainment_percent"`
+}
+
+// COPOAttainmentStudentRow represents a course-wise student row for the CO-PO attainment table.
+type COPOAttainmentStudentRow struct {
+	StudentID    int                 `json:"student_id"`
+	RegisterNo   string              `json:"register_no"`
+	StudentName  string              `json:"student_name"`
+	LearningMode string              `json:"learning_mode"`
+	CourseID     int                 `json:"course_id"`
+	CourseCode   string              `json:"course_code"`
+	CourseName   string              `json:"course_name"`
+	TestTypeID   int                 `json:"test_type_id"`
+	TestTypeName string              `json:"test_type_name"`
+	COMarks      map[string]*float64 `json:"co_marks"`
+	POAttainment map[string]*float64 `json:"po_attainment,omitempty"`
+	TotalMarks   *float64            `json:"total_marks,omitempty"`
+}
+
+// COPOAttainmentResponse represents the full table response with dynamic CO columns.
+type COPOAttainmentResponse struct {
+	Columns       []COMarkColumn             `json:"columns"`
+	POColumns     []POAttainmentColumn       `json:"po_columns,omitempty"`
+	Students      []COPOAttainmentStudentRow `json:"students"`
+	POSummary     []POAttainmentSummary      `json:"po_summary,omitempty"`
+	TargetPercent float64                    `json:"target_percent"`
+	PresentCount  int                        `json:"present_count"`
+	AbsentCount   int                        `json:"absent_count"`
+}
+
 // StudentMark represents a student's mark entry for an assessment component
 type StudentMark struct {
 	ID                    int     `json:"id"`

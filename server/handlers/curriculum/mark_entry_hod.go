@@ -1287,6 +1287,7 @@ func AdminFillRandomMarksForWindow(w http.ResponseWriter, r *http.Request) {
 	studentsTouched := 0
 	assignmentsMatched := 0
 	absentSkipped := 0
+	hasStudentMarksWindow := studentMarksHasWindowColumn(db.DB)
 
 	for _, assignment := range assignments {
 		if !doesWindowMatchAssignment(selectedWindow, assignment) {
@@ -1367,15 +1368,29 @@ func AdminFillRandomMarksForWindow(w http.ResponseWriter, r *http.Request) {
 					convertedMarks = (obtainedMarks / meta.MaxMarks) * meta.ConversionMarks
 				}
 
-				_, execErr := db.DB.Exec(`
-					INSERT INTO student_marks
-					(student_id, course_id, faculty_id, assessment_component_id, obtained_marks, converted_marks, status)
-					VALUES (?, ?, ?, ?, ?, ?, 1)
-					ON DUPLICATE KEY UPDATE
-					obtained_marks = VALUES(obtained_marks),
-					converted_marks = VALUES(converted_marks),
-					status = 1
-				`, studentID, assignment.CourseID, normalizedFacultyID, componentID, obtainedMarks, convertedMarks)
+				var execErr error
+				if hasStudentMarksWindow {
+					_, execErr = db.DB.Exec(`
+						INSERT INTO student_marks
+						(student_id, course_id, faculty_id, assessment_component_id, window_id, obtained_marks, converted_marks, status)
+						VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+						ON DUPLICATE KEY UPDATE
+						window_id = VALUES(window_id),
+						obtained_marks = VALUES(obtained_marks),
+						converted_marks = VALUES(converted_marks),
+						status = 1
+					`, studentID, assignment.CourseID, normalizedFacultyID, componentID, req.WindowID, obtainedMarks, convertedMarks)
+				} else {
+					_, execErr = db.DB.Exec(`
+						INSERT INTO student_marks
+						(student_id, course_id, faculty_id, assessment_component_id, obtained_marks, converted_marks, status)
+						VALUES (?, ?, ?, ?, ?, ?, 1)
+						ON DUPLICATE KEY UPDATE
+						obtained_marks = VALUES(obtained_marks),
+						converted_marks = VALUES(converted_marks),
+						status = 1
+					`, studentID, assignment.CourseID, normalizedFacultyID, componentID, obtainedMarks, convertedMarks)
+				}
 				if execErr != nil {
 					continue
 				}

@@ -138,7 +138,6 @@ func SaveDepartmentOverview(w http.ResponseWriter, r *http.Request) {
 
 	hasExisting := fetchErr != sql.ErrNoRows
 	if hasExisting {
-		oldOverview.ID = visionID
 		oldOverview.Mission = fetchDepartmentList(curriculumID, "curriculum_mission", "mission_text")
 		oldOverview.PEOs = fetchDepartmentList(curriculumID, "curriculum_peos", "peo_text")
 		oldOverview.POs = fetchDepartmentList(curriculumID, "curriculum_pos", "po_text")
@@ -160,34 +159,37 @@ func SaveDepartmentOverview(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		overview.ID = 0
-	} else if err == sql.ErrNoRows {
-		// INSERT new record with status=1
-		insertQuery := `INSERT INTO curriculum_vision (curriculum_id, vision, status) VALUES (?, ?, 1)`
-		result, err := db.DB.Exec(insertQuery, curriculumID, overview.Vision)
-		if err != nil {
-			log.Println("Error inserting department overview:", err)
+	} else {
+		switch err {
+		case sql.ErrNoRows:
+			// INSERT new record with status=1
+			insertQuery := `INSERT INTO curriculum_vision (curriculum_id, vision, status) VALUES (?, ?, 1)`
+			result, err := db.DB.Exec(insertQuery, curriculumID, overview.Vision)
+			if err != nil {
+				log.Println("Error inserting department overview:", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Failed to save department overview"})
+				return
+			}
+			id, _ := result.LastInsertId()
+			overview.ID = int(id)
+		case nil:
+			// UPDATE existing record and set status=1
+			updateQuery := `UPDATE curriculum_vision SET vision = ?, status = 1 WHERE curriculum_id = ? AND (status = 1 OR status IS NULL)`
+			_, err := db.DB.Exec(updateQuery, overview.Vision, curriculumID)
+			if err != nil {
+				log.Println("Error updating department overview:", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Failed to update department overview"})
+				return
+			}
+			overview.ID = existingID
+		default:
+			log.Println("Error checking existing record:", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to save department overview"})
 			return
 		}
-		id, _ := result.LastInsertId()
-		overview.ID = int(id)
-	} else if err != nil {
-		log.Println("Error checking existing record:", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to save department overview"})
-		return
-	} else {
-		// UPDATE existing record and set status=1
-		updateQuery := `UPDATE curriculum_vision SET vision = ?, status = 1 WHERE curriculum_id = ? AND (status = 1 OR status IS NULL)`
-		_, err := db.DB.Exec(updateQuery, overview.Vision, curriculumID)
-		if err != nil {
-			log.Println("Error updating department overview:", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to update department overview"})
-			return
-		}
-		overview.ID = existingID
 	}
 
 	// Save list items to normalized tables (all now use curriculum_id FK to curriculum.id)

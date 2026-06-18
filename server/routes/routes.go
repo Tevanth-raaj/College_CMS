@@ -114,6 +114,8 @@ func SetupRoutes() *mux.Router {
 	// CO-PO and CO-PSO Mapping routes
 	router.HandleFunc("/api/course/{courseId}/mapping", curriculum.GetCourseMapping).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/course/{courseId}/mapping", curriculum.SaveCourseMapping).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/test-types", curriculum.GetTestTypes).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/co-po-attainment/students", curriculum.GetCOPOAttainmentStudents).Methods("GET", "OPTIONS")
 
 	// PEO-PO Mapping routes
 	router.HandleFunc("/api/curriculum/{id}/peo-po-mapping", curriculum.GetPEOPOMapping).Methods("GET", "OPTIONS")

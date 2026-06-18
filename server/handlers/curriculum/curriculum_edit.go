@@ -306,7 +306,6 @@ func UpdateCourse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update course - calculate total hours (total_hrs and total_marks are GENERATED columns)
-	course.TotalMarks = course.CIAMarks + course.SEEMarks
 	courseTypeID, err := resolveCourseTypeID(course.CourseType)
 	if err != nil {
 		log.Println("Error resolving course_type:", err)

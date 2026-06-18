@@ -1,0 +1,10 @@
+./appeals.go
+./elective_exemption_requests.go
+./electives.go
+./hr.go
+./mapping.go
+./student_import.go
+./students.go
+./teacher_course_preferences.go
+./teacher_course_window.go
+./teachers.go

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -420,6 +421,11 @@ func runSQLMigrations() error {
 
 			_, err = DB.Exec(stmt)
 			if err != nil {
+				var mysqlErr *mysql.MySQLError
+				if ok := errors.As(err, &mysqlErr); ok && (mysqlErr.Number == 1060 || mysqlErr.Number == 1091) {
+					log.Printf("Skipping already-applied statement in %s: %v", file.Name(), err)
+					continue
+				}
 				// Log error but continue with other statements
 				log.Printf("Error executing statement in %s: %v\nStatement: %s", file.Name(), err, stmt[:min(len(stmt), 100)])
 			}
@@ -575,11 +581,7 @@ func CreateCurriculumLogsTable() error {
 	}
 
 	// Add diff column if it doesn't exist (for existing tables)
-	alterQuery := `
-	ALTER TABLE curriculum_logs 
-	ADD COLUMN IF NOT EXISTS diff JSON AFTER changed_by
-	`
-	DB.Exec(alterQuery) // Ignore errors as column may already exist
+	_ = ensureColumnExists("curriculum_logs", "diff", "JSON AFTER changed_by")
 
 	fmt.Println("Curriculum logs table created/verified successfully!")
 	return nil
@@ -822,7 +824,7 @@ func CreateNormalizedSyllabusTables() error {
 			position INT NOT NULL,
 			status TINYINT(1) DEFAULT 1,
 			KEY idx_course_id (course_id),
-			FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_prerequisites (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -849,6 +851,7 @@ func CreateNormalizedSyllabusTables() error {
 			FOREIGN KEY (teamwork_id) REFERENCES course_teamwork(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_selflearning (
+			id INT AUTO_INCREMENT UNIQUE,
 			course_id INT NOT NULL PRIMARY KEY,
 			total_hours INT NOT NULL DEFAULT 0,
 			FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
@@ -859,7 +862,7 @@ func CreateNormalizedSyllabusTables() error {
 			main_text TEXT NOT NULL,
 			position INT NOT NULL,
 			UNIQUE KEY unique_selflearning_position (selflearning_id, position),
-			FOREIGN KEY (selflearning_id) REFERENCES course_selflearning(id) ON DELETE CASCADE
+			FOREIGN KEY (selflearning_id) REFERENCES course_selflearning(course_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS course_selflearning_resources (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -884,22 +887,20 @@ func CreateNormalizedSyllabusTables() error {
 	_ = ensureColumnExists("course_objectives", "status", "TINYINT(1) DEFAULT 1")
 	_ = ensureColumnExists("course_prerequisites", "status", "TINYINT(1) DEFAULT 1")
 	_ = ensureColumnExists("course_textbook_reference", "status", "TINYINT(1) DEFAULT 1")
-	_ = ensureColumnExists("course_selflearning", "id", "INT NOT NULL")
-	_, _ = DB.Exec("ALTER TABLE course_selflearning MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT")
+	_ = ensureColumnExists("course_selflearning", "id", "INT NULL")
 	_ = ensureColumnExists("course_selflearning", "course_id", "INT NULL")
 	_ = ensureColumnExists("course_selflearning", "total_hours", "INT NOT NULL DEFAULT 0")
-	_, _ = DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS unique_selflearning_course ON course_selflearning(course_id)")
-	_, _ = DB.Exec(`ALTER TABLE course_selflearning
-		ADD CONSTRAINT fk_selflearning_course
-		FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE`)
+	_ = ensureIndexExists("course_selflearning", "unique_selflearning_course", "course_id", true)
+	_ = ensureIndexExists("course_selflearning", "unique_selflearning_id", "id", true)
+	_ = backfillSequentialIDs("course_selflearning", "id")
+	_, _ = DB.Exec("ALTER TABLE course_selflearning MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT")
+	_ = ensureForeignKeyExists("course_selflearning", "fk_selflearning_course", "course_id", "courses", "course_id", "CASCADE")
 	_ = ensureColumnExists("course_selflearning_topics", "selflearning_id", "INT NULL")
 	_ = ensureColumnExists("course_selflearning_topics", "status", "TINYINT(1) DEFAULT 1")
 	_ = ensureColumnExists("course_selflearning_resources", "status", "TINYINT(1) DEFAULT 1")
-	_, _ = DB.Exec("CREATE INDEX IF NOT EXISTS idx_selflearning_topics_selflearning ON course_selflearning_topics(selflearning_id)")
-	_, _ = DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS unique_selflearning_position ON course_selflearning_topics(selflearning_id, position)")
-	_, _ = DB.Exec(`ALTER TABLE course_selflearning_topics
-		ADD CONSTRAINT fk_selflearning_topics_selflearning
-		FOREIGN KEY (selflearning_id) REFERENCES course_selflearning(id) ON DELETE CASCADE`)
+	_ = ensureIndexExists("course_selflearning_topics", "idx_selflearning_topics_selflearning", "selflearning_id", false)
+	_ = ensureIndexExists("course_selflearning_topics", "unique_selflearning_position", "selflearning_id, position", true)
+	_ = ensureForeignKeyExists("course_selflearning_topics", "fk_selflearning_topics_selflearning", "selflearning_id", "course_selflearning", "id", "CASCADE")
 
 	fmt.Println("Normalized syllabus tables created/verified successfully!")
 	return nil
@@ -932,7 +933,7 @@ func CreateSyllabusRelationalTables() error {
 	_ = ensureColumnExists("syllabus", "position", "INT DEFAULT 0")
 	_ = ensureColumnExists("syllabus", "status", "TINYINT(1) DEFAULT 1")
 	// Index for filtering by course_id
-	_, _ = DB.Exec("CREATE INDEX IF NOT EXISTS idx_models_course ON syllabus(course_id)")
+	_ = ensureIndexExists("syllabus", "idx_models_course", "course_id", false)
 	// titles
 	if _, err := DB.Exec(`
 		CREATE TABLE IF NOT EXISTS syllabus_titles (
@@ -953,7 +954,7 @@ func CreateSyllabusRelationalTables() error {
 	_ = ensureColumnExists("syllabus_titles", "hours", "INT DEFAULT 0")
 	_ = ensureColumnExists("syllabus_titles", "position", "INT DEFAULT 0")
 	_ = ensureColumnExists("syllabus_titles", "status", "TINYINT(1) DEFAULT 1")
-	_, _ = DB.Exec("CREATE INDEX IF NOT EXISTS idx_titles_model ON syllabus_titles(model_id)")
+	_ = ensureIndexExists("syllabus_titles", "idx_titles_model", "model_id", false)
 	// topics
 	if _, err := DB.Exec(`
 		CREATE TABLE IF NOT EXISTS syllabus_topics (
@@ -972,7 +973,7 @@ func CreateSyllabusRelationalTables() error {
 	_ = ensureColumnExists("syllabus_topics", "content", "TEXT NOT NULL")
 	_ = ensureColumnExists("syllabus_topics", "position", "INT DEFAULT 0")
 	_ = ensureColumnExists("syllabus_topics", "status", "TINYINT(1) DEFAULT 1")
-	_, _ = DB.Exec("CREATE INDEX IF NOT EXISTS idx_topics_title ON syllabus_topics(title_id)")
+	_ = ensureIndexExists("syllabus_topics", "idx_topics_title", "title_id", false)
 	fmt.Println("Syllabus relational tables created/verified successfully!")
 	return nil
 }
@@ -998,6 +999,94 @@ func ensureColumnExists(table, column, colType string) error {
 		return err
 	}
 	return nil
+}
+
+func indexExists(table, index string) (bool, error) {
+	var count int
+	err := DB.QueryRow(`
+		SELECT COUNT(*)
+		FROM information_schema.statistics
+		WHERE table_schema = DATABASE()
+		  AND table_name = ?
+		  AND index_name = ?
+	`, table, index).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func ensureIndexExists(table, index, columns string, unique bool) error {
+	exists, err := indexExists(table, index)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	kind := "INDEX"
+	if unique {
+		kind = "UNIQUE INDEX"
+	}
+	query := fmt.Sprintf("CREATE %s %s ON %s(%s)", kind, index, table, columns)
+	_, err = DB.Exec(query)
+	return err
+}
+
+func foreignKeyExists(table, constraint string) (bool, error) {
+	var count int
+	err := DB.QueryRow(`
+		SELECT COUNT(*)
+		FROM information_schema.table_constraints
+		WHERE constraint_schema = DATABASE()
+		  AND table_name = ?
+		  AND constraint_name = ?
+		  AND constraint_type = 'FOREIGN KEY'
+	`, table, constraint).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func ensureForeignKeyExists(table, constraint, column, refTable, refColumn, onDelete string) error {
+	exists, err := foreignKeyExists(table, constraint)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	query := fmt.Sprintf(
+		"ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s",
+		table, constraint, column, refTable, refColumn, onDelete,
+	)
+	_, err = DB.Exec(query)
+	return err
+}
+
+func backfillSequentialIDs(table, idColumn string) error {
+	var pending int
+	err := DB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s IS NULL OR %s = 0", table, idColumn, idColumn)).Scan(&pending)
+	if err != nil {
+		return err
+	}
+	if pending == 0 {
+		return nil
+	}
+
+	if _, err := DB.Exec("SET @rownum := 0"); err != nil {
+		return err
+	}
+	_, err = DB.Exec(fmt.Sprintf(`
+		UPDATE %s
+		SET %s = (@rownum := @rownum + 1)
+		WHERE %s IS NULL OR %s = 0
+		ORDER BY course_id
+	`, table, idColumn, idColumn, idColumn))
+	return err
 }
 
 func columnExists(table, column string) (bool, error) {

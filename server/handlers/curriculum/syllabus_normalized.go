@@ -1055,7 +1055,8 @@ func saveTeamwork(courseID int, teamwork *models.Teamwork) error {
 
 	var result sql.Result
 
-	if err == sql.ErrNoRows {
+	switch err {
+	case sql.ErrNoRows:
 		// No existing record, insert new one
 		result, err = db.DB.Exec(`
 			INSERT INTO course_teamwork (course_id, total_hours)
@@ -1067,7 +1068,7 @@ func saveTeamwork(courseID int, teamwork *models.Teamwork) error {
 		}
 		teamworkID, _ = result.LastInsertId()
 		log.Printf("DEBUG: Created new teamwork record with id=%d", teamworkID)
-	} else if err == nil {
+	case nil:
 		// Existing record, update it
 		_, err = db.DB.Exec(`
 			UPDATE course_teamwork SET total_hours = ? WHERE id = ?`,
@@ -1077,7 +1078,7 @@ func saveTeamwork(courseID int, teamwork *models.Teamwork) error {
 			return err
 		}
 		log.Printf("DEBUG: Updated teamwork record id=%d with hours=%d", teamworkID, teamwork.Hours)
-	} else {
+	default:
 		log.Printf("ERROR: Failed to query course_teamwork: %v", err)
 		return err
 	}
